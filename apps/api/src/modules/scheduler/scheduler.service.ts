@@ -19,6 +19,7 @@ export class SchedulerService {
             'execute-post',
             { postJobId },
             {
+                jobId: postJobId,
                 delay: Math.max(executeAt.getTime() - Date.now(), 0),
                 attempts: 3,
                 backoff: {

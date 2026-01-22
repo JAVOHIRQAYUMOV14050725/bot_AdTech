@@ -4,20 +4,21 @@ import {
     Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
-import Decimal from 'decimal.js';
 
 import { Prisma, Escrow } from '@prisma/client';
+import { PaymentsService } from './payments.service';
 
 @Injectable()
 export class EscrowService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly paymentsService: PaymentsService,
+    ) { }
 
-
-
-private async lockEscrow(
+    private async lockEscrow(
         tx: Prisma.TransactionClient,
         campaignTargetId: string,
-    ): Promise < Escrow | null > {
+    ): Promise<Escrow | null> {
         const rows = await tx.$queryRaw<Escrow[]>`
     SELECT *
     FROM escrows
@@ -31,8 +32,11 @@ private async lockEscrow(
      * RELEASE ESCROW
      * Called when post is successfully published
      */
-    async release(campaignTargetId: string) {
-        return this.prisma.$transaction(async (tx) => {
+    async release(
+        campaignTargetId: string,
+        transaction?: Prisma.TransactionClient,
+    ) {
+        const execute = async (tx: Prisma.TransactionClient) => {
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
 
@@ -40,19 +44,25 @@ private async lockEscrow(
                 throw new BadRequestException('Escrow not found');
             }
 
+            if (escrow.status === 'released') {
+                return {
+                    ok: true,
+                    alreadyReleased: true,
+                };
+            }
+
             if (escrow.status !== 'held') {
                 throw new ConflictException('Escrow is not in HELD state');
             }
 
-            const total = new Decimal(escrow.amount);
+            const total = new Prisma.Decimal(escrow.amount);
 
             const commission = await tx.platformCommission.findUnique({
                 where: { campaignTargetId },
             });
 
-            const commissionPct = commission?.percentage ?? new Decimal(0);
-            const commissionAmount = total.mul(commissionPct).div(100);
-            const payoutAmount = total.sub(commissionAmount);
+            const { commissionAmount, payoutAmount } =
+                this.paymentsService.calculateCommissionSplit(total, commission);
 
             // 1️⃣ PAYOUT → PUBLISHER
             await tx.wallet.update({
@@ -72,6 +82,7 @@ private async lockEscrow(
                 },
             });
 
+            let platformWalletId: string | null = null;
             // 2️⃣ COMMISSION → PLATFORM
             if (commissionAmount.gt(0)) {
                 const platformWallet = await tx.wallet.findFirst({
@@ -82,6 +93,7 @@ private async lockEscrow(
                     throw new BadRequestException('Platform wallet not configured');
                 }
 
+                platformWalletId = platformWallet.id;
                 await tx.wallet.update({
                     where: { id: platformWallet.id },
                     data: {
@@ -109,20 +121,42 @@ private async lockEscrow(
                 },
             });
 
+            await this.paymentsService.ensureWalletInvariant(
+                tx,
+                escrow.publisherWalletId,
+            );
+
+            if (platformWalletId) {
+                await this.paymentsService.ensureWalletInvariant(
+                    tx,
+                    platformWalletId,
+                );
+            }
+
             return {
                 ok: true,
                 payout: payoutAmount.toFixed(2),
                 commission: commissionAmount.toFixed(2),
             };
-        });
+        };
+
+        if (transaction) {
+            return execute(transaction);
+        }
+
+        return this.prisma.$transaction(execute);
     }
 
     /**
      * REFUND ESCROW
      * Called when post failed / rejected / cancelled
      */
-    async refund(campaignTargetId: string, reason = 'post_failed') {
-        return this.prisma.$transaction(async (tx) => {
+    async refund(
+        campaignTargetId: string,
+        reason = 'post_failed',
+        transaction?: Prisma.TransactionClient,
+    ) {
+        const execute = async (tx: Prisma.TransactionClient) => {
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
 
@@ -130,11 +164,18 @@ private async lockEscrow(
                 throw new BadRequestException('Escrow not found');
             }
 
+            if (escrow.status === 'refunded') {
+                return {
+                    ok: true,
+                    alreadyRefunded: true,
+                };
+            }
+
             if (escrow.status !== 'held') {
                 throw new ConflictException('Escrow is not refundable');
             }
 
-            const amount = new Decimal(escrow.amount);
+            const amount = new Prisma.Decimal(escrow.amount);
 
             // 1️⃣ RETURN FUNDS → ADVERTISER
             await tx.wallet.update({
@@ -163,11 +204,22 @@ private async lockEscrow(
                 },
             });
 
+            await this.paymentsService.ensureWalletInvariant(
+                tx,
+                escrow.advertiserWalletId,
+            );
+
             return {
                 ok: true,
                 refunded: amount.toFixed(2),
                 reason,
             };
-        });
+        };
+
+        if (transaction) {
+            return execute(transaction);
+        }
+
+        return this.prisma.$transaction(execute);
     }
 }

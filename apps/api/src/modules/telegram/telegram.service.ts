@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
@@ -100,8 +101,135 @@ export class TelegramService implements OnModuleInit {
         ok: boolean;
         telegramMessageId?: number;
     }> {
-        // 🔒 SEN YOZGAN KOD — TO‘LIQ SAQLANADI
-        // (hech narsa buzilmaydi)
-        return { ok: true };
+        const postJob = await this.prisma.postJob.findUnique({
+            where: { id: postJobId },
+            include: {
+                campaignTarget: {
+                    include: {
+                        campaign: { include: { creatives: true } },
+                        channel: true,
+                    },
+                },
+                executions: true,
+            },
+        });
+
+        if (!postJob) {
+            throw new Error('PostJob not found');
+        }
+
+        const existingExecution = postJob.executions.find(
+            (execution) => execution.telegramMessageId,
+        );
+
+        if (existingExecution?.telegramMessageId) {
+            return {
+                ok: true,
+                telegramMessageId: Number(existingExecution.telegramMessageId),
+            };
+        }
+
+        if (postJob.status === 'success') {
+            return { ok: true };
+        }
+
+        const channelId = postJob.campaignTarget.channel.telegramChannelId;
+        const creative = postJob.campaignTarget.campaign.creatives[0];
+
+        if (!creative) {
+            throw new Error('Campaign creative not found');
+        }
+
+        const sendPayload = creative.contentPayload as Prisma.JsonObject;
+
+        const maxAttempts = Number(
+            process.env.TELEGRAM_SEND_MAX_ATTEMPTS ?? 3,
+        );
+        const baseDelayMs = Number(
+            process.env.TELEGRAM_SEND_BASE_DELAY_MS ?? 1000,
+        );
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+                let response:
+                    | { message_id: number }
+                    | { message_id?: number };
+
+                if (creative.contentType === 'text') {
+                    const text = String(sendPayload?.text ?? '');
+                    if (!text.trim()) {
+                        throw new Error('Creative text payload missing');
+                    }
+                    response = await this.bot.telegram.sendMessage(
+                        channelId,
+                        text,
+                    );
+                } else if (creative.contentType === 'image') {
+                    const imageUrl = String(sendPayload?.url ?? '');
+                    if (!imageUrl.trim()) {
+                        throw new Error('Creative image payload missing');
+                    }
+                    response = await this.bot.telegram.sendPhoto(
+                        channelId,
+                        imageUrl,
+                        {
+                            caption:
+                                typeof sendPayload?.caption === 'string'
+                                    ? sendPayload.caption
+                                    : undefined,
+                        },
+                    );
+                } else if (creative.contentType === 'video') {
+                    const videoUrl = String(sendPayload?.url ?? '');
+                    if (!videoUrl.trim()) {
+                        throw new Error('Creative video payload missing');
+                    }
+                    response = await this.bot.telegram.sendVideo(
+                        channelId,
+                        videoUrl,
+                        {
+                            caption:
+                                typeof sendPayload?.caption === 'string'
+                                    ? sendPayload.caption
+                                    : undefined,
+                        },
+                    );
+                } else {
+                    throw new Error('Unsupported creative type');
+                }
+
+                const messageId = response.message_id;
+
+                await this.prisma.postExecutionLog.create({
+                    data: {
+                        postJobId,
+                        telegramMessageId: messageId
+                            ? BigInt(messageId)
+                            : null,
+                        responsePayload: sendPayload,
+                    },
+                });
+
+                return {
+                    ok: true,
+                    telegramMessageId: messageId,
+                };
+            } catch (err) {
+                const errorMessage =
+                    err instanceof Error ? err.message : String(err);
+                this.logger.warn(
+                    `Telegram send failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`,
+                );
+
+                if (attempt === maxAttempts) {
+                    return { ok: false };
+                }
+
+                const backoffMs = baseDelayMs * 2 ** (attempt - 1);
+                await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            }
+        }
+
+        return { ok: false };
     }
 }

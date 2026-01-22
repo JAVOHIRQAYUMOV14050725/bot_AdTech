@@ -80,6 +80,15 @@ enum EscrowStatus {
   refunded
 }
 
+enum KillSwitchKey {
+  payouts
+  new_escrows
+  telegram_posting
+  worker_post
+  worker_reconciliation
+  worker_watchdogs
+}
+
 //////////////////////
 // USERS & AUDIT
 //////////////////////
@@ -294,6 +303,7 @@ model Wallet {
 
   user   User          @relation(fields: [userId], references: [id])
   ledger LedgerEntry[]
+  financialAuditEvents FinancialAuditEvent[]
 
   advertiserEscrows Escrow[] @relation("AdvertiserWallet")
   publisherEscrows  Escrow[] @relation("PublisherWallet")
@@ -313,6 +323,7 @@ model LedgerEntry {
   createdAt   DateTime @default(now())
 
   wallet Wallet @relation(fields: [walletId], references: [id])
+  auditEvents FinancialAuditEvent[]
 
   @@index([walletId])
   @@map("ledger_entries")
@@ -357,6 +368,32 @@ model PlatformCommission {
   @@map("platform_commissions")
 }
 
+model FinancialAuditEvent {
+  id               String   @id @default(uuid())
+  walletId         String
+  ledgerEntryId    String?
+  campaignId       String?
+  campaignTargetId String?
+  escrowId         String?
+  type             LedgerType
+  amount           Decimal  @db.Decimal(14, 2)
+  reason           LedgerReason
+  actor            String?
+  correlationId    String?
+  createdAt        DateTime @default(now())
+
+  wallet      Wallet      @relation(fields: [walletId], references: [id])
+  ledgerEntry LedgerEntry? @relation(fields: [ledgerEntryId], references: [id])
+  campaign    Campaign?   @relation(fields: [campaignId], references: [id])
+  campaignTarget CampaignTarget? @relation(fields: [campaignTargetId], references: [id])
+  escrow      Escrow?     @relation(fields: [escrowId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@index([campaignId, createdAt])
+  @@index([campaignTargetId, createdAt])
+  @@map("financial_audit_events")
+}
+
 enum SystemActionType {
   FORCE_RELEASE
   FORCE_REFUND
@@ -373,4 +410,32 @@ model SystemActionLog {
   createdAt DateTime @default(now())
 
   @@index([escrowId])
+}
+
+model KillSwitch {
+  key       KillSwitchKey @id
+  enabled   Boolean       @default(false)
+  reason    String?
+  updatedBy String
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  events KillSwitchEvent[]
+
+  @@map("kill_switches")
+}
+
+model KillSwitchEvent {
+  id        String        @id @default(uuid())
+  key       KillSwitchKey
+  enabled   Boolean
+  reason    String?
+  updatedBy String
+  metadata  Json?
+  createdAt DateTime      @default(now())
+
+  killSwitch KillSwitch @relation(fields: [key], references: [key])
+
+  @@index([key, createdAt])
+  @@map("kill_switch_events")
 }

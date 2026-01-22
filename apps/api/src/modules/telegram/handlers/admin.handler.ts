@@ -45,6 +45,7 @@ export class AdminHandler {
 
         await this.escrowService.release(campaignTargetId, {
             actor: 'admin',
+            correlationId: campaignTargetId,
         });
 
         await this.prisma.userAuditLog.create({
@@ -72,6 +73,7 @@ export class AdminHandler {
         await this.escrowService.refund(campaignTargetId, {
             actor: 'admin',
             reason,
+            correlationId: campaignTargetId,
         });
 
         await this.prisma.userAuditLog.create({
@@ -108,6 +110,7 @@ export class AdminHandler {
             from: postJob.status,
             to: 'queued',
             actor: 'admin',
+            correlationId: postJobId,
         });
 
         if (!transition.noop) {
@@ -151,6 +154,7 @@ export class AdminHandler {
             from: campaign.status,
             to: 'paused',
             actor: 'admin',
+            correlationId: campaignId,
         });
 
         if (!transition.noop) {
@@ -188,6 +192,7 @@ export class AdminHandler {
             from: campaign.status,
             to: 'active',
             actor: 'admin',
+            correlationId: campaignId,
         });
 
         if (!transition.noop) {

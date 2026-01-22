@@ -1,5 +1,5 @@
 import { PrismaService } from '@/prisma/prisma.service';
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/client';
 @Injectable()
 export class WalletService {
@@ -15,11 +15,20 @@ export class WalletService {
     }
 
     async decrement(walletId: string, amount: Decimal) {
-        return this.prisma.wallet.update({
-            where: { id: walletId },
+        const result = await this.prisma.wallet.updateMany({
+            where: {
+                id: walletId,
+                balance: { gte: amount },
+            },
             data: {
                 balance: { decrement: amount },
             },
         });
+
+        if (result.count === 0) {
+            throw new BadRequestException('Insufficient balance');
+        }
+
+        return result;
     }
 }

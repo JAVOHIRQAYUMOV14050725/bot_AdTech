@@ -1,11 +1,11 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Decimal } from '@prisma/client/runtime/client';
+import { Prisma } from '@prisma/client';
 @Injectable()
 export class WalletService {
     constructor(private readonly prisma: PrismaService) { }
 
-    async increment(walletId: string, amount: Decimal) {
+    async increment(walletId: string, amount: Prisma.Decimal) {
         return this.prisma.wallet.update({
             where: { id: walletId },
             data: {
@@ -14,7 +14,7 @@ export class WalletService {
         });
     }
 
-    async decrement(walletId: string, amount: Decimal) {
+    async decrement(walletId: string, amount: Prisma.Decimal) {
         const result = await this.prisma.wallet.updateMany({
             where: {
                 id: walletId,

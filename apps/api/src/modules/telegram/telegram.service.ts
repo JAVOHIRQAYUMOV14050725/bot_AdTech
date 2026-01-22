@@ -4,6 +4,17 @@ import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
 import { Prisma } from '@prisma/client';
 
+const bigintToSafeNumber = (value: bigint, field: string): number => {
+    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+    const minSafe = BigInt(Number.MIN_SAFE_INTEGER);
+
+    if (value > maxSafe || value < minSafe) {
+        throw new Error(`${field} exceeds safe integer range`);
+    }
+
+    return Number(value);
+};
+
 @Injectable()
 export class TelegramService implements OnModuleInit {
     private readonly logger = new Logger(TelegramService.name);
@@ -125,7 +136,10 @@ export class TelegramService implements OnModuleInit {
         if (existingExecution?.telegramMessageId) {
             return {
                 ok: true,
-                telegramMessageId: Number(existingExecution.telegramMessageId),
+                telegramMessageId: bigintToSafeNumber(
+                    existingExecution.telegramMessageId,
+                    'telegramMessageId',
+                ),
             };
         }
 

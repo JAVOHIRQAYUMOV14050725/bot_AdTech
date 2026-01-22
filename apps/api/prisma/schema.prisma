@@ -1,0 +1,374 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+//////////////////////
+// ENUMS
+//////////////////////
+
+enum UserRole {
+  super_admin
+  admin
+  moderator
+  advertiser
+  publisher
+}
+
+enum UserStatus {
+  active
+  suspended
+  banned
+}
+
+enum ChannelStatus {
+  pending
+  approved
+  rejected
+  blocked
+}
+
+enum CampaignStatus {
+  draft
+  active
+  paused
+  completed
+  cancelled
+}
+
+enum CampaignTargetStatus {
+  pending
+  posted
+  failed
+  refunded
+}
+
+enum CreativeType {
+  text
+  image
+  video
+}
+
+enum PostJobStatus {
+  queued
+  success
+  failed
+}
+
+enum LedgerType {
+  debit
+  credit
+}
+
+enum LedgerReason {
+  deposit
+  escrow_hold
+  payout
+  commission
+  refund
+}
+
+enum EscrowStatus {
+  held
+  released
+  refunded
+}
+
+//////////////////////
+// USERS & AUDIT
+//////////////////////
+
+model User {
+  id         String     @id @default(uuid())
+  telegramId BigInt     @unique
+  username   String?
+  role       UserRole
+  status     UserStatus @default(active)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  auditLogs UserAuditLog[]
+  channels  Channel[]
+  wallet    Wallet?
+  campaigns Campaign[]
+
+  // ✅ QO‘SHILADI
+  verifiedChannels  ChannelVerification[]
+  approvedCreatives AdCreative[]
+
+  @@index([telegramId])
+  @@index([status])
+  @@map("users")
+}
+
+model UserAuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("user_audit_logs")
+}
+
+//////////////////////
+// CHANNELS
+//////////////////////
+
+model Channel {
+  id                String  @id @default(uuid())
+  telegramChannelId BigInt  @unique
+  title             String
+  username          String?
+  category          String?
+  subscriberCount   Int     @default(0)
+  avgViews          Int     @default(0)
+  cpm               Decimal @db.Decimal(10, 2)
+
+  status    ChannelStatus @default(pending)
+  createdAt DateTime      @default(now())
+  deletedAt DateTime?
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id])
+
+  stats        ChannelStatDaily[]
+  verification ChannelVerification?
+
+  // ✅ QO‘SHILADI
+  campaignTargets CampaignTarget[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@map("channels")
+}
+
+model ChannelStatDaily {
+  id             String   @id @default(uuid())
+  channelId      String
+  date           DateTime @db.Date
+  subscribers    Int?
+  views          Int?
+  engagementRate Decimal? @db.Decimal(5, 2)
+
+  channel Channel @relation(fields: [channelId], references: [id])
+
+  @@unique([channelId, date])
+  @@map("channel_stats_daily")
+}
+
+model ChannelVerification {
+  id         String   @id @default(uuid())
+  channelId  String   @unique
+  verifiedBy String?
+  fraudScore Int
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id])
+  admin   User?   @relation(fields: [verifiedBy], references: [id])
+
+  @@map("channel_verification")
+}
+
+//////////////////////
+// CAMPAIGNS
+//////////////////////
+
+model Campaign {
+  id           String @id @default(uuid())
+  advertiserId String
+  name         String
+
+  totalBudget Decimal @db.Decimal(14, 2)
+  spentBudget Decimal @default(0) @db.Decimal(14, 2)
+
+  status  CampaignStatus @default(draft)
+  startAt DateTime?
+  endAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  advertiser User             @relation(fields: [advertiserId], references: [id])
+  targets    CampaignTarget[]
+  creatives  AdCreative[]
+
+  @@index([advertiserId])
+  @@index([status])
+  @@map("campaigns")
+}
+
+model CampaignTarget {
+  id         String @id @default(uuid())
+  campaignId String
+  channelId  String
+
+  price       Decimal              @db.Decimal(12, 2)
+  scheduledAt DateTime
+  status      CampaignTargetStatus @default(pending)
+
+  campaign Campaign @relation(fields: [campaignId], references: [id])
+  channel  Channel  @relation(fields: [channelId], references: [id])
+
+  postJob    PostJob?
+  escrow     Escrow?
+  commission PlatformCommission?
+
+  @@index([campaignId])
+  @@index([scheduledAt])
+  @@map("campaign_targets")
+}
+
+model AdCreative {
+  id         String @id @default(uuid())
+  campaignId String
+
+  contentType    CreativeType
+  contentPayload Json
+
+  approvedBy String?
+  approvedAt DateTime?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id])
+  admin    User?    @relation(fields: [approvedBy], references: [id])
+
+  @@map("ad_creatives")
+}
+
+//////////////////////
+// POSTING ENGINE
+//////////////////////
+
+model PostJob {
+  id               String @id @default(uuid())
+  campaignTargetId String @unique
+
+  executeAt DateTime
+  attempts  Int           @default(0)
+  status    PostJobStatus @default(queued)
+  lastError String?
+
+  campaignTarget CampaignTarget     @relation(fields: [campaignTargetId], references: [id])
+  executions     PostExecutionLog[]
+
+  @@index([executeAt, status])
+  @@map("post_jobs")
+}
+
+model PostExecutionLog {
+  id                String   @id @default(uuid())
+  postJobId         String
+  telegramMessageId BigInt?
+  executedAt        DateTime @default(now())
+  responsePayload   Json?
+
+  postJob PostJob @relation(fields: [postJobId], references: [id])
+
+  @@map("post_execution_logs")
+}
+
+//////////////////////
+// WALLET & LEDGER
+//////////////////////
+
+model Wallet {
+  id     String @id @default(uuid())
+  userId String @unique
+
+  balance  Decimal @default(0) @db.Decimal(14, 2)
+  currency String  @default("USD")
+
+  createdAt DateTime @default(now())
+
+  user   User          @relation(fields: [userId], references: [id])
+  ledger LedgerEntry[]
+
+  advertiserEscrows Escrow[] @relation("AdvertiserWallet")
+  publisherEscrows  Escrow[] @relation("PublisherWallet")
+
+  @@map("wallets")
+}
+
+model LedgerEntry {
+  id       String @id @default(uuid())
+  walletId String
+
+  type   LedgerType
+  amount Decimal      @db.Decimal(14, 2)
+  reason LedgerReason
+
+  referenceId String?
+  createdAt   DateTime @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@map("ledger_entries")
+}
+
+//////////////////////
+// ESCROW & COMMISSION
+//////////////////////
+
+model Escrow {
+  id String @id @default(uuid())
+
+  campaignTargetId   String @unique
+  advertiserWalletId String
+  publisherWalletId  String
+
+  amount Decimal      @db.Decimal(12, 2)
+  status EscrowStatus @default(held)
+
+  createdAt  DateTime  @default(now())
+  releasedAt DateTime?
+  refundedAt DateTime?
+
+  campaignTarget   CampaignTarget @relation(fields: [campaignTargetId], references: [id])
+  advertiserWallet Wallet         @relation(name: "AdvertiserWallet", fields: [advertiserWalletId], references: [id])
+  publisherWallet  Wallet         @relation(name: "PublisherWallet", fields: [publisherWalletId], references: [id])
+
+  @@map("escrows")
+}
+
+model PlatformCommission {
+  id String @id @default(uuid())
+
+  campaignTargetId String  @unique
+  amount           Decimal @db.Decimal(12, 2)
+  percentage       Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+
+  campaignTarget CampaignTarget @relation(fields: [campaignTargetId], references: [id])
+
+  @@map("platform_commissions")
+}
+
+enum SystemActionType {
+  FORCE_RELEASE
+  FORCE_REFUND
+  MANUAL_RESOLVE
+}
+
+model SystemActionLog {
+  id        String @id @default(uuid())
+  action    SystemActionType
+  escrowId  String
+  adminId   String
+  reason    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([escrowId])
+}

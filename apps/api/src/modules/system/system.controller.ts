@@ -2,14 +2,20 @@ import {
     Body,
     Controller,
     Post,
-    Req,
+    UseGuards,
 } from '@nestjs/common';
 import { SystemService } from './system.service';
 import { ResolveEscrowDto } from './dto/resolve-escrow.dto';
 import { KillSwitchDto } from './dto/kill-switch.dto';
 import { ReconciliationDto, ReconciliationMode } from './dto/reconciliation.dto';
+import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '@prisma/client';
+import { Actor } from '../auth/decorators/actor.decorator';
 
 @Controller('system')
+@UseGuards(AuthenticatedGuard, RolesGuard)
 export class SystemController {
     constructor(private readonly systemService: SystemService) { }
 
@@ -20,14 +26,14 @@ export class SystemController {
     @Post('resolve-escrow')
     async resolveEscrow(
         @Body() dto: ResolveEscrowDto,
-        @Req() req: any,
+        @Actor() actor: { id: string },
     ) {
         // req.user.id → SessionGuard’dan keladi
         return this.systemService.resolveEscrow(
             dto.campaignTargetId,
             dto.action,
             dto.reason,
-            req.user.id,
+            actor.id,
         );
     }
 
@@ -36,15 +42,16 @@ export class SystemController {
      * POST /system/kill-switch
      */
     @Post('kill-switch')
+    @Roles(UserRole.admin, UserRole.super_admin)
     async updateKillSwitch(
         @Body() dto: KillSwitchDto,
-        @Req() req: any,
+        @Actor() actor: { id: string },
     ) {
         return this.systemService.updateKillSwitch({
             key: dto.key,
             enabled: dto.enabled,
             reason: dto.reason,
-            actorUserId: req.user.id,
+            actorUserId: actor.id,
         });
     }
 
@@ -55,11 +62,11 @@ export class SystemController {
     @Post('reconcile')
     async reconcile(
         @Body() dto: ReconciliationDto,
-        @Req() req: any,
+        @Actor() actor: { id: string },
     ) {
         return this.systemService.runRevenueReconciliation({
             mode: dto.mode ?? ReconciliationMode.DRY_RUN,
-            actorUserId: req.user?.id,
+            actorUserId: actor.id,
             correlationId: dto.correlationId,
         });
     }

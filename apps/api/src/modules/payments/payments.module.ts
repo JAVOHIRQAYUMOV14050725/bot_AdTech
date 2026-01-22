@@ -1,8 +1,19 @@
-import { Module } from "@nestjs/common";
+import { Module } from '@nestjs/common';
+import { EscrowService } from './escrow.service';
+import { LedgerService } from './ledger.service';
+import { WalletService } from './wallet.service';
+
 
 @Module({
-    imports: [],
-    controllers: [],
-    providers: [],
+    providers: [
+        EscrowService,
+        LedgerService,
+        WalletService,
+    ],
+    exports: [
+        EscrowService,
+        LedgerService,
+        WalletService,
+    ],
 })
 export class PaymentsModule { }

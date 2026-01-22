@@ -7,9 +7,10 @@ import { PaymentsModule } from '@/modules/payments/payments.module';
 @Module({
     imports: [
         PrismaModule,
-        PaymentsModule, // EscrowService shu yerdan keladi
+        PaymentsModule,
     ],
     controllers: [SystemController],
     providers: [SystemService],
+    exports: [SystemService], // ✅ MUHIM
 })
 export class SystemModule { }

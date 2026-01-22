@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
@@ -11,96 +11,93 @@ const bigintToSafeNumber = (value: bigint, field: string): number => {
     if (value > maxSafe || value < minSafe) {
         throw new Error(`${field} exceeds safe integer range`);
     }
-
     return Number(value);
 };
 
 @Injectable()
-export class TelegramService implements OnModuleInit {
+export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(TelegramService.name);
     private readonly bot: Telegraf<Context>;
+    private started = false;
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly adminHandler: AdminHandler,
     ) {
-        if (!process.env.TELEGRAM_BOT_TOKEN) {
-            throw new Error('TELEGRAM_BOT_TOKEN not set');
-        }
-
-        this.bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+        const token = process.env.TELEGRAM_BOT_TOKEN;
+        if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
+        this.bot = new Telegraf(token);
     }
 
-    // ===============================
-    // BOT INIT
-    // ===============================
     async onModuleInit() {
         this.registerAdminCommands();
 
-        await this.bot.launch();
-        this.logger.log('Telegram bot started');
+        // ✅ API start bloklanmasin
+        const autostart = process.env.TELEGRAM_AUTOSTART === 'true';
+        if (!autostart) {
+            this.logger.warn('Telegram autostart disabled (set TELEGRAM_AUTOSTART=true to enable)');
+            return;
+        }
+
+        // ✅ await qilmaymiz — Nest HTTP server ochilib ketadi
+        void this.startBot();
+    }
+
+    async onModuleDestroy() {
+        if (!this.started) return;
+        try {
+            this.bot.stop('shutdown');
+            this.logger.log('Telegram bot stopped');
+        } catch (e) {
+            this.logger.warn(`Telegram bot stop error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    private async startBot() {
+        if (this.started) return;
+        try {
+            this.logger.log('Launching Telegram bot...');
+            await this.bot.launch({ dropPendingUpdates: true });
+            this.started = true;
+            this.logger.log('Telegram bot started');
+        } catch (e) {
+            this.logger.error(
+                `Telegram bot failed to start: ${e instanceof Error ? e.message : String(e)}`,
+            );
+        }
     }
 
     // ===============================
     // ADMIN COMMAND ROUTER
     // ===============================
     private registerAdminCommands() {
-        // /force_release <campaignTargetId>
         this.bot.command('force_release', async (ctx) => {
             const [, campaignTargetId] = ctx.message.text.split(' ');
-
-            if (!campaignTargetId) {
-                return ctx.reply('Usage: /force_release <campaignTargetId>');
-            }
-
+            if (!campaignTargetId) return ctx.reply('Usage: /force_release <campaignTargetId>');
             return this.adminHandler.forceRelease(ctx, campaignTargetId);
         });
 
-        // /force_refund <campaignTargetId> [reason]
         this.bot.command('force_refund', async (ctx) => {
             const [, campaignTargetId, reason] = ctx.message.text.split(' ');
-
-            if (!campaignTargetId) {
-                return ctx.reply('Usage: /force_refund <campaignTargetId> [reason]');
-            }
-
-            return this.adminHandler.forceRefund(
-                ctx,
-                campaignTargetId,
-                reason ?? 'admin_force',
-            );
+            if (!campaignTargetId) return ctx.reply('Usage: /force_refund <campaignTargetId> [reason]');
+            return this.adminHandler.forceRefund(ctx, campaignTargetId, reason ?? 'admin_force');
         });
 
-        // /retry_post <postJobId>
         this.bot.command('retry_post', async (ctx) => {
             const [, postJobId] = ctx.message.text.split(' ');
-
-            if (!postJobId) {
-                return ctx.reply('Usage: /retry_post <postJobId>');
-            }
-
+            if (!postJobId) return ctx.reply('Usage: /retry_post <postJobId>');
             return this.adminHandler.retryPost(ctx, postJobId);
         });
 
-        // /freeze_campaign <campaignId>
         this.bot.command('freeze_campaign', async (ctx) => {
             const [, campaignId] = ctx.message.text.split(' ');
-
-            if (!campaignId) {
-                return ctx.reply('Usage: /freeze_campaign <campaignId>');
-            }
-
+            if (!campaignId) return ctx.reply('Usage: /freeze_campaign <campaignId>');
             return this.adminHandler.freezeCampaign(ctx, campaignId);
         });
 
-        // /unfreeze_campaign <campaignId>
         this.bot.command('unfreeze_campaign', async (ctx) => {
             const [, campaignId] = ctx.message.text.split(' ');
-
-            if (!campaignId) {
-                return ctx.reply('Usage: /unfreeze_campaign <campaignId>');
-            }
-
+            if (!campaignId) return ctx.reply('Usage: /unfreeze_campaign <campaignId>');
             return this.adminHandler.unfreezeCampaign(ctx, campaignId);
         });
     }
@@ -108,107 +105,57 @@ export class TelegramService implements OnModuleInit {
     // ===============================
     // EXISTING LOGIC (UNCHANGED)
     // ===============================
-    async sendCampaignPost(postJobId: string): Promise<{
-        ok: boolean;
-        telegramMessageId?: number;
-    }> {
+    async sendCampaignPost(postJobId: string): Promise<{ ok: boolean; telegramMessageId?: number }> {
         const postJob = await this.prisma.postJob.findUnique({
             where: { id: postJobId },
             include: {
-                campaignTarget: {
-                    include: {
-                        campaign: { include: { creatives: true } },
-                        channel: true,
-                    },
-                },
+                campaignTarget: { include: { campaign: { include: { creatives: true } }, channel: true } },
                 executions: true,
             },
         });
 
-        if (!postJob) {
-            throw new Error('PostJob not found');
-        }
+        if (!postJob) throw new Error('PostJob not found');
 
-        const existingExecution = postJob.executions.find(
-            (execution) => execution.telegramMessageId,
-        );
-
+        const existingExecution = postJob.executions.find((e) => e.telegramMessageId);
         if (existingExecution?.telegramMessageId) {
             return {
                 ok: true,
-                telegramMessageId: bigintToSafeNumber(
-                    existingExecution.telegramMessageId,
-                    'telegramMessageId',
-                ),
+                telegramMessageId: bigintToSafeNumber(existingExecution.telegramMessageId, 'telegramMessageId'),
             };
         }
 
-        if (postJob.status === 'success') {
-            return { ok: true };
-        }
+        if (postJob.status === 'success') return { ok: true };
 
         const channelId = postJob.campaignTarget.channel.telegramChannelId;
         const telegramChannelId = channelId.toString();
         const creative = postJob.campaignTarget.campaign.creatives[0];
-
-        if (!creative) {
-            throw new Error('Campaign creative not found');
-        }
+        if (!creative) throw new Error('Campaign creative not found');
 
         const sendPayload = creative.contentPayload as Prisma.JsonObject;
 
-        const maxAttempts = Number(
-            process.env.TELEGRAM_SEND_MAX_ATTEMPTS ?? 3,
-        );
-        const baseDelayMs = Number(
-            process.env.TELEGRAM_SEND_BASE_DELAY_MS ?? 1000,
-        );
+        const maxAttempts = Number(process.env.TELEGRAM_SEND_MAX_ATTEMPTS ?? 3);
+        const baseDelayMs = Number(process.env.TELEGRAM_SEND_BASE_DELAY_MS ?? 1000);
 
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
-                let response:
-                    | { message_id: number }
-                    | { message_id?: number };
+                let response: { message_id?: number };
 
                 if (creative.contentType === 'text') {
                     const text = String(sendPayload?.text ?? '');
-                    if (!text.trim()) {
-                        throw new Error('Creative text payload missing');
-                    }
-                    response = await this.bot.telegram.sendMessage(
-                        telegramChannelId,
-                        text,
-                    );
+                    if (!text.trim()) throw new Error('Creative text payload missing');
+                    response = await this.bot.telegram.sendMessage(telegramChannelId, text);
                 } else if (creative.contentType === 'image') {
                     const imageUrl = String(sendPayload?.url ?? '');
-                    if (!imageUrl.trim()) {
-                        throw new Error('Creative image payload missing');
-                    }
-                    response = await this.bot.telegram.sendPhoto(
-                        telegramChannelId,
-                        imageUrl,
-                        {
-                            caption:
-                                typeof sendPayload?.caption === 'string'
-                                    ? sendPayload.caption
-                                    : undefined,
-                        },
-                    );
+                    if (!imageUrl.trim()) throw new Error('Creative image payload missing');
+                    response = await this.bot.telegram.sendPhoto(telegramChannelId, imageUrl, {
+                        caption: typeof sendPayload?.caption === 'string' ? sendPayload.caption : undefined,
+                    });
                 } else if (creative.contentType === 'video') {
                     const videoUrl = String(sendPayload?.url ?? '');
-                    if (!videoUrl.trim()) {
-                        throw new Error('Creative video payload missing');
-                    }
-                    response = await this.bot.telegram.sendVideo(
-                        telegramChannelId,
-                        videoUrl,
-                        {
-                            caption:
-                                typeof sendPayload?.caption === 'string'
-                                    ? sendPayload.caption
-                                    : undefined,
-                        },
-                    );
+                    if (!videoUrl.trim()) throw new Error('Creative video payload missing');
+                    response = await this.bot.telegram.sendVideo(telegramChannelId, videoUrl, {
+                        caption: typeof sendPayload?.caption === 'string' ? sendPayload.caption : undefined,
+                    });
                 } else {
                     throw new Error('Unsupported creative type');
                 }
@@ -218,30 +165,20 @@ export class TelegramService implements OnModuleInit {
                 await this.prisma.postExecutionLog.create({
                     data: {
                         postJobId,
-                        telegramMessageId: messageId
-                            ? BigInt(messageId)
-                            : null,
+                        telegramMessageId: messageId ? BigInt(messageId) : null,
                         responsePayload: sendPayload,
                     },
                 });
 
-                return {
-                    ok: true,
-                    telegramMessageId: messageId,
-                };
+                return { ok: true, telegramMessageId: messageId };
             } catch (err) {
-                const errorMessage =
-                    err instanceof Error ? err.message : String(err);
-                this.logger.warn(
-                    `Telegram send failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`,
-                );
+                const msg = err instanceof Error ? err.message : String(err);
+                this.logger.warn(`Telegram send failed (attempt ${attempt}/${maxAttempts}): ${msg}`);
 
-                if (attempt === maxAttempts) {
-                    return { ok: false };
-                }
+                if (attempt === maxAttempts) return { ok: false };
 
                 const backoffMs = baseDelayMs * 2 ** (attempt - 1);
-                await new Promise((resolve) => setTimeout(resolve, backoffMs));
+                await new Promise((r) => setTimeout(r, backoffMs));
             }
         }
 

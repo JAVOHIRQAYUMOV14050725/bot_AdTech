@@ -51,9 +51,14 @@ export class SystemService {
 
         let result;
         if (action === ResolveAction.RELEASE) {
-            result = await this.escrowService.release(campaignTargetId);
+            result = await this.escrowService.release(campaignTargetId, {
+                actor: 'admin',
+            });
         } else if (action === ResolveAction.REFUND) {
-            result = await this.escrowService.refund(campaignTargetId, reason);
+            result = await this.escrowService.refund(campaignTargetId, {
+                actor: 'admin',
+                reason,
+            });
         } else {
             throw new BadRequestException('Invalid resolve action');
         }
@@ -114,7 +119,10 @@ export class SystemService {
 
                 await this.escrowService.refund(
                     escrow.campaignTargetId,
-                    'watchdog_stuck_escrow',
+                    {
+                        actor: 'system',
+                        reason: 'watchdog_stuck_escrow',
+                    },
                 );
 
                 await this.prisma.userAuditLog.create({

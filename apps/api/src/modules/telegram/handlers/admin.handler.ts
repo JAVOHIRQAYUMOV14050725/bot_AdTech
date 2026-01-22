@@ -1,7 +1,16 @@
-import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ForbiddenException,
+    Injectable,
+    Logger,
+} from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Context } from 'telegraf';
 import { EscrowService } from '@/modules/payments/escrow.service';
+import {
+    assertCampaignTransition,
+    assertPostJobTransition,
+} from '@/modules/lifecycle/lifecycle';
 
 @Injectable()
 export class AdminHandler {
@@ -10,7 +19,6 @@ export class AdminHandler {
     constructor(
         private readonly prisma: PrismaService,
         private readonly escrowService: EscrowService,
-            
     ) { }
 
     // 🔐 RBAC CHECK
@@ -35,7 +43,9 @@ export class AdminHandler {
     async forceRelease(ctx: Context, campaignTargetId: string) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.escrowService.release(campaignTargetId);
+        await this.escrowService.release(campaignTargetId, {
+            actor: 'admin',
+        });
 
         await this.prisma.userAuditLog.create({
             data: {
@@ -59,7 +69,10 @@ export class AdminHandler {
     ) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.escrowService.refund(campaignTargetId, reason);
+        await this.escrowService.refund(campaignTargetId, {
+            actor: 'admin',
+            reason,
+        });
 
         await this.prisma.userAuditLog.create({
             data: {
@@ -81,13 +94,31 @@ export class AdminHandler {
     async retryPost(ctx: Context, postJobId: string) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.prisma.postJob.update({
+        const postJob = await this.prisma.postJob.findUnique({
             where: { id: postJobId },
-            data: {
-                status: 'queued',
-                lastError: null,
-            },
+            select: { id: true, status: true },
         });
+
+        if (!postJob) {
+            throw new BadRequestException('PostJob not found');
+        }
+
+        const transition = assertPostJobTransition({
+            postJobId,
+            from: postJob.status,
+            to: 'queued',
+            actor: 'admin',
+        });
+
+        if (!transition.noop) {
+            await this.prisma.postJob.update({
+                where: { id: postJobId },
+                data: {
+                    status: 'queued',
+                    lastError: null,
+                },
+            });
+        }
 
         await this.prisma.userAuditLog.create({
             data: {
@@ -106,10 +137,28 @@ export class AdminHandler {
     async freezeCampaign(ctx: Context, campaignId: string) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.prisma.campaign.update({
+        const campaign = await this.prisma.campaign.findUnique({
             where: { id: campaignId },
-            data: { status: 'paused' },
+            select: { id: true, status: true },
         });
+
+        if (!campaign) {
+            throw new BadRequestException('Campaign not found');
+        }
+
+        const transition = assertCampaignTransition({
+            campaignId,
+            from: campaign.status,
+            to: 'paused',
+            actor: 'admin',
+        });
+
+        if (!transition.noop) {
+            await this.prisma.campaign.update({
+                where: { id: campaignId },
+                data: { status: 'paused' },
+            });
+        }
 
         await this.prisma.userAuditLog.create({
             data: {
@@ -125,10 +174,28 @@ export class AdminHandler {
     async unfreezeCampaign(ctx: Context, campaignId: string) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.prisma.campaign.update({
+        const campaign = await this.prisma.campaign.findUnique({
             where: { id: campaignId },
-            data: { status: 'active' },
+            select: { id: true, status: true },
         });
+
+        if (!campaign) {
+            throw new BadRequestException('Campaign not found');
+        }
+
+        const transition = assertCampaignTransition({
+            campaignId,
+            from: campaign.status,
+            to: 'active',
+            actor: 'admin',
+        });
+
+        if (!transition.noop) {
+            await this.prisma.campaign.update({
+                where: { id: campaignId },
+                data: { status: 'active' },
+            });
+        }
 
         await this.prisma.userAuditLog.create({
             data: {

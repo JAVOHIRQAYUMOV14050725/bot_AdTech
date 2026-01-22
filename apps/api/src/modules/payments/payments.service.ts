@@ -4,10 +4,13 @@ import {
     BadRequestException,
     ConflictException,
     Injectable,
+    Logger,
 } from '@nestjs/common';
 
 @Injectable()
 export class PaymentsService {
+    private readonly logger = new Logger(PaymentsService.name);
+
     constructor(
         private readonly prisma: PrismaService,
     ) { }
@@ -124,6 +127,15 @@ export class PaymentsService {
 
             if (!target) {
                 throw new BadRequestException('Campaign target not found');
+            }
+
+            if (target.status !== 'pending') {
+                this.logger.error(
+                    `[FSM] Escrow hold blocked: campaignTarget=${campaignTargetId} is ${target.status}`,
+                );
+                throw new ConflictException(
+                    `Escrow hold requires campaign target ${campaignTargetId} to be pending`,
+                );
             }
 
             const advertiserWallet = target.campaign.advertiser.wallet;

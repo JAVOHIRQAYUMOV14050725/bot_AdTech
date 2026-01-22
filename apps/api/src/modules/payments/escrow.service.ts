@@ -1,12 +1,16 @@
-import {
-    BadRequestException,
-    ConflictException,
-    Injectable,
-} from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 
 import { Prisma, Escrow } from '@prisma/client';
 import { PaymentsService } from './payments.service';
+import {
+    TransitionActor,
+    assertCampaignTargetExists,
+    assertCampaignTargetTransition,
+    assertEscrowCampaignTargetInvariant,
+    assertEscrowTransition,
+    assertPostJobOutcomeForEscrow,
+} from '@/modules/lifecycle/lifecycle';
 
 @Injectable()
 export class EscrowService {
@@ -34,8 +38,12 @@ export class EscrowService {
      */
     async release(
         campaignTargetId: string,
-        transaction?: Prisma.TransactionClient,
+        options?: {
+            transaction?: Prisma.TransactionClient;
+            actor?: TransitionActor;
+        },
     ) {
+        const actor = options?.actor ?? 'system';
         const execute = async (tx: Prisma.TransactionClient) => {
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
@@ -44,16 +52,48 @@ export class EscrowService {
                 throw new BadRequestException('Escrow not found');
             }
 
+            const campaignTarget = await tx.campaignTarget.findUnique({
+                where: { id: campaignTargetId },
+                include: { postJob: true },
+            });
+
+            assertCampaignTargetExists(
+                campaignTargetId,
+                Boolean(campaignTarget),
+            );
+
             if (escrow.status === 'released') {
+                assertEscrowCampaignTargetInvariant({
+                    campaignTargetId,
+                    escrowStatus: escrow.status,
+                    campaignTargetStatus: campaignTarget!.status,
+                });
                 return {
                     ok: true,
                     alreadyReleased: true,
                 };
             }
 
-            if (escrow.status !== 'held') {
-                throw new ConflictException('Escrow is not in HELD state');
-            }
+            assertEscrowTransition({
+                escrowId: escrow.id,
+                from: escrow.status,
+                to: 'released',
+                actor,
+            });
+
+            assertPostJobOutcomeForEscrow({
+                campaignTargetId,
+                postJobStatus: campaignTarget!.postJob?.status ?? null,
+                action: 'release',
+                actor,
+            });
+
+            const targetTransition = assertCampaignTargetTransition({
+                campaignTargetId,
+                from: campaignTarget!.status,
+                to: 'posted',
+                actor,
+            });
 
             const total = new Prisma.Decimal(escrow.amount);
 
@@ -113,6 +153,13 @@ export class EscrowService {
             }
 
             // 3️⃣ FINALIZE ESCROW
+            if (!targetTransition.noop) {
+                await tx.campaignTarget.update({
+                    where: { id: campaignTargetId },
+                    data: { status: 'posted' },
+                });
+            }
+
             await tx.escrow.update({
                 where: { id: escrow.id },
                 data: {
@@ -140,8 +187,8 @@ export class EscrowService {
             };
         };
 
-        if (transaction) {
-            return execute(transaction);
+        if (options?.transaction) {
+            return execute(options.transaction);
         }
 
         return this.prisma.$transaction(execute);
@@ -153,9 +200,14 @@ export class EscrowService {
      */
     async refund(
         campaignTargetId: string,
-        reason = 'post_failed',
-        transaction?: Prisma.TransactionClient,
+        options?: {
+            reason?: string;
+            transaction?: Prisma.TransactionClient;
+            actor?: TransitionActor;
+        },
     ) {
+        const actor = options?.actor ?? 'system';
+        const reason = options?.reason ?? 'post_failed';
         const execute = async (tx: Prisma.TransactionClient) => {
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
@@ -164,16 +216,48 @@ export class EscrowService {
                 throw new BadRequestException('Escrow not found');
             }
 
+            const campaignTarget = await tx.campaignTarget.findUnique({
+                where: { id: campaignTargetId },
+                include: { postJob: true },
+            });
+
+            assertCampaignTargetExists(
+                campaignTargetId,
+                Boolean(campaignTarget),
+            );
+
             if (escrow.status === 'refunded') {
+                assertEscrowCampaignTargetInvariant({
+                    campaignTargetId,
+                    escrowStatus: escrow.status,
+                    campaignTargetStatus: campaignTarget!.status,
+                });
                 return {
                     ok: true,
                     alreadyRefunded: true,
                 };
             }
 
-            if (escrow.status !== 'held') {
-                throw new ConflictException('Escrow is not refundable');
-            }
+            assertEscrowTransition({
+                escrowId: escrow.id,
+                from: escrow.status,
+                to: 'refunded',
+                actor,
+            });
+
+            assertPostJobOutcomeForEscrow({
+                campaignTargetId,
+                postJobStatus: campaignTarget!.postJob?.status ?? null,
+                action: 'refund',
+                actor,
+            });
+
+            const targetTransition = assertCampaignTargetTransition({
+                campaignTargetId,
+                from: campaignTarget!.status,
+                to: 'refunded',
+                actor,
+            });
 
             const amount = new Prisma.Decimal(escrow.amount);
 
@@ -196,6 +280,13 @@ export class EscrowService {
             });
 
             // 2️⃣ FINALIZE ESCROW
+            if (!targetTransition.noop) {
+                await tx.campaignTarget.update({
+                    where: { id: campaignTargetId },
+                    data: { status: 'refunded' },
+                });
+            }
+
             await tx.escrow.update({
                 where: { id: escrow.id },
                 data: {
@@ -216,8 +307,8 @@ export class EscrowService {
             };
         };
 
-        if (transaction) {
-            return execute(transaction);
+        if (options?.transaction) {
+            return execute(options.transaction);
         }
 
         return this.prisma.$transaction(execute);

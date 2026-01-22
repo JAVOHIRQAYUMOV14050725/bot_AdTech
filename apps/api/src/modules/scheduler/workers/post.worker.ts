@@ -4,6 +4,7 @@ import { Worker } from 'bullmq';
 
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
+import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 import { postDlq, redisConnection } from '../queues';
 
 export function startPostWorker(
@@ -44,12 +45,22 @@ export function startPostWorker(
 
                 // ✅ SUCCESS FLOW (ATOMIC)
                 await prisma.$transaction(async (tx) => {
+                    assertPostJobTransition({
+                        postJobId: postJob.id,
+                        from: postJob.status,
+                        to: 'success',
+                        actor: 'worker',
+                    });
+
                     await tx.postJob.update({
                         where: { id: postJob.id },
                         data: { status: 'success' },
                     });
 
-                    await escrowService.release(postJob.campaignTargetId, tx);
+                    await escrowService.release(postJob.campaignTargetId, {
+                        transaction: tx,
+                        actor: 'worker',
+                    });
                 });
 
                 return {
@@ -59,6 +70,13 @@ export function startPostWorker(
             } catch (err) {
                 // ❌ FAILED FLOW (ATOMIC)
                 await prisma.$transaction(async (tx) => {
+                    assertPostJobTransition({
+                        postJobId: postJob.id,
+                        from: postJob.status,
+                        to: 'failed',
+                        actor: 'worker',
+                    });
+
                     await tx.postJob.update({
                         where: { id: postJob.id },
                         data: {
@@ -69,11 +87,11 @@ export function startPostWorker(
                         },
                     });
 
-                    await escrowService.refund(
-                        postJob.campaignTargetId,
-                        'post_failed',
-                        tx,
-                    );
+                    await escrowService.refund(postJob.campaignTargetId, {
+                        reason: 'post_failed',
+                        transaction: tx,
+                        actor: 'worker',
+                    });
                 });
 
                 throw err;

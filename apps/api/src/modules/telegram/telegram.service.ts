@@ -134,6 +134,7 @@ export class TelegramService implements OnModuleInit {
         }
 
         const channelId = postJob.campaignTarget.channel.telegramChannelId;
+        const telegramChannelId = channelId.toString();
         const creative = postJob.campaignTarget.campaign.creatives[0];
 
         if (!creative) {
@@ -161,7 +162,7 @@ export class TelegramService implements OnModuleInit {
                         throw new Error('Creative text payload missing');
                     }
                     response = await this.bot.telegram.sendMessage(
-                        channelId,
+                        telegramChannelId,
                         text,
                     );
                 } else if (creative.contentType === 'image') {
@@ -170,7 +171,7 @@ export class TelegramService implements OnModuleInit {
                         throw new Error('Creative image payload missing');
                     }
                     response = await this.bot.telegram.sendPhoto(
-                        channelId,
+                        telegramChannelId,
                         imageUrl,
                         {
                             caption:
@@ -185,7 +186,7 @@ export class TelegramService implements OnModuleInit {
                         throw new Error('Creative video payload missing');
                     }
                     response = await this.bot.telegram.sendVideo(
-                        channelId,
+                        telegramChannelId,
                         videoUrl,
                         {
                             caption:

@@ -1,17 +1,24 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { ensurePrismaEngineCompatibility, prismaLogOptions } from './../../prisma/prisma-client';
 import { PrismaClient } from '@prisma/client';
 
+
+import { Injectable, OnModuleInit } from '@nestjs/common';
+
+
 @Injectable()
-export class PrismaService extends PrismaClient
-    implements OnModuleInit {
+
+export class PrismaService extends PrismaClient implements OnModuleInit {
 
     constructor() {
+        ensurePrismaEngineCompatibility();
         super({
-            log: ['error', 'warn'],
+            log: prismaLogOptions,
         });
     }
 
     async onModuleInit() {
+
         await this.$connect();
+
     }
 }

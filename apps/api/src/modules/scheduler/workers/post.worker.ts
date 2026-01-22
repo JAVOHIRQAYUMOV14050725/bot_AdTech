@@ -7,6 +7,7 @@ import { EscrowService } from '@/modules/payments/escrow.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 import { postDlq, redisConnection } from '../queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { KillSwitchKey, PostJobStatus } from '@prisma/client';
 
 export function startPostWorker(
     prisma: PrismaService,
@@ -21,8 +22,8 @@ export function startPostWorker(
             const { postJobId } = job.data;
 
             const reservation = await prisma.postJob.updateMany({
-                where: { id: postJobId, status: 'queued' },
-                data: { status: 'sending' },
+                where: { id: postJobId, status: PostJobStatus.queued },
+                data: { status: PostJobStatus.sending },
             });
 
             if (reservation.count === 0) {
@@ -41,7 +42,9 @@ export function startPostWorker(
             }
 
             try {
-                const workerEnabled = await killSwitchService.isEnabled('worker_post');
+                const workerEnabled = await killSwitchService.isEnabled(
+                    KillSwitchKey.worker_post,
+                );
                 if (!workerEnabled) {
                     const delayMs = 5 * 60 * 1000;
                     logger.warn(
@@ -52,7 +55,7 @@ export function startPostWorker(
                 }
 
                 const telegramEnabled = await killSwitchService.isEnabled(
-                    'telegram_posting',
+                    KillSwitchKey.telegram_posting,
                 );
                 if (!telegramEnabled) {
                     const delayMs = 5 * 60 * 1000;
@@ -76,14 +79,14 @@ export function startPostWorker(
                     assertPostJobTransition({
                         postJobId: postJob.id,
                         from: postJob.status,
-                        to: 'success',
+                        to: PostJobStatus.success,
                         actor: 'worker',
                         correlationId: postJob.id,
                     });
 
                     await tx.postJob.update({
                         where: { id: postJob.id },
-                        data: { status: 'success' },
+                        data: { status: PostJobStatus.success },
                     });
 
                     await escrowService.release(postJob.campaignTargetId, {
@@ -103,7 +106,7 @@ export function startPostWorker(
                     assertPostJobTransition({
                         postJobId: postJob.id,
                         from: postJob.status,
-                        to: 'failed',
+                        to: PostJobStatus.failed,
                         actor: 'worker',
                         correlationId: postJob.id,
                     });
@@ -111,7 +114,7 @@ export function startPostWorker(
                     await tx.postJob.update({
                         where: { id: postJob.id },
                         data: {
-                            status: 'failed',
+                            status: PostJobStatus.failed,
                             attempts: { increment: 1 },
                             lastError:
                                 err instanceof Error ? err.message : String(err),

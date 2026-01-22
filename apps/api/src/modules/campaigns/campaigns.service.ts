@@ -3,7 +3,13 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { CreateCreativeDto } from './dto/create-creative.dto';
 import { CreateTargetDto } from './dto/create-target.dto';
-import { CampaignStatus, ChannelStatus, Prisma, UserRole } from '@prisma/client';
+import {
+    CampaignStatus,
+    CampaignTargetStatus,
+    ChannelStatus,
+    Prisma,
+    UserRole,
+} from '@prisma/client';
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition } from '@/modules/lifecycle/lifecycle';
 
@@ -151,7 +157,7 @@ export class CampaignsService {
         const transition = assertCampaignTargetTransition({
             campaignTargetId: targetId,
             from: target.status,
-            to: 'submitted',
+            to: CampaignTargetStatus.submitted,
             actor: 'advertiser',
             correlationId: targetId,
         });
@@ -159,7 +165,7 @@ export class CampaignsService {
         if (!transition.noop) {
             await this.prisma.campaignTarget.update({
                 where: { id: targetId },
-                data: { status: 'submitted' },
+                data: { status: CampaignTargetStatus.submitted },
             });
         }
 

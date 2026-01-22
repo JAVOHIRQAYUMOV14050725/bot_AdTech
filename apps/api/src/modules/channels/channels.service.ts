@@ -154,7 +154,11 @@ export class ChannelsService {
             throw new NotFoundException('Channel not found');
         }
 
-        if (![ChannelStatus.pending, ChannelStatus.verified].includes(channel.status)) {
+        const rejectableStatuses: ChannelStatus[] = [
+            ChannelStatus.pending,
+            ChannelStatus.verified,
+        ];
+        if (!rejectableStatuses.includes(channel.status)) {
             throw new BadRequestException('Channel cannot be rejected');
         }
 

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const booleanString = z
     .enum(['true', 'false'])
-    .transform((value) => value === 'true');
+    .transform((value: 'true' | 'false') => value === 'true');
 
 export const envSchema = z.object({
     PORT: z.coerce.number().int().positive().default(3000),

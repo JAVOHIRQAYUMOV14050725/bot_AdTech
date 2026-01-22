@@ -4,6 +4,7 @@ import { PaymentsService } from '@/modules/payments/payments.service';
 import { SchedulerService } from '@/modules/scheduler/scheduler.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition } from '@/modules/lifecycle/lifecycle';
+import { CampaignTargetStatus, PostJobStatus } from '@prisma/client';
 
 @Injectable()
 export class ModerationService {
@@ -16,7 +17,7 @@ export class ModerationService {
 
     async listPending() {
         return this.prisma.campaignTarget.findMany({
-            where: { status: 'submitted' },
+            where: { status: CampaignTargetStatus.submitted },
             include: {
                 campaign: { include: { creatives: true } },
                 channel: true,
@@ -35,7 +36,7 @@ export class ModerationService {
             throw new NotFoundException('Campaign target not found');
         }
 
-        if (target.status === 'approved' && target.postJob) {
+        if (target.status === CampaignTargetStatus.approved && target.postJob) {
             return {
                 ok: true,
                 targetId,
@@ -58,14 +59,14 @@ export class ModerationService {
                 return { target: fresh, postJob: fresh.postJob };
             }
 
-            if (fresh.status !== 'submitted') {
+            if (fresh.status !== CampaignTargetStatus.submitted) {
                 throw new BadRequestException('Target not submitted');
             }
 
             assertCampaignTargetTransition({
                 campaignTargetId: targetId,
                 from: fresh.status,
-                to: 'approved',
+                to: CampaignTargetStatus.approved,
                 actor: 'admin',
                 correlationId: targetId,
             });
@@ -73,7 +74,7 @@ export class ModerationService {
             const updatedTarget = await tx.campaignTarget.update({
                 where: { id: targetId },
                 data: {
-                    status: 'approved',
+                    status: CampaignTargetStatus.approved,
                     moderatedBy: adminId,
                     moderatedAt: new Date(),
                     moderationReason: null,
@@ -84,7 +85,7 @@ export class ModerationService {
                 data: {
                     campaignTargetId: targetId,
                     executeAt: updatedTarget.scheduledAt,
-                    status: 'queued',
+                    status: PostJobStatus.queued,
                 },
             });
 
@@ -124,14 +125,14 @@ export class ModerationService {
             throw new NotFoundException('Campaign target not found');
         }
 
-        if (target.status !== 'submitted') {
+        if (target.status !== CampaignTargetStatus.submitted) {
             throw new BadRequestException('Target not submitted');
         }
 
         assertCampaignTargetTransition({
             campaignTargetId: targetId,
             from: target.status,
-            to: 'rejected',
+            to: CampaignTargetStatus.rejected,
             actor: 'admin',
             correlationId: targetId,
         });
@@ -139,7 +140,7 @@ export class ModerationService {
         const updated = await this.prisma.campaignTarget.update({
             where: { id: targetId },
             data: {
-                status: 'rejected',
+                status: CampaignTargetStatus.rejected,
                 moderatedBy: adminId,
                 moderatedAt: new Date(),
                 moderationReason: reason ?? null,

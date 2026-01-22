@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { PrismaService } from '@/prisma/prisma.service';
 import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
-import { Prisma } from '@prisma/client';
+import { PostJobStatus, Prisma } from '@prisma/client';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
     const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
@@ -140,7 +140,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             };
         }
 
-        if (postJob.status === 'success') return { ok: true };
+        if (postJob.status === PostJobStatus.success) return { ok: true };
 
         const channelId = postJob.campaignTarget.channel.telegramChannelId;
         const telegramChannelId = channelId.toString();

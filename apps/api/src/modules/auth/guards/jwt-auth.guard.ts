@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '@/prisma/prisma.service';
+import { UserStatus } from '@prisma/client';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -45,7 +46,7 @@ export class JwtAuthGuard implements CanActivate {
                 },
             });
 
-            if (!user || user.status !== 'active') {
+            if (!user || user.status !== UserStatus.active) {
                 throw new UnauthorizedException('Invalid user');
             }
 

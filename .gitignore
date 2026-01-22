@@ -22,6 +22,14 @@ build/
 coverage/
 
 ####################################
+# ENV
+####################################
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+####################################
 # NESTJS
 ####################################
 *.tsbuildinfo
@@ -30,7 +38,6 @@ coverage/
 # PRISMA
 ####################################
 node_modules/.prisma/
-prisma/migrations/
 prisma/dev.db
 prisma/dev.db-journal
 

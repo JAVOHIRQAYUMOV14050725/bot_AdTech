@@ -1,7 +1,16 @@
 import { BadRequestException, Injectable, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 
-import { Prisma, Escrow } from '@prisma/client';
+import {
+    CampaignTargetStatus,
+    EscrowStatus,
+    KillSwitchKey,
+    LedgerReason,
+    LedgerType,
+    Prisma,
+    Escrow,
+    UserRole,
+} from '@prisma/client';
 import { PaymentsService } from './payments.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import {
@@ -52,7 +61,7 @@ export class EscrowService {
         const correlationId = options?.correlationId ?? campaignTargetId;
         const execute = async (tx: Prisma.TransactionClient) => {
             await this.killSwitchService.assertEnabled({
-                key: 'payouts',
+                key: KillSwitchKey.payouts,
                 reason: 'Payouts paused',
                 correlationId,
             });
@@ -74,7 +83,7 @@ export class EscrowService {
                 Boolean(campaignTarget),
             );
 
-            if (escrow.status === 'released') {
+            if (escrow.status === EscrowStatus.released) {
                 assertEscrowCampaignTargetInvariant({
                     campaignTargetId,
                     escrowStatus: escrow.status,
@@ -89,7 +98,7 @@ export class EscrowService {
             assertEscrowTransition({
                 escrowId: escrow.id,
                 from: escrow.status,
-                to: 'released',
+                to: EscrowStatus.released,
                 actor,
                 correlationId,
             });
@@ -104,7 +113,7 @@ export class EscrowService {
             const targetTransition = assertCampaignTargetTransition({
                 campaignTargetId,
                 from: campaignTarget!.status,
-                to: 'posted',
+                to: CampaignTargetStatus.posted,
                 actor,
                 correlationId,
             });
@@ -138,7 +147,7 @@ export class EscrowService {
             const holdLedger = await tx.ledgerEntry.findFirst({
                 where: {
                     walletId: escrow.advertiserWalletId,
-                    reason: 'escrow_hold',
+                    reason: LedgerReason.escrow_hold,
                     referenceId: campaignTargetId,
                 },
             });
@@ -166,8 +175,8 @@ export class EscrowService {
                 tx,
                 walletId: escrow.publisherWalletId,
                 amount: payoutAmount,
-                type: 'credit',
-                reason: 'payout',
+                type: LedgerType.credit,
+                reason: LedgerReason.payout,
                 referenceId: campaignTargetId,
                 idempotencyKey: `payout:${campaignTargetId}`,
                 campaignId: campaignTarget!.campaignId,
@@ -181,7 +190,7 @@ export class EscrowService {
             // 2️⃣ COMMISSION → PLATFORM
             if (commissionAmount.gt(0)) {
                 const platformWallet = await tx.wallet.findFirst({
-                    where: { user: { role: 'super_admin' } },
+                    where: { user: { role: UserRole.super_admin } },
                 });
 
                 if (!platformWallet) {
@@ -193,8 +202,8 @@ export class EscrowService {
                     tx,
                     walletId: platformWallet.id,
                     amount: commissionAmount,
-                    type: 'credit',
-                    reason: 'commission',
+                    type: LedgerType.credit,
+                    reason: LedgerReason.commission,
                     referenceId: campaignTargetId,
                     idempotencyKey: `commission:${campaignTargetId}`,
                     campaignId: campaignTarget!.campaignId,
@@ -209,14 +218,14 @@ export class EscrowService {
             if (!targetTransition.noop) {
                 await tx.campaignTarget.update({
                     where: { id: campaignTargetId },
-                    data: { status: 'posted' },
+                    data: { status: CampaignTargetStatus.posted },
                 });
             }
 
             await tx.escrow.update({
                 where: { id: escrow.id },
                 data: {
-                    status: 'released',
+                    status: EscrowStatus.released,
                     releasedAt: new Date(),
                 },
             });
@@ -293,7 +302,7 @@ export class EscrowService {
                 Boolean(campaignTarget),
             );
 
-            if (escrow.status === 'refunded') {
+            if (escrow.status === EscrowStatus.refunded) {
                 assertEscrowCampaignTargetInvariant({
                     campaignTargetId,
                     escrowStatus: escrow.status,
@@ -308,7 +317,7 @@ export class EscrowService {
             assertEscrowTransition({
                 escrowId: escrow.id,
                 from: escrow.status,
-                to: 'refunded',
+                to: EscrowStatus.refunded,
                 actor,
                 correlationId,
             });
@@ -323,7 +332,7 @@ export class EscrowService {
             const targetTransition = assertCampaignTargetTransition({
                 campaignTargetId,
                 from: campaignTarget!.status,
-                to: 'refunded',
+                to: CampaignTargetStatus.refunded,
                 actor,
                 correlationId,
             });
@@ -335,8 +344,8 @@ export class EscrowService {
                 tx,
                 walletId: escrow.advertiserWalletId,
                 amount,
-                type: 'credit',
-                reason: 'refund',
+                type: LedgerType.credit,
+                reason: LedgerReason.refund,
                 referenceId: campaignTargetId,
                 idempotencyKey: `refund:${campaignTargetId}`,
                 campaignId: campaignTarget!.campaignId,
@@ -350,14 +359,14 @@ export class EscrowService {
             if (!targetTransition.noop) {
                 await tx.campaignTarget.update({
                     where: { id: campaignTargetId },
-                    data: { status: 'refunded' },
+                    data: { status: CampaignTargetStatus.refunded },
                 });
             }
 
             await tx.escrow.update({
                 where: { id: escrow.id },
                 data: {
-                    status: 'refunded',
+                    status: EscrowStatus.refunded,
                     refundedAt: new Date(),
                 },
             });

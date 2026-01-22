@@ -1,6 +1,13 @@
 
 import { PrismaService } from '@/prisma/prisma.service';
-import { LedgerReason, Prisma } from '@prisma/client';
+import {
+    CampaignTargetStatus,
+    EscrowStatus,
+    KillSwitchKey,
+    LedgerReason,
+    LedgerType,
+    Prisma,
+} from '@prisma/client';
 import {
     BadRequestException,
     ConflictException,
@@ -54,7 +61,7 @@ export class PaymentsService {
         tx: Prisma.TransactionClient;
         walletId: string;
         amount: Prisma.Decimal;
-        type: 'credit' | 'debit';
+        type: LedgerType;
         reason: LedgerReason;
         referenceId?: string;
         idempotencyKey?: string;
@@ -101,7 +108,7 @@ export class PaymentsService {
                     walletId,
                     type,
                     amount:
-                        type === 'debit'
+                        type === LedgerType.debit
                             ? normalizedAmount.negated()
                             : normalizedAmount,
                     reason,
@@ -121,7 +128,7 @@ export class PaymentsService {
             throw err;
         }
 
-        if (type === 'debit') {
+        if (type === LedgerType.debit) {
             const debitResult = await tx.wallet.updateMany({
                 where: {
                     id: walletId,
@@ -182,8 +189,8 @@ export class PaymentsService {
                 tx,
                 walletId: wallet.id,
                 amount: normalizedAmount,
-                type: 'credit',
-                reason: 'deposit',
+                type: LedgerType.credit,
+                reason: LedgerReason.deposit,
                 actor: 'system',
                 correlationId: `deposit:${userId}`,
             });
@@ -202,7 +209,7 @@ export class PaymentsService {
         options?: { transaction?: Prisma.TransactionClient; actor?: string; correlationId?: string },
     ) {
         await this.killSwitchService.assertEnabled({
-            key: 'new_escrows',
+            key: KillSwitchKey.new_escrows,
             reason: 'Escrow holds paused',
             correlationId: options?.correlationId ?? campaignTargetId,
         });
@@ -213,7 +220,7 @@ export class PaymentsService {
             });
 
             if (existingEscrow) {
-                if (existingEscrow.status === 'held') {
+                if (existingEscrow.status === EscrowStatus.held) {
                     return { ok: true, alreadyHeld: true };
                 }
 
@@ -247,7 +254,7 @@ export class PaymentsService {
                 throw new BadRequestException('Campaign target not found');
             }
 
-            if (target.status !== 'approved') {
+            if (target.status !== CampaignTargetStatus.approved) {
                 this.logger.error(
                     `[FSM] Escrow hold blocked: campaignTarget=${campaignTargetId} is ${target.status}`,
                 );
@@ -269,8 +276,8 @@ export class PaymentsService {
                 tx,
                 walletId: advertiserWallet.id,
                 amount,
-                type: 'debit',
-                reason: 'escrow_hold',
+                type: LedgerType.debit,
+                reason: LedgerReason.escrow_hold,
                 referenceId: campaignTargetId,
                 idempotencyKey: `escrow_hold:${campaignTargetId}`,
                 campaignId: target.campaignId,
@@ -285,7 +292,7 @@ export class PaymentsService {
                     advertiserWalletId: advertiserWallet.id,
                     publisherWalletId: publisherWallet.id,
                     amount,
-                    status: 'held',
+                    status: EscrowStatus.held,
                 },
             });
 

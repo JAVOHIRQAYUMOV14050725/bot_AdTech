@@ -118,6 +118,7 @@ model User {
   // ✅ QO‘SHILADI
   verifiedChannels  ChannelVerification[]
   approvedCreatives AdCreative[]
+  moderatedTargets  CampaignTarget[] @relation("CampaignTargetModerator")
 
   @@index([telegramId])
   @@index([status])
@@ -240,7 +241,7 @@ model CampaignTarget {
 
   campaign Campaign @relation(fields: [campaignId], references: [id])
   channel  Channel  @relation(fields: [channelId], references: [id])
-  moderator User? @relation(fields: [moderatedBy], references: [id])
+  moderator User? @relation("CampaignTargetModerator", fields: [moderatedBy], references: [id])
 
   postJob    PostJob?
   escrow     Escrow?

@@ -24,70 +24,78 @@ type TransitionMap<S extends string> = Record<
 const logger = new Logger('LifecycleFSM');
 
 const campaignTransitions: TransitionMap<CampaignStatus> = {
-    draft: {
-        active: { actors: ['admin', 'system'] },
-        cancelled: { actors: ['admin'] },
+    [CampaignStatus.draft]: {
+        [CampaignStatus.active]: { actors: ['admin', 'system'] },
+        [CampaignStatus.cancelled]: { actors: ['admin'] },
     },
-    active: {
-        paused: { actors: ['admin'] },
-        completed: { actors: ['admin', 'system'] },
-        cancelled: { actors: ['admin'] },
+    [CampaignStatus.active]: {
+        [CampaignStatus.paused]: { actors: ['admin'] },
+        [CampaignStatus.completed]: { actors: ['admin', 'system'] },
+        [CampaignStatus.cancelled]: { actors: ['admin'] },
     },
-    paused: {
-        active: { actors: ['admin'] },
-        cancelled: { actors: ['admin'] },
+    [CampaignStatus.paused]: {
+        [CampaignStatus.active]: { actors: ['admin'] },
+        [CampaignStatus.cancelled]: { actors: ['admin'] },
     },
-    completed: {},
-    cancelled: {},
+    [CampaignStatus.completed]: {},
+    [CampaignStatus.cancelled]: {},
 };
 
 const campaignTargetTransitions: TransitionMap<CampaignTargetStatus> = {
-    pending: {
-        submitted: { actors: ['advertiser', 'admin', 'system'] },
-        posted: { actors: ['worker', 'system', 'admin'] },
-        failed: { actors: ['worker', 'system'] },
-        refunded: { actors: ['worker', 'system', 'admin'] },
+    [CampaignTargetStatus.pending]: {
+        [CampaignTargetStatus.submitted]: {
+            actors: ['advertiser', 'admin', 'system'],
+        },
+        [CampaignTargetStatus.posted]: { actors: ['worker', 'system', 'admin'] },
+        [CampaignTargetStatus.failed]: { actors: ['worker', 'system'] },
+        [CampaignTargetStatus.refunded]: {
+            actors: ['worker', 'system', 'admin'],
+        },
     },
-    submitted: {
-        approved: { actors: ['admin', 'system'] },
-        rejected: { actors: ['admin', 'system'] },
+    [CampaignTargetStatus.submitted]: {
+        [CampaignTargetStatus.approved]: { actors: ['admin', 'system'] },
+        [CampaignTargetStatus.rejected]: { actors: ['admin', 'system'] },
     },
-    approved: {
-        posted: { actors: ['worker', 'system', 'admin'] },
-        failed: { actors: ['worker', 'system'] },
-        refunded: { actors: ['worker', 'system', 'admin'] },
+    [CampaignTargetStatus.approved]: {
+        [CampaignTargetStatus.posted]: { actors: ['worker', 'system', 'admin'] },
+        [CampaignTargetStatus.failed]: { actors: ['worker', 'system'] },
+        [CampaignTargetStatus.refunded]: {
+            actors: ['worker', 'system', 'admin'],
+        },
     },
-    rejected: {},
-    posted: {},
-    failed: {
-        refunded: { actors: ['worker', 'system', 'admin'] },
+    [CampaignTargetStatus.rejected]: {},
+    [CampaignTargetStatus.posted]: {},
+    [CampaignTargetStatus.failed]: {
+        [CampaignTargetStatus.refunded]: {
+            actors: ['worker', 'system', 'admin'],
+        },
     },
-    refunded: {},
+    [CampaignTargetStatus.refunded]: {},
 };
 
 const postJobTransitions: TransitionMap<PostJobStatus> = {
-    queued: {
-        sending: { actors: ['worker'] },
-        success: { actors: ['worker', 'system'] },
-        failed: { actors: ['worker', 'system'] },
+    [PostJobStatus.queued]: {
+        [PostJobStatus.sending]: { actors: ['worker'] },
+        [PostJobStatus.success]: { actors: ['worker', 'system'] },
+        [PostJobStatus.failed]: { actors: ['worker', 'system'] },
     },
-    sending: {
-        success: { actors: ['worker', 'system'] },
-        failed: { actors: ['worker', 'system'] },
+    [PostJobStatus.sending]: {
+        [PostJobStatus.success]: { actors: ['worker', 'system'] },
+        [PostJobStatus.failed]: { actors: ['worker', 'system'] },
     },
-    success: {},
-    failed: {
-        queued: { actors: ['admin'] },
+    [PostJobStatus.success]: {},
+    [PostJobStatus.failed]: {
+        [PostJobStatus.queued]: { actors: ['admin'] },
     },
 };
 
 const escrowTransitions: TransitionMap<EscrowStatus> = {
-    held: {
-        released: { actors: ['worker', 'system', 'admin'] },
-        refunded: { actors: ['worker', 'system', 'admin'] },
+    [EscrowStatus.held]: {
+        [EscrowStatus.released]: { actors: ['worker', 'system', 'admin'] },
+        [EscrowStatus.refunded]: { actors: ['worker', 'system', 'admin'] },
     },
-    released: {},
-    refunded: {},
+    [EscrowStatus.released]: {},
+    [EscrowStatus.refunded]: {},
 };
 
 type TransitionPayload<S extends string> = {
@@ -227,7 +235,10 @@ export function assertEscrowCampaignTargetInvariant(params: {
 }) {
     const { campaignTargetId, escrowStatus, campaignTargetStatus } = params;
 
-    if (escrowStatus === 'released' && campaignTargetStatus !== 'posted') {
+    if (
+        escrowStatus === EscrowStatus.released
+        && campaignTargetStatus !== CampaignTargetStatus.posted
+    ) {
         logger.error(
             `[INVARIANT] Escrow released but CampaignTarget=${campaignTargetId} is ${campaignTargetStatus}`,
         );
@@ -236,7 +247,10 @@ export function assertEscrowCampaignTargetInvariant(params: {
         );
     }
 
-    if (escrowStatus === 'refunded' && campaignTargetStatus !== 'refunded') {
+    if (
+        escrowStatus === EscrowStatus.refunded
+        && campaignTargetStatus !== CampaignTargetStatus.refunded
+    ) {
         logger.error(
             `[INVARIANT] Escrow refunded but CampaignTarget=${campaignTargetId} is ${campaignTargetStatus}`,
         );
@@ -262,7 +276,7 @@ export function assertPostJobOutcomeForEscrow(params: {
         return;
     }
 
-    if (action === 'release' && postJobStatus !== 'success') {
+    if (action === 'release' && postJobStatus !== PostJobStatus.success) {
         logger.error(
             `[INVARIANT] Escrow release blocked: PostJob is ${postJobStatus} (campaignTarget=${campaignTargetId})`,
         );
@@ -272,7 +286,7 @@ export function assertPostJobOutcomeForEscrow(params: {
     }
 
     if (action === 'refund') {
-        if (postJobStatus === 'success') {
+        if (postJobStatus === PostJobStatus.success) {
             logger.error(
                 `[INVARIANT] Escrow refund blocked: PostJob is success (campaignTarget=${campaignTargetId})`,
             );
@@ -281,7 +295,7 @@ export function assertPostJobOutcomeForEscrow(params: {
             );
         }
 
-        if (actor === 'worker' && postJobStatus !== 'failed') {
+        if (actor === 'worker' && postJobStatus !== PostJobStatus.failed) {
             logger.error(
                 `[INVARIANT] Worker refund blocked: PostJob is ${postJobStatus} (campaignTarget=${campaignTargetId})`,
             );

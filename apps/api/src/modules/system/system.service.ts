@@ -7,7 +7,14 @@ import {
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { ResolveAction } from './dto/resolve-escrow.dto';
 import Decimal from 'decimal.js';
-import { KillSwitchKey, Prisma } from '@prisma/client';
+import {
+    CampaignTargetStatus,
+    EscrowStatus,
+    KillSwitchKey,
+    LedgerReason,
+    PostJobStatus,
+    Prisma,
+} from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
@@ -122,13 +129,13 @@ export class SystemService {
 
         const stuckEscrows = await this.prisma.escrow.findMany({
             where: {
-                status: 'held',
+                status: EscrowStatus.held,
                 releasedAt: null,
                 refundedAt: null,
                 campaignTarget: {
                     postJob: {
                         OR: [
-                            { status: 'failed' },
+                            { status: PostJobStatus.failed },
                             {
                                 executeAt: {
                                     lt: new Date(
@@ -340,13 +347,13 @@ export class SystemService {
         }
 
         const releasedEscrows = await this.prisma.escrow.aggregate({
-            where: { status: 'released' },
+            where: { status: EscrowStatus.released },
             _sum: { amount: true },
         });
 
         const payoutLedger = await this.prisma.ledgerEntry.aggregate({
             where: {
-                reason: { in: ['payout', 'commission'] },
+                reason: { in: [LedgerReason.payout, LedgerReason.commission] },
             },
             _sum: { amount: true },
         });
@@ -369,7 +376,7 @@ export class SystemService {
         const SLA_HOURS = 6;
         const staleEscrows = await this.prisma.escrow.findMany({
             where: {
-                status: 'held',
+                status: EscrowStatus.held,
                 createdAt: {
                     lt: new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000),
                 },
@@ -396,13 +403,13 @@ export class SystemService {
 
         const postedWithoutRelease = await this.prisma.campaignTarget.findMany({
             where: {
-                status: 'posted',
+                status: CampaignTargetStatus.posted,
                 OR: [
                     { escrow: { is: null } },
                     {
                         escrow: {
                             is: {
-                                status: { not: 'released' },
+                                status: { not: EscrowStatus.released },
                             },
                         },
                     },

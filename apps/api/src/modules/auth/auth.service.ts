@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
-import { RegisterDto } from './dto/register.dto';
+import { PUBLIC_ROLES, RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UserRole, UserStatus } from '@prisma/client';
 import bcrypt from 'bcrypt';
@@ -22,7 +22,7 @@ export class AuthService {
     }
 
     async register(dto: RegisterDto) {
-        if (![UserRole.advertiser, UserRole.publisher].includes(dto.role)) {
+        if (!PUBLIC_ROLES.includes(dto.role)) {
             throw new BadRequestException('Invalid role for registration');
         }
 

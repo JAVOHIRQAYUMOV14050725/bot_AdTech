@@ -1,0 +1,1 @@
+-- No SQL changes required for relation metadata update.

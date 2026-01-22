@@ -11,6 +11,7 @@ import {
     assertCampaignTransition,
     assertPostJobTransition,
 } from '@/modules/lifecycle/lifecycle';
+import { CampaignStatus, PostJobStatus, UserRole } from '@prisma/client';
 
 @Injectable()
 export class AdminHandler {
@@ -32,7 +33,7 @@ export class AdminHandler {
             where: { telegramId: telegramIdBigInt },
         });
 
-        if (!user || user.role !== 'super_admin') {
+        if (!user || user.role !== UserRole.super_admin) {
             throw new ForbiddenException('Admin only command');
         }
 
@@ -110,7 +111,7 @@ export class AdminHandler {
         const transition = assertPostJobTransition({
             postJobId,
             from: postJob.status,
-            to: 'queued',
+            to: PostJobStatus.queued,
             actor: 'admin',
             correlationId: postJobId,
         });
@@ -119,7 +120,7 @@ export class AdminHandler {
             await this.prisma.postJob.update({
                 where: { id: postJobId },
                 data: {
-                    status: 'queued',
+                    status: PostJobStatus.queued,
                     lastError: null,
                 },
             });
@@ -154,7 +155,7 @@ export class AdminHandler {
         const transition = assertCampaignTransition({
             campaignId,
             from: campaign.status,
-            to: 'paused',
+            to: CampaignStatus.paused,
             actor: 'admin',
             correlationId: campaignId,
         });
@@ -162,7 +163,7 @@ export class AdminHandler {
         if (!transition.noop) {
             await this.prisma.campaign.update({
                 where: { id: campaignId },
-                data: { status: 'paused' },
+                data: { status: CampaignStatus.paused },
             });
         }
 
@@ -192,7 +193,7 @@ export class AdminHandler {
         const transition = assertCampaignTransition({
             campaignId,
             from: campaign.status,
-            to: 'active',
+            to: CampaignStatus.active,
             actor: 'admin',
             correlationId: campaignId,
         });
@@ -200,7 +201,7 @@ export class AdminHandler {
         if (!transition.noop) {
             await this.prisma.campaign.update({
                 where: { id: campaignId },
-                data: { status: 'active' },
+                data: { status: CampaignStatus.active },
             });
         }
 

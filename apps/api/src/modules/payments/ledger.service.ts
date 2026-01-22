@@ -1,6 +1,6 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { Injectable } from '@nestjs/common';
-import { LedgerReason, Prisma } from '@prisma/client';
+import { LedgerReason, LedgerType, Prisma } from '@prisma/client';
 @Injectable()
 export class LedgerService {
     constructor(private readonly prisma: PrismaService) { }
@@ -15,7 +15,7 @@ export class LedgerService {
         return this.prisma.ledgerEntry.create({
             data: {
                 walletId,
-                type: 'credit',
+                type: LedgerType.credit,
                 amount: normalized,
                 reason,
                 referenceId: ref,
@@ -33,7 +33,7 @@ export class LedgerService {
         return this.prisma.ledgerEntry.create({
             data: {
                 walletId,
-                type: 'debit',
+                type: LedgerType.debit,
                 amount: normalized,
                 reason,
                 referenceId: ref,

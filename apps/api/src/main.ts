@@ -8,6 +8,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { RedisService } from '@/modules/redis/redis.service';
 
 console.log('Starting API...');
 async function bootstrap() {
@@ -19,8 +20,15 @@ async function bootstrap() {
         const escrowService = app.get(EscrowService);
         const telegramService = app.get(TelegramService);
         const killSwitchService = app.get(KillSwitchService);
+        const redisService = app.get(RedisService);
 
-        startPostWorker(prisma, escrowService, telegramService, killSwitchService);
+        startPostWorker(
+            prisma,
+            escrowService,
+            telegramService,
+            killSwitchService,
+            redisService,
+        );
 
         console.log('🧵 Worker started (WORKER_MODE=true)');
         return;
@@ -52,12 +60,14 @@ async function bootstrap() {
             const escrowService = app.get(EscrowService);
             const telegramService = app.get(TelegramService);
             const killSwitchService = app.get(KillSwitchService);
+            const redisService = app.get(RedisService);
 
             startPostWorker(
                 prisma,
                 escrowService,
                 telegramService,
                 killSwitchService,
+                redisService,
             );
             console.log('🧵 Worker autostarted (WORKER_AUTOSTART=true)');
         });

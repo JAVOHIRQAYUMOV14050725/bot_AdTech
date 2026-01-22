@@ -115,6 +115,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return me.id;
     }
 
+    async checkConnection(): Promise<{ id: number; username?: string }> {
+        const me = await this.bot.telegram.getMe();
+        this.botId = me.id;
+        return { id: me.id, username: me.username };
+    }
+
     async isBotAdmin(channelId: string): Promise<boolean> {
         const admins = await this.bot.telegram.getChatAdministrators(channelId);
         const botId = await this.getBotId();

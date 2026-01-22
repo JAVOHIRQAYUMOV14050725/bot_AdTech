@@ -7,8 +7,37 @@ import {
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { ResolveAction } from './dto/resolve-escrow.dto';
 import Decimal from 'decimal.js';
-import { KillSwitchKey } from '@prisma/client';
+import { KillSwitchKey, Prisma } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
+
+const toJsonValue = (value: unknown): Prisma.JsonValue => {
+    if (
+        value === null
+        || typeof value === 'string'
+        || typeof value === 'number'
+        || typeof value === 'boolean'
+    ) {
+        return value;
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => toJsonValue(item));
+    }
+
+    if (typeof value === 'object') {
+        return Object.entries(value as Record<string, unknown>)
+            .reduce<Prisma.JsonObject>((acc, [key, val]) => {
+                acc[key] = toJsonValue(val);
+                return acc;
+            }, {});
+    }
+
+    return String(value);
+};
 @Injectable()
 export class SystemService {
     private readonly logger = new Logger(SystemService.name);
@@ -398,13 +427,17 @@ export class SystemService {
                 }),
             );
 
+            const jsonDiscrepancies: Prisma.JsonArray = discrepancies.map(
+                (entry) => toJsonValue(entry),
+            );
+
             await this.prisma.userAuditLog.create({
                 data: {
                     userId: params!.actorUserId!,
                     action: 'reconciliation_fix_requested',
                     metadata: {
                         correlationId,
-                        discrepancies,
+                        discrepancies: jsonDiscrepancies,
                         note: 'No automatic fixes applied',
                     },
                 },

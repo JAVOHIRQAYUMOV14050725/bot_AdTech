@@ -213,6 +213,7 @@ model Campaign {
   advertiser User             @relation(fields: [advertiserId], references: [id])
   targets    CampaignTarget[]
   creatives  AdCreative[]
+  financialAuditEvents FinancialAuditEvent[]
 
   @@index([advertiserId])
   @@index([status])
@@ -234,6 +235,7 @@ model CampaignTarget {
   postJob    PostJob?
   escrow     Escrow?
   commission PlatformCommission?
+  financialAuditEvents FinancialAuditEvent[]
 
   @@index([campaignId])
   @@index([scheduledAt])
@@ -350,6 +352,7 @@ model Escrow {
   campaignTarget   CampaignTarget @relation(fields: [campaignTargetId], references: [id])
   advertiserWallet Wallet         @relation(name: "AdvertiserWallet", fields: [advertiserWalletId], references: [id])
   publisherWallet  Wallet         @relation(name: "PublisherWallet", fields: [publisherWalletId], references: [id])
+  financialAuditEvents FinancialAuditEvent[]
 
   @@map("escrows")
 }

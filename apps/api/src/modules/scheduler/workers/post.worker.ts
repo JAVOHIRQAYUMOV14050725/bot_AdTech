@@ -1,15 +1,18 @@
 import { PrismaService } from '@/prisma/prisma.service';
+import { Logger } from '@nestjs/common';
 import { Worker } from 'bullmq';
 
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
+import { postDlq, redisConnection } from '../queues';
 
 export function startPostWorker(
     prisma: PrismaService,
     escrowService: EscrowService,
     telegramService: TelegramService,
 ) {
-    return new Worker(
+    const logger = new Logger('PostWorker');
+    const worker = new Worker(
         'post-queue',
         async (job) => {
             const { postJobId } = job.data;
@@ -46,7 +49,7 @@ export function startPostWorker(
                         data: { status: 'success' },
                     });
 
-                    await escrowService.release(postJob.campaignTargetId);
+                    await escrowService.release(postJob.campaignTargetId, tx);
                 });
 
                 return {
@@ -66,18 +69,69 @@ export function startPostWorker(
                         },
                     });
 
-                    await escrowService.refund(postJob.campaignTargetId);
+                    await escrowService.refund(
+                        postJob.campaignTargetId,
+                        'post_failed',
+                        tx,
+                    );
                 });
 
                 throw err;
             }
         },
         {
-            connection: {
-                host: process.env.REDIS_HOST,
-                port: Number(process.env.REDIS_PORT),
-            },
+            connection: redisConnection,
             concurrency: 5,
         },
     );
+
+    worker.on('failed', async (job, err) => {
+        if (!job) {
+            return;
+        }
+
+        const maxAttempts = job.opts.attempts ?? 1;
+        if (job.attemptsMade >= maxAttempts) {
+            try {
+                await postDlq.add(
+                    'post-failed',
+                    {
+                        postJobId: job.data.postJobId,
+                        error: err instanceof Error ? err.message : String(err),
+                    },
+                    {
+                        jobId: `dlq:${job.id}`,
+                        removeOnComplete: true,
+                        removeOnFail: false,
+                    },
+                );
+                logger.error(
+                    `Moved job ${job.id} to DLQ after ${job.attemptsMade} attempts`,
+                );
+            } catch (dlqError) {
+                logger.error(
+                    `Failed to enqueue DLQ for job ${job.id}`,
+                    dlqError instanceof Error ? dlqError.stack : String(dlqError),
+                );
+            }
+        }
+    });
+
+    worker.on('error', (err) => {
+        logger.error(
+            'Worker error',
+            err instanceof Error ? err.stack : String(err),
+        );
+    });
+
+    const shutdown = async () => {
+        logger.log('Shutting down post worker');
+        await worker.close();
+        await postDlq.close();
+    };
+
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+
+    return worker;
 }

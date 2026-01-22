@@ -4,12 +4,14 @@ import { SystemController } from './system.controller';
 import { PrismaModule } from '@/prisma/prisma.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { OpsModule } from '@/modules/ops/ops.module';
+import { AuthModule } from '@/modules/auth/auth.module';
 
 @Module({
     imports: [
         PrismaModule,
         PaymentsModule,
         OpsModule,
+        AuthModule,
     ],
     controllers: [SystemController],
     providers: [SystemService],

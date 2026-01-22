@@ -1,0 +1,22 @@
+import { z } from 'zod';
+
+const booleanString = z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true');
+
+export const envSchema = z.object({
+    PORT: z.coerce.number().int().positive().default(3000),
+    DATABASE_URL: z.string().min(1),
+    REDIS_HOST: z.string().min(1),
+    REDIS_PORT: z.coerce.number().int().positive(),
+    JWT_SECRET: z.string().min(16),
+    JWT_EXPIRES_IN: z.string().min(1).default('1d'),
+    TELEGRAM_BOT_TOKEN: z.string().min(1),
+    TELEGRAM_AUTOSTART: booleanString.default('false'),
+    TELEGRAM_SEND_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+    TELEGRAM_SEND_BASE_DELAY_MS: z.coerce.number().int().positive().default(1000),
+    WORKER_MODE: booleanString.default('false'),
+    WORKER_AUTOSTART: booleanString.default('false'),
+});
+
+export type EnvVars = z.infer<typeof envSchema>;

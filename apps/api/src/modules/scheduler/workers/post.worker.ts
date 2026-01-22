@@ -20,6 +20,15 @@ export function startPostWorker(
         async (job) => {
             const { postJobId } = job.data;
 
+            const reservation = await prisma.postJob.updateMany({
+                where: { id: postJobId, status: 'queued' },
+                data: { status: 'sending' },
+            });
+
+            if (reservation.count === 0) {
+                return { skipped: true };
+            }
+
             const postJob = await prisma.postJob.findUnique({
                 where: { id: postJobId },
                 include: {
@@ -29,11 +38,6 @@ export function startPostWorker(
 
             if (!postJob) {
                 throw new Error('PostJob not found');
-            }
-
-            // 🔐 IDEMPOTENCY GUARD
-            if (postJob.status !== 'queued') {
-                return { skipped: true };
             }
 
             try {

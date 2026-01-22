@@ -29,6 +29,7 @@ enum UserStatus {
 
 enum ChannelStatus {
   pending
+  verified
   approved
   rejected
   blocked
@@ -44,6 +45,9 @@ enum CampaignStatus {
 
 enum CampaignTargetStatus {
   pending
+  submitted
+  approved
+  rejected
   posted
   failed
   refunded
@@ -57,6 +61,7 @@ enum CreativeType {
 
 enum PostJobStatus {
   queued
+  sending
   success
   failed
 }
@@ -97,6 +102,7 @@ model User {
   id         String     @id @default(uuid())
   telegramId BigInt     @unique
   username   String?
+  passwordHash String?
   role       UserRole
   status     UserStatus @default(active)
 
@@ -144,7 +150,7 @@ model Channel {
   category          String?
   subscriberCount   Int     @default(0)
   avgViews          Int     @default(0)
-  cpm               Decimal @db.Decimal(10, 2)
+  cpm               Decimal @default(0) @db.Decimal(10, 2)
 
   status    ChannelStatus @default(pending)
   createdAt DateTime      @default(now())
@@ -228,9 +234,13 @@ model CampaignTarget {
   price       Decimal              @db.Decimal(12, 2)
   scheduledAt DateTime
   status      CampaignTargetStatus @default(pending)
+  moderatedBy String?
+  moderatedAt DateTime?
+  moderationReason String?
 
   campaign Campaign @relation(fields: [campaignId], references: [id])
   channel  Channel  @relation(fields: [channelId], references: [id])
+  moderator User? @relation(fields: [moderatedBy], references: [id])
 
   postJob    PostJob?
   escrow     Escrow?
@@ -320,6 +330,7 @@ model LedgerEntry {
   type   LedgerType
   amount Decimal      @db.Decimal(14, 2)
   reason LedgerReason
+  idempotencyKey String? @unique
 
   referenceId String?
   createdAt   DateTime @default(now())

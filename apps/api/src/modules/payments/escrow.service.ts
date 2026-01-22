@@ -169,6 +169,7 @@ export class EscrowService {
                 type: 'credit',
                 reason: 'payout',
                 referenceId: campaignTargetId,
+                idempotencyKey: `payout:${campaignTargetId}`,
                 campaignId: campaignTarget!.campaignId,
                 campaignTargetId,
                 escrowId: escrow.id,
@@ -195,6 +196,7 @@ export class EscrowService {
                     type: 'credit',
                     reason: 'commission',
                     referenceId: campaignTargetId,
+                    idempotencyKey: `commission:${campaignTargetId}`,
                     campaignId: campaignTarget!.campaignId,
                     campaignTargetId,
                     escrowId: escrow.id,
@@ -230,6 +232,18 @@ export class EscrowService {
                     platformWalletId,
                 );
             }
+
+            this.logger.warn(
+                JSON.stringify({
+                    event: 'escrow_released',
+                    campaignTargetId,
+                    escrowId: escrow.id,
+                    payout: payoutAmount.toFixed(2),
+                    commission: commissionAmount.toFixed(2),
+                    actor,
+                    correlationId,
+                }),
+            );
 
             return {
                 ok: true,
@@ -324,6 +338,7 @@ export class EscrowService {
                 type: 'credit',
                 reason: 'refund',
                 referenceId: campaignTargetId,
+                idempotencyKey: `refund:${campaignTargetId}`,
                 campaignId: campaignTarget!.campaignId,
                 campaignTargetId,
                 escrowId: escrow.id,
@@ -350,6 +365,18 @@ export class EscrowService {
             await this.paymentsService.ensureWalletInvariant(
                 tx,
                 escrow.advertiserWalletId,
+            );
+
+            this.logger.warn(
+                JSON.stringify({
+                    event: 'escrow_refunded',
+                    campaignTargetId,
+                    escrowId: escrow.id,
+                    refunded: amount.toFixed(2),
+                    actor,
+                    correlationId,
+                    reason,
+                }),
             );
 
             return {

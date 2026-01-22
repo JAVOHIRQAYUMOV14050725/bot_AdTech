@@ -302,6 +302,15 @@ export class SystemService {
         const mode = params?.mode ?? ReconciliationMode.DRY_RUN;
         const correlationId = params?.correlationId ?? `recon:${Date.now()}`;
 
+        this.logger.warn(
+            JSON.stringify({
+                event: 'reconciliation_requested',
+                mode,
+                actorUserId: params?.actorUserId ?? null,
+                correlationId,
+            }),
+        );
+
         if (mode === ReconciliationMode.FIX && !params?.actorUserId) {
             throw new BadRequestException('Fix mode requires admin actor');
         }

@@ -12,6 +12,25 @@ export class KillSwitchService {
 
     constructor(private readonly prisma: PrismaService) { }
 
+    async seedDefaults() {
+        const keys = Object.values(KillSwitchKey);
+        await Promise.all(
+            keys.map((key) =>
+                this.prisma.killSwitch.upsert({
+                    where: { key },
+                    update: {},
+                    create: {
+                        key,
+                        enabled: true,
+                        reason: 'seeded_default',
+                        updatedBy: 'SYSTEM',
+                    },
+                }),
+            ),
+        );
+        this.logger.warn('[KILL_SWITCH] Defaults seeded');
+    }
+
     async isEnabled(key: KillSwitchKey): Promise<boolean> {
         try {
             const record = await this.prisma.killSwitch.findUnique({

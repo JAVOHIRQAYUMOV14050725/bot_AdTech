@@ -36,6 +36,8 @@ prisma/dev.db-journal
 
 ####################################
 # ENV FILES (CRITICAL)
+**/.env
+**/.env.*
 ####################################
 
 
@@ -78,4 +80,3 @@ docker-compose.override.yml
 ####################################
 apps/**/node_modules/
 apps/**/dist/
-

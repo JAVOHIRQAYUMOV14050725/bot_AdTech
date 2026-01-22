@@ -8,5 +8,6 @@ import { OpsModule } from '@/modules/ops/ops.module';
 @Module({
     imports: [PrismaModule, PaymentsModule, OpsModule],
     providers: [TelegramService, AdminHandler],
+    exports: [TelegramService],
 })
 export class TelegramModule { }

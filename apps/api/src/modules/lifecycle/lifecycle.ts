@@ -10,7 +10,7 @@ import {
     PostJobStatus,
 } from '@prisma/client';
 
-export type TransitionActor = 'system' | 'worker' | 'admin';
+export type TransitionActor = 'system' | 'worker' | 'admin' | 'advertiser';
 
 type TransitionRule = {
     actors: TransitionActor[];
@@ -43,10 +43,21 @@ const campaignTransitions: TransitionMap<CampaignStatus> = {
 
 const campaignTargetTransitions: TransitionMap<CampaignTargetStatus> = {
     pending: {
+        submitted: { actors: ['advertiser', 'admin', 'system'] },
         posted: { actors: ['worker', 'system', 'admin'] },
         failed: { actors: ['worker', 'system'] },
         refunded: { actors: ['worker', 'system', 'admin'] },
     },
+    submitted: {
+        approved: { actors: ['admin', 'system'] },
+        rejected: { actors: ['admin', 'system'] },
+    },
+    approved: {
+        posted: { actors: ['worker', 'system', 'admin'] },
+        failed: { actors: ['worker', 'system'] },
+        refunded: { actors: ['worker', 'system', 'admin'] },
+    },
+    rejected: {},
     posted: {},
     failed: {
         refunded: { actors: ['worker', 'system', 'admin'] },
@@ -56,6 +67,11 @@ const campaignTargetTransitions: TransitionMap<CampaignTargetStatus> = {
 
 const postJobTransitions: TransitionMap<PostJobStatus> = {
     queued: {
+        sending: { actors: ['worker'] },
+        success: { actors: ['worker', 'system'] },
+        failed: { actors: ['worker', 'system'] },
+    },
+    sending: {
         success: { actors: ['worker', 'system'] },
         failed: { actors: ['worker', 'system'] },
     },

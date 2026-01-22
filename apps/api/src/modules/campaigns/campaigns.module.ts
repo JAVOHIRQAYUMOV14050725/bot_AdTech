@@ -1,9 +1,15 @@
-import { Module } from "@nestjs/common";
+import { Module } from '@nestjs/common';
+import { CampaignsService } from './campaigns.service';
+import { CampaignsController } from './campaigns.controller';
+import { CampaignTargetsController } from './campaign-targets.controller';
+import { PrismaModule } from '@/prisma/prisma.module';
+import { AuditModule } from '@/modules/audit/audit.module';
+import { AuthModule } from '@/modules/auth/auth.module';
 
 @Module({
-    imports: [],
-    providers: [],
-    exports: [],
-
+    imports: [PrismaModule, AuditModule, AuthModule],
+    controllers: [CampaignsController, CampaignTargetsController],
+    providers: [CampaignsService],
+    exports: [CampaignsService],
 })
 export class CampaignsModule { }

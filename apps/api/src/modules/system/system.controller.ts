@@ -8,14 +8,15 @@ import { SystemService } from './system.service';
 import { ResolveEscrowDto } from './dto/resolve-escrow.dto';
 import { KillSwitchDto } from './dto/kill-switch.dto';
 import { ReconciliationDto, ReconciliationMode } from './dto/reconciliation.dto';
-import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 import { Actor } from '../auth/decorators/actor.decorator';
 
 @Controller('system')
-@UseGuards(AuthenticatedGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.super_admin)
 export class SystemController {
     constructor(private readonly systemService: SystemService) { }
 
@@ -42,7 +43,6 @@ export class SystemController {
      * POST /system/kill-switch
      */
     @Post('kill-switch')
-    @Roles(UserRole.admin, UserRole.super_admin)
     async updateKillSwitch(
         @Body() dto: KillSwitchDto,
         @Actor() actor: { id: string },

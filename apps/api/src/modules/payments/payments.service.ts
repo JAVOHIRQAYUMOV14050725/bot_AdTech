@@ -57,6 +57,7 @@ export class PaymentsService {
         type: 'credit' | 'debit';
         reason: LedgerReason;
         referenceId?: string;
+        idempotencyKey?: string;
         campaignId?: string;
         campaignTargetId?: string;
         escrowId?: string;
@@ -70,6 +71,7 @@ export class PaymentsService {
             type,
             reason,
             referenceId,
+            idempotencyKey,
             campaignId,
             campaignTargetId,
             escrowId,
@@ -79,8 +81,44 @@ export class PaymentsService {
 
         const normalizedAmount = this.normalizeDecimal(amount);
 
+        if (idempotencyKey) {
+            const existing = await tx.ledgerEntry.findUnique({
+                where: { idempotencyKey },
+            });
+            if (existing) {
+                return existing;
+            }
+        }
+
         if (normalizedAmount.lte(0)) {
             throw new BadRequestException('Amount must be positive');
+        }
+
+        let ledgerEntry;
+        try {
+            ledgerEntry = await tx.ledgerEntry.create({
+                data: {
+                    walletId,
+                    type,
+                    amount:
+                        type === 'debit'
+                            ? normalizedAmount.negated()
+                            : normalizedAmount,
+                    reason,
+                    referenceId,
+                    idempotencyKey,
+                },
+            });
+        } catch (err) {
+            if (idempotencyKey) {
+                const existing = await tx.ledgerEntry.findUnique({
+                    where: { idempotencyKey },
+                });
+                if (existing) {
+                    return existing;
+                }
+            }
+            throw err;
         }
 
         if (type === 'debit') {
@@ -105,19 +143,6 @@ export class PaymentsService {
                 },
             });
         }
-
-        const ledgerEntry = await tx.ledgerEntry.create({
-            data: {
-                walletId,
-                type,
-                amount:
-                    type === 'debit'
-                        ? normalizedAmount.negated()
-                        : normalizedAmount,
-                reason,
-                referenceId,
-            },
-        });
 
         await tx.financialAuditEvent.create({
             data: {
@@ -172,14 +197,17 @@ export class PaymentsService {
      * 🔒 ESCROW HOLD (CAMPAIGN TARGET)
      * =========================================================
      */
-    async holdEscrow(campaignTargetId: string) {
+    async holdEscrow(
+        campaignTargetId: string,
+        options?: { transaction?: Prisma.TransactionClient; actor?: string; correlationId?: string },
+    ) {
         await this.killSwitchService.assertEnabled({
             key: 'new_escrows',
             reason: 'Escrow holds paused',
-            correlationId: campaignTargetId,
+            correlationId: options?.correlationId ?? campaignTargetId,
         });
 
-        return this.prisma.$transaction(async (tx) => {
+        const execute = async (tx: Prisma.TransactionClient) => {
             const existingEscrow = await tx.escrow.findUnique({
                 where: { campaignTargetId },
             });
@@ -219,12 +247,12 @@ export class PaymentsService {
                 throw new BadRequestException('Campaign target not found');
             }
 
-            if (target.status !== 'pending') {
+            if (target.status !== 'approved') {
                 this.logger.error(
                     `[FSM] Escrow hold blocked: campaignTarget=${campaignTargetId} is ${target.status}`,
                 );
                 throw new ConflictException(
-                    `Escrow hold requires campaign target ${campaignTargetId} to be pending`,
+                    `Escrow hold requires campaign target ${campaignTargetId} to be approved`,
                 );
             }
 
@@ -244,10 +272,11 @@ export class PaymentsService {
                 type: 'debit',
                 reason: 'escrow_hold',
                 referenceId: campaignTargetId,
+                idempotencyKey: `escrow_hold:${campaignTargetId}`,
                 campaignId: target.campaignId,
                 campaignTargetId,
-                actor: 'system',
-                correlationId: campaignTargetId,
+                actor: options?.actor ?? 'system',
+                correlationId: options?.correlationId ?? campaignTargetId,
             });
 
             await tx.escrow.create({
@@ -261,7 +290,13 @@ export class PaymentsService {
             });
 
             return { ok: true };
-        });
+        };
+
+        if (options?.transaction) {
+            return execute(options.transaction);
+        }
+
+        return this.prisma.$transaction(execute);
     }
 
     /**
@@ -278,7 +313,10 @@ export class PaymentsService {
             }
             | null,
     ) {
-        const total = this.normalizeDecimal(totalAmount);
+        const total = this.normalizeDecimal(totalAmount).toDecimalPlaces(
+            2,
+            Prisma.Decimal.ROUND_HALF_UP,
+        );
         let commissionAmount = new Prisma.Decimal(0);
 
         if (commission?.amount) {
@@ -297,6 +335,11 @@ export class PaymentsService {
                 commissionAmount = total.mul(percentage).div(100);
             }
         }
+
+        commissionAmount = commissionAmount.toDecimalPlaces(
+            2,
+            Prisma.Decimal.ROUND_HALF_UP,
+        );
 
         if (commissionAmount.gt(total)) {
             throw new BadRequestException(

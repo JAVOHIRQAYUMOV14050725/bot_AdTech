@@ -19,6 +19,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(TelegramService.name);
     private readonly bot: Telegraf<Context>;
     private started = false;
+    private botId?: number;
 
     constructor(
         private readonly prisma: PrismaService,
@@ -105,6 +106,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     // ===============================
     // EXISTING LOGIC (UNCHANGED)
     // ===============================
+    private async getBotId(): Promise<number> {
+        if (this.botId) {
+            return this.botId;
+        }
+        const me = await this.bot.telegram.getMe();
+        this.botId = me.id;
+        return me.id;
+    }
+
+    async isBotAdmin(channelId: string): Promise<boolean> {
+        const admins = await this.bot.telegram.getChatAdministrators(channelId);
+        const botId = await this.getBotId();
+        return admins.some((admin) => admin.user.id === botId);
+    }
+
     async sendCampaignPost(postJobId: string): Promise<{ ok: boolean; telegramMessageId?: number }> {
         const postJob = await this.prisma.postJob.findUnique({
             where: { id: postJobId },
@@ -177,7 +193,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
                 if (attempt === maxAttempts) return { ok: false };
 
-                const backoffMs = baseDelayMs * 2 ** (attempt - 1);
+                const retryAfterSeconds =
+                    (err as { response?: { parameters?: { retry_after?: number } } })?.response?.parameters?.retry_after ??
+                    (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after;
+
+                const backoffMs =
+                    typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
+                        ? retryAfterSeconds * 1000
+                        : baseDelayMs * 2 ** (attempt - 1);
                 await new Promise((r) => setTimeout(r, backoffMs));
             }
         }

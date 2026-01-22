@@ -8,14 +8,41 @@ import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 import { postDlq, redisConnection } from '../queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { KillSwitchKey, PostJobStatus } from '@prisma/client';
+import { RedisService } from '@/modules/redis/redis.service';
 
 export function startPostWorker(
     prisma: PrismaService,
     escrowService: EscrowService,
     telegramService: TelegramService,
     killSwitchService: KillSwitchService,
+    redisService: RedisService,
 ) {
     const logger = new Logger('PostWorker');
+    const redisClient = redisService.getClient();
+    const heartbeatKey = 'worker:heartbeat';
+    const heartbeatIntervalMs = 10000;
+    const heartbeatTtlSeconds = 40;
+
+    const updateHeartbeat = async () => {
+        try {
+            await redisClient.set(
+                heartbeatKey,
+                new Date().toISOString(),
+                'EX',
+                heartbeatTtlSeconds,
+            );
+        } catch (err) {
+            logger.error(
+                '[HEARTBEAT] Failed to update worker heartbeat',
+                err instanceof Error ? err.stack : String(err),
+            );
+        }
+    };
+
+    void updateHeartbeat();
+    const heartbeatTimer = setInterval(() => {
+        void updateHeartbeat();
+    }, heartbeatIntervalMs);
     const worker = new Worker(
         'post-queue',
         async (job) => {
@@ -179,6 +206,7 @@ export function startPostWorker(
 
     const shutdown = async () => {
         logger.log('Shutting down post worker');
+        clearInterval(heartbeatTimer);
         await worker.close();
         await postDlq.close();
     };

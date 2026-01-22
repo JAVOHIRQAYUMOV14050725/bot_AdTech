@@ -19,6 +19,7 @@ import { TelegramModule } from '@/modules/telegram/telegram.module';
 import { SchedulerModule } from '@/modules/scheduler/scheduler.module';
 
 import { SystemModule } from '@/modules/system/system.module';
+import { RedisModule } from '@/modules/redis/redis.module';
 
 @Module({
     imports: [
@@ -40,6 +41,7 @@ import { SystemModule } from '@/modules/system/system.module';
         TelegramModule,
         SchedulerModule,
         SystemModule,
+        RedisModule,
         HealthModule,
     ],
 })

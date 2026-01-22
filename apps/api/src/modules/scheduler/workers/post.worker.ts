@@ -6,11 +6,13 @@ import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 import { postDlq, redisConnection } from '../queues';
+import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 
 export function startPostWorker(
     prisma: PrismaService,
     escrowService: EscrowService,
     telegramService: TelegramService,
+    killSwitchService: KillSwitchService,
 ) {
     const logger = new Logger('PostWorker');
     const worker = new Worker(
@@ -35,6 +37,28 @@ export function startPostWorker(
             }
 
             try {
+                const workerEnabled = await killSwitchService.isEnabled('worker_post');
+                if (!workerEnabled) {
+                    const delayMs = 5 * 60 * 1000;
+                    logger.warn(
+                        `[KILL_SWITCH] worker_post blocked, delaying job ${postJob.id}`,
+                    );
+                    await job.moveToDelayed(Date.now() + delayMs);
+                    return { delayed: true, reason: 'worker_post' };
+                }
+
+                const telegramEnabled = await killSwitchService.isEnabled(
+                    'telegram_posting',
+                );
+                if (!telegramEnabled) {
+                    const delayMs = 5 * 60 * 1000;
+                    logger.warn(
+                        `[KILL_SWITCH] telegram_posting blocked, delaying job ${postJob.id}`,
+                    );
+                    await job.moveToDelayed(Date.now() + delayMs);
+                    return { delayed: true, reason: 'telegram_posting' };
+                }
+
                 // 🚀 REAL TELEGRAM SEND
                 const telegramResult =
                     await telegramService.sendCampaignPost(postJob.id);
@@ -50,6 +74,7 @@ export function startPostWorker(
                         from: postJob.status,
                         to: 'success',
                         actor: 'worker',
+                        correlationId: postJob.id,
                     });
 
                     await tx.postJob.update({
@@ -60,6 +85,7 @@ export function startPostWorker(
                     await escrowService.release(postJob.campaignTargetId, {
                         transaction: tx,
                         actor: 'worker',
+                        correlationId: postJob.id,
                     });
                 });
 
@@ -75,6 +101,7 @@ export function startPostWorker(
                         from: postJob.status,
                         to: 'failed',
                         actor: 'worker',
+                        correlationId: postJob.id,
                     });
 
                     await tx.postJob.update({
@@ -91,6 +118,7 @@ export function startPostWorker(
                         reason: 'post_failed',
                         transaction: tx,
                         actor: 'worker',
+                        correlationId: postJob.id,
                     });
                 });
 

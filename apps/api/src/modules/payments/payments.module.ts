@@ -3,9 +3,11 @@ import { EscrowService } from './escrow.service';
 import { LedgerService } from './ledger.service';
 import { WalletService } from './wallet.service';
 import { PaymentsService } from './payments.service';
+import { OpsModule } from '@/modules/ops/ops.module';
 
 
 @Module({
+    imports: [OpsModule],
     providers: [
         EscrowService,
         LedgerService,

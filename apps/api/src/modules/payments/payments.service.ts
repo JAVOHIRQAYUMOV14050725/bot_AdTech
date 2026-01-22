@@ -1,11 +1,12 @@
 import { PrismaService } from '@/prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { LedgerReason, Prisma } from '@prisma/client';
 import {
     BadRequestException,
     ConflictException,
     Injectable,
     Logger,
 } from '@nestjs/common';
+import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 
 @Injectable()
 export class PaymentsService {
@@ -13,6 +14,7 @@ export class PaymentsService {
 
     constructor(
         private readonly prisma: PrismaService,
+        private readonly killSwitchService: KillSwitchService,
     ) { }
 
     private normalizeDecimal(value: Prisma.Decimal) {
@@ -47,6 +49,95 @@ export class PaymentsService {
         }
     }
 
+    async recordWalletMovement(params: {
+        tx: Prisma.TransactionClient;
+        walletId: string;
+        amount: Prisma.Decimal;
+        type: 'credit' | 'debit';
+        reason: LedgerReason;
+        referenceId?: string;
+        campaignId?: string;
+        campaignTargetId?: string;
+        escrowId?: string;
+        actor?: string;
+        correlationId?: string;
+    }) {
+        const {
+            tx,
+            walletId,
+            amount,
+            type,
+            reason,
+            referenceId,
+            campaignId,
+            campaignTargetId,
+            escrowId,
+            actor,
+            correlationId,
+        } = params;
+
+        const normalizedAmount = this.normalizeDecimal(amount);
+
+        if (normalizedAmount.lte(0)) {
+            throw new BadRequestException('Amount must be positive');
+        }
+
+        if (type === 'debit') {
+            const debitResult = await tx.wallet.updateMany({
+                where: {
+                    id: walletId,
+                    balance: { gte: normalizedAmount },
+                },
+                data: {
+                    balance: { decrement: normalizedAmount },
+                },
+            });
+
+            if (debitResult.count === 0) {
+                throw new BadRequestException('Insufficient balance');
+            }
+        } else {
+            await tx.wallet.update({
+                where: { id: walletId },
+                data: {
+                    balance: { increment: normalizedAmount },
+                },
+            });
+        }
+
+        const ledgerEntry = await tx.ledgerEntry.create({
+            data: {
+                walletId,
+                type,
+                amount:
+                    type === 'debit'
+                        ? normalizedAmount.negated()
+                        : normalizedAmount,
+                reason,
+                referenceId,
+            },
+        });
+
+        await tx.financialAuditEvent.create({
+            data: {
+                walletId,
+                ledgerEntryId: ledgerEntry.id,
+                campaignId,
+                campaignTargetId,
+                escrowId,
+                type,
+                amount: ledgerEntry.amount,
+                reason,
+                actor,
+                correlationId,
+            },
+        });
+
+        await this.assertLedgerMatchesWallet(tx, walletId);
+
+        return ledgerEntry;
+    }
+
     /**
      * 💰 USER DEPOSIT
      */
@@ -61,23 +152,15 @@ export class PaymentsService {
                 where: { userId },
             });
 
-            await tx.ledgerEntry.create({
-                data: {
-                    walletId: wallet.id,
-                    type: 'credit',
-                    amount: normalizedAmount,
-                    reason: 'deposit',
-                },
+            await this.recordWalletMovement({
+                tx,
+                walletId: wallet.id,
+                amount: normalizedAmount,
+                type: 'credit',
+                reason: 'deposit',
+                actor: 'system',
+                correlationId: `deposit:${userId}`,
             });
-
-            await tx.wallet.update({
-                where: { id: wallet.id },
-                data: {
-                    balance: { increment: normalizedAmount },
-                },
-            });
-
-            await this.assertLedgerMatchesWallet(tx, wallet.id);
 
             return { ok: true };
         });
@@ -89,6 +172,12 @@ export class PaymentsService {
      * =========================================================
      */
     async holdEscrow(campaignTargetId: string) {
+        await this.killSwitchService.assertEnabled({
+            key: 'new_escrows',
+            reason: 'Escrow holds paused',
+            correlationId: campaignTargetId,
+        });
+
         return this.prisma.$transaction(async (tx) => {
             const existingEscrow = await tx.escrow.findUnique({
                 where: { campaignTargetId },
@@ -147,28 +236,17 @@ export class PaymentsService {
 
             const amount = this.normalizeDecimal(target.price);
 
-            const debitResult = await tx.wallet.updateMany({
-                where: {
-                    id: advertiserWallet.id,
-                    balance: { gte: amount },
-                },
-                data: {
-                    balance: { decrement: amount },
-                },
-            });
-
-            if (debitResult.count === 0) {
-                throw new BadRequestException('Insufficient balance');
-            }
-
-            await tx.ledgerEntry.create({
-                data: {
-                    walletId: advertiserWallet.id,
-                    type: 'debit',
-                    amount: amount.negated(),
-                    reason: 'escrow_hold',
-                    referenceId: campaignTargetId,
-                },
+            await this.recordWalletMovement({
+                tx,
+                walletId: advertiserWallet.id,
+                amount,
+                type: 'debit',
+                reason: 'escrow_hold',
+                referenceId: campaignTargetId,
+                campaignId: target.campaignId,
+                campaignTargetId,
+                actor: 'system',
+                correlationId: campaignTargetId,
             });
 
             await tx.escrow.create({
@@ -180,8 +258,6 @@ export class PaymentsService {
                     status: 'held',
                 },
             });
-
-            await this.assertLedgerMatchesWallet(tx, advertiserWallet.id);
 
             return { ok: true };
         });

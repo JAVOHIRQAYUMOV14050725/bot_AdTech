@@ -7,6 +7,8 @@ import {
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { ResolveAction } from './dto/resolve-escrow.dto';
 import Decimal from 'decimal.js';
+import { KillSwitchKey } from '@prisma/client';
+import { ReconciliationMode } from './dto/reconciliation.dto';
 @Injectable()
 export class SystemService {
     private readonly logger = new Logger(SystemService.name);
@@ -53,11 +55,13 @@ export class SystemService {
         if (action === ResolveAction.RELEASE) {
             result = await this.escrowService.release(campaignTargetId, {
                 actor: 'admin',
+                correlationId: campaignTargetId,
             });
         } else if (action === ResolveAction.REFUND) {
             result = await this.escrowService.refund(campaignTargetId, {
                 actor: 'admin',
                 reason,
+                correlationId: campaignTargetId,
             });
         } else {
             throw new BadRequestException('Invalid resolve action');
@@ -122,6 +126,7 @@ export class SystemService {
                     {
                         actor: 'system',
                         reason: 'watchdog_stuck_escrow',
+                        correlationId: escrow.campaignTargetId,
                     },
                 );
 
@@ -170,9 +175,12 @@ export class SystemService {
 
             if (!ledgerSum.equals(balance)) {
                 this.logger.error(
-                    `[LEDGER VIOLATION] wallet=${wallet.id} balance=${balance.toFixed(
-                        2,
-                    )} ledger=${ledgerSum.toFixed(2)}`,
+                    JSON.stringify({
+                        event: 'ledger_invariant_violation',
+                        walletId: wallet.id,
+                        balance: balance.toFixed(2),
+                        ledger: ledgerSum.toFixed(2),
+                    }),
                 );
 
                 // 🔥 PRODUCTION DECISION:
@@ -186,5 +194,229 @@ export class SystemService {
         }
 
         this.logger.log('[INVARIANT] Ledger check passed');
+    }
+
+    async updateKillSwitch(params: {
+        key: KillSwitchKey;
+        enabled: boolean;
+        reason?: string;
+        actorUserId: string;
+    }) {
+        const { key, enabled, reason, actorUserId } = params;
+
+        const result = await this.prisma.$transaction(async (tx) => {
+            const killSwitch = await tx.killSwitch.upsert({
+                where: { key },
+                update: {
+                    enabled,
+                    reason,
+                    updatedBy: actorUserId,
+                },
+                create: {
+                    key,
+                    enabled,
+                    reason,
+                    updatedBy: actorUserId,
+                },
+            });
+
+            await tx.killSwitchEvent.create({
+                data: {
+                    key,
+                    enabled,
+                    reason,
+                    updatedBy: actorUserId,
+                    metadata: {
+                        source: 'system_api',
+                    },
+                },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: actorUserId,
+                    action: 'kill_switch_update',
+                    metadata: {
+                        key,
+                        enabled,
+                        reason,
+                    },
+                },
+            });
+
+            return killSwitch;
+        });
+
+        this.logger.warn(
+            JSON.stringify({
+                event: 'kill_switch_update',
+                key,
+                enabled,
+                reason: reason ?? null,
+                actorUserId,
+            }),
+        );
+
+        return result;
+    }
+
+    async runRevenueReconciliation(params?: {
+        mode?: ReconciliationMode;
+        actorUserId?: string;
+        correlationId?: string;
+    }) {
+        const mode = params?.mode ?? ReconciliationMode.DRY_RUN;
+        const correlationId = params?.correlationId ?? `recon:${Date.now()}`;
+
+        if (mode === ReconciliationMode.FIX && !params?.actorUserId) {
+            throw new BadRequestException('Fix mode requires admin actor');
+        }
+
+        const discrepancies: Array<Record<string, unknown>> = [];
+
+        const walletSum = await this.prisma.wallet.aggregate({
+            _sum: { balance: true },
+        });
+        const ledgerSum = await this.prisma.ledgerEntry.aggregate({
+            _sum: { amount: true },
+        });
+
+        const walletTotal = new Decimal(walletSum._sum.balance ?? 0);
+        const ledgerTotal = new Decimal(ledgerSum._sum.amount ?? 0);
+
+        if (!walletTotal.equals(ledgerTotal)) {
+            const payload = {
+                event: 'reconciliation_mismatch',
+                check: 'wallet_vs_ledger',
+                walletTotal: walletTotal.toFixed(2),
+                ledgerTotal: ledgerTotal.toFixed(2),
+                correlationId,
+            };
+            this.logger.error(JSON.stringify(payload));
+            discrepancies.push(payload);
+        }
+
+        const releasedEscrows = await this.prisma.escrow.aggregate({
+            where: { status: 'released' },
+            _sum: { amount: true },
+        });
+
+        const payoutLedger = await this.prisma.ledgerEntry.aggregate({
+            where: {
+                reason: { in: ['payout', 'commission'] },
+            },
+            _sum: { amount: true },
+        });
+
+        const escrowTotal = new Decimal(releasedEscrows._sum.amount ?? 0);
+        const payoutTotal = new Decimal(payoutLedger._sum.amount ?? 0);
+
+        if (!escrowTotal.equals(payoutTotal)) {
+            const payload = {
+                event: 'reconciliation_mismatch',
+                check: 'escrow_vs_payouts',
+                escrowTotal: escrowTotal.toFixed(2),
+                payoutTotal: payoutTotal.toFixed(2),
+                correlationId,
+            };
+            this.logger.error(JSON.stringify(payload));
+            discrepancies.push(payload);
+        }
+
+        const SLA_HOURS = 6;
+        const staleEscrows = await this.prisma.escrow.findMany({
+            where: {
+                status: 'held',
+                createdAt: {
+                    lt: new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000),
+                },
+            },
+            select: {
+                id: true,
+                campaignTargetId: true,
+                createdAt: true,
+            },
+            take: 100,
+        });
+
+        if (staleEscrows.length > 0) {
+            const payload = {
+                event: 'reconciliation_mismatch',
+                check: 'stale_escrows',
+                count: staleEscrows.length,
+                escrows: staleEscrows,
+                correlationId,
+            };
+            this.logger.error(JSON.stringify(payload));
+            discrepancies.push(payload);
+        }
+
+        const postedWithoutRelease = await this.prisma.campaignTarget.findMany({
+            where: {
+                status: 'posted',
+                OR: [
+                    { escrow: { is: null } },
+                    {
+                        escrow: {
+                            is: {
+                                status: { not: 'released' },
+                            },
+                        },
+                    },
+                ],
+            },
+            select: {
+                id: true,
+                campaignId: true,
+                status: true,
+                escrow: {
+                    select: { status: true },
+                },
+            },
+            take: 100,
+        });
+
+        if (postedWithoutRelease.length > 0) {
+            const payload = {
+                event: 'reconciliation_mismatch',
+                check: 'posted_without_release',
+                count: postedWithoutRelease.length,
+                targets: postedWithoutRelease,
+                correlationId,
+            };
+            this.logger.error(JSON.stringify(payload));
+            discrepancies.push(payload);
+        }
+
+        if (mode === ReconciliationMode.FIX) {
+            this.logger.warn(
+                JSON.stringify({
+                    event: 'reconciliation_fix_requested',
+                    correlationId,
+                    actorUserId: params?.actorUserId ?? null,
+                    discrepancies: discrepancies.length,
+                }),
+            );
+
+            await this.prisma.userAuditLog.create({
+                data: {
+                    userId: params!.actorUserId!,
+                    action: 'reconciliation_fix_requested',
+                    metadata: {
+                        correlationId,
+                        discrepancies,
+                        note: 'No automatic fixes applied',
+                    },
+                },
+            });
+        }
+
+        return {
+            ok: discrepancies.length === 0,
+            mode,
+            correlationId,
+            discrepancies,
+            readOnly: mode === ReconciliationMode.DRY_RUN,
+        };
     }
 }

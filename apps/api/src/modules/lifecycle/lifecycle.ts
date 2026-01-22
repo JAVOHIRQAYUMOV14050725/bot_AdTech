@@ -81,6 +81,7 @@ type TransitionPayload<S extends string> = {
     to: S;
     actor: TransitionActor;
     transitions: TransitionMap<S>;
+    correlationId?: string;
 };
 
 function assertTransition<S extends string>({
@@ -90,6 +91,7 @@ function assertTransition<S extends string>({
     to,
     actor,
     transitions,
+    correlationId,
 }: TransitionPayload<S>) {
     if (from === to) {
         return { noop: true };
@@ -115,6 +117,18 @@ function assertTransition<S extends string>({
         );
     }
 
+    logger.log(
+        JSON.stringify({
+            event: 'state_transition',
+            entity,
+            id,
+            from,
+            to,
+            actor,
+            correlationId: correlationId ?? null,
+        }),
+    );
+
     return { noop: false };
 }
 
@@ -123,6 +137,7 @@ export function assertCampaignTransition(params: {
     from: CampaignStatus;
     to: CampaignStatus;
     actor: TransitionActor;
+    correlationId?: string;
 }) {
     return assertTransition({
         entity: 'Campaign',
@@ -131,6 +146,7 @@ export function assertCampaignTransition(params: {
         to: params.to,
         actor: params.actor,
         transitions: campaignTransitions,
+        correlationId: params.correlationId,
     });
 }
 
@@ -139,6 +155,7 @@ export function assertCampaignTargetTransition(params: {
     from: CampaignTargetStatus;
     to: CampaignTargetStatus;
     actor: TransitionActor;
+    correlationId?: string;
 }) {
     return assertTransition({
         entity: 'CampaignTarget',
@@ -147,6 +164,7 @@ export function assertCampaignTargetTransition(params: {
         to: params.to,
         actor: params.actor,
         transitions: campaignTargetTransitions,
+        correlationId: params.correlationId,
     });
 }
 
@@ -155,6 +173,7 @@ export function assertPostJobTransition(params: {
     from: PostJobStatus;
     to: PostJobStatus;
     actor: TransitionActor;
+    correlationId?: string;
 }) {
     return assertTransition({
         entity: 'PostJob',
@@ -163,6 +182,7 @@ export function assertPostJobTransition(params: {
         to: params.to,
         actor: params.actor,
         transitions: postJobTransitions,
+        correlationId: params.correlationId,
     });
 }
 
@@ -171,6 +191,7 @@ export function assertEscrowTransition(params: {
     from: EscrowStatus;
     to: EscrowStatus;
     actor: TransitionActor;
+    correlationId?: string;
 }) {
     return assertTransition({
         entity: 'Escrow',
@@ -179,6 +200,7 @@ export function assertEscrowTransition(params: {
         to: params.to,
         actor: params.actor,
         transitions: escrowTransitions,
+        correlationId: params.correlationId,
     });
 }
 

@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 
 import { Prisma, Escrow } from '@prisma/client';
 import { PaymentsService } from './payments.service';
+import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import {
     TransitionActor,
     assertCampaignTargetExists,
@@ -14,9 +15,12 @@ import {
 
 @Injectable()
 export class EscrowService {
+    private readonly logger = new Logger(EscrowService.name);
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentsService: PaymentsService,
+        private readonly killSwitchService: KillSwitchService,
     ) { }
 
     private async lockEscrow(
@@ -41,10 +45,18 @@ export class EscrowService {
         options?: {
             transaction?: Prisma.TransactionClient;
             actor?: TransitionActor;
+            correlationId?: string;
         },
     ) {
         const actor = options?.actor ?? 'system';
+        const correlationId = options?.correlationId ?? campaignTargetId;
         const execute = async (tx: Prisma.TransactionClient) => {
+            await this.killSwitchService.assertEnabled({
+                key: 'payouts',
+                reason: 'Payouts paused',
+                correlationId,
+            });
+
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
 
@@ -79,6 +91,7 @@ export class EscrowService {
                 from: escrow.status,
                 to: 'released',
                 actor,
+                correlationId,
             });
 
             assertPostJobOutcomeForEscrow({
@@ -93,6 +106,7 @@ export class EscrowService {
                 from: campaignTarget!.status,
                 to: 'posted',
                 actor,
+                correlationId,
             });
 
             const total = new Prisma.Decimal(escrow.amount);
@@ -104,22 +118,62 @@ export class EscrowService {
             const { commissionAmount, payoutAmount } =
                 this.paymentsService.calculateCommissionSplit(total, commission);
 
-            // 1️⃣ PAYOUT → PUBLISHER
-            await tx.wallet.update({
-                where: { id: escrow.publisherWalletId },
-                data: {
-                    balance: { increment: payoutAmount },
+            const expectedTotal = payoutAmount.add(commissionAmount);
+            if (!expectedTotal.equals(total)) {
+                this.logger.error(
+                    JSON.stringify({
+                        event: 'escrow_amount_mismatch',
+                        campaignTargetId,
+                        escrowAmount: total.toFixed(2),
+                        payout: payoutAmount.toFixed(2),
+                        commission: commissionAmount.toFixed(2),
+                        correlationId,
+                    }),
+                );
+                throw new ConflictException(
+                    `Escrow amount mismatch for campaignTarget=${campaignTargetId}`,
+                );
+            }
+
+            const holdLedger = await tx.ledgerEntry.findFirst({
+                where: {
+                    walletId: escrow.advertiserWalletId,
+                    reason: 'escrow_hold',
+                    referenceId: campaignTargetId,
                 },
             });
 
-            await tx.ledgerEntry.create({
-                data: {
-                    walletId: escrow.publisherWalletId,
-                    type: 'credit',
-                    amount: payoutAmount,
-                    reason: 'payout',
-                    referenceId: campaignTargetId,
-                },
+            if (
+                !holdLedger ||
+                !new Prisma.Decimal(holdLedger.amount).abs().equals(total)
+            ) {
+                this.logger.error(
+                    JSON.stringify({
+                        event: 'escrow_hold_ledger_mismatch',
+                        campaignTargetId,
+                        escrowAmount: total.toFixed(2),
+                        ledgerAmount: holdLedger?.amount ?? null,
+                        correlationId,
+                    }),
+                );
+                throw new ConflictException(
+                    `Escrow hold ledger mismatch for campaignTarget=${campaignTargetId}`,
+                );
+            }
+
+            // 1️⃣ PAYOUT → PUBLISHER
+            await this.paymentsService.recordWalletMovement({
+                tx,
+                walletId: escrow.publisherWalletId,
+                amount: payoutAmount,
+                type: 'credit',
+                reason: 'payout',
+                referenceId: campaignTargetId,
+                campaignId: campaignTarget!.campaignId,
+                campaignTargetId,
+                escrowId: escrow.id,
+                actor,
+                correlationId,
             });
 
             let platformWalletId: string | null = null;
@@ -134,21 +188,18 @@ export class EscrowService {
                 }
 
                 platformWalletId = platformWallet.id;
-                await tx.wallet.update({
-                    where: { id: platformWallet.id },
-                    data: {
-                        balance: { increment: commissionAmount },
-                    },
-                });
-
-                await tx.ledgerEntry.create({
-                    data: {
-                        walletId: platformWallet.id,
-                        type: 'credit',
-                        amount: commissionAmount,
-                        reason: 'commission',
-                        referenceId: campaignTargetId,
-                    },
+                await this.paymentsService.recordWalletMovement({
+                    tx,
+                    walletId: platformWallet.id,
+                    amount: commissionAmount,
+                    type: 'credit',
+                    reason: 'commission',
+                    referenceId: campaignTargetId,
+                    campaignId: campaignTarget!.campaignId,
+                    campaignTargetId,
+                    escrowId: escrow.id,
+                    actor,
+                    correlationId,
                 });
             }
 
@@ -204,10 +255,12 @@ export class EscrowService {
             reason?: string;
             transaction?: Prisma.TransactionClient;
             actor?: TransitionActor;
+            correlationId?: string;
         },
     ) {
         const actor = options?.actor ?? 'system';
         const reason = options?.reason ?? 'post_failed';
+        const correlationId = options?.correlationId ?? campaignTargetId;
         const execute = async (tx: Prisma.TransactionClient) => {
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
@@ -243,6 +296,7 @@ export class EscrowService {
                 from: escrow.status,
                 to: 'refunded',
                 actor,
+                correlationId,
             });
 
             assertPostJobOutcomeForEscrow({
@@ -257,26 +311,24 @@ export class EscrowService {
                 from: campaignTarget!.status,
                 to: 'refunded',
                 actor,
+                correlationId,
             });
 
             const amount = new Prisma.Decimal(escrow.amount);
 
             // 1️⃣ RETURN FUNDS → ADVERTISER
-            await tx.wallet.update({
-                where: { id: escrow.advertiserWalletId },
-                data: {
-                    balance: { increment: amount },
-                },
-            });
-
-            await tx.ledgerEntry.create({
-                data: {
-                    walletId: escrow.advertiserWalletId,
-                    type: 'credit',
-                    amount,
-                    reason: 'refund',
-                    referenceId: campaignTargetId,
-                },
+            await this.paymentsService.recordWalletMovement({
+                tx,
+                walletId: escrow.advertiserWalletId,
+                amount,
+                type: 'credit',
+                reason: 'refund',
+                referenceId: campaignTargetId,
+                campaignId: campaignTarget!.campaignId,
+                campaignTargetId,
+                escrowId: escrow.id,
+                actor,
+                correlationId,
             });
 
             // 2️⃣ FINALIZE ESCROW

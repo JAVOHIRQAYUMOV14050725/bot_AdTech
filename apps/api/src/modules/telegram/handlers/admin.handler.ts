@@ -26,8 +26,10 @@ export class AdminHandler {
         const telegramId = ctx.from?.id;
         if (!telegramId) throw new ForbiddenException();
 
+        const telegramIdBigInt = BigInt(telegramId);
+
         const user = await this.prisma.user.findUnique({
-            where: { telegramId },
+            where: { telegramId: telegramIdBigInt },
         });
 
         if (!user || user.role !== 'super_admin') {

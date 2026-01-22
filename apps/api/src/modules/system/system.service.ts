@@ -10,10 +10,13 @@ import Decimal from 'decimal.js';
 import { KillSwitchKey, Prisma } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
 
-const toJsonValue = (value: unknown): Prisma.JsonValue => {
+const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
+    if (value === null) {
+        return null;
+    }
+
     if (
-        value === null
-        || typeof value === 'string'
+        typeof value === 'string'
         || typeof value === 'number'
         || typeof value === 'boolean'
     ) {
@@ -29,11 +32,13 @@ const toJsonValue = (value: unknown): Prisma.JsonValue => {
     }
 
     if (typeof value === 'object') {
-        return Object.entries(value as Record<string, unknown>)
-            .reduce<Prisma.JsonObject>((acc, [key, val]) => {
-                acc[key] = toJsonValue(val);
-                return acc;
-            }, {});
+        const result: Record<string, Prisma.InputJsonValue | null> = {};
+        for (const [key, val] of Object.entries(
+            value as Record<string, unknown>,
+        )) {
+            result[key] = toJsonValue(val);
+        }
+        return result;
     }
 
     return String(value);
@@ -427,7 +432,7 @@ export class SystemService {
                 }),
             );
 
-            const jsonDiscrepancies: Prisma.JsonArray = discrepancies.map(
+            const jsonDiscrepancies: Prisma.InputJsonArray = discrepancies.map(
                 (entry) => toJsonValue(entry),
             );
 

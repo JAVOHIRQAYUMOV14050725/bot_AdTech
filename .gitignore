@@ -35,9 +35,7 @@ prisma/dev.db
 prisma/dev.db-journal
 
 ####################################
-# ENV FILES (CRITICAL)
-**/.env
-**/.env.*
+
 ####################################
 
 

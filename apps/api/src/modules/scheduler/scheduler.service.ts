@@ -136,6 +136,18 @@ export class SchedulerService {
 
         this.logger.warn('[CRON] Post job recovery triggered');
         try {
+            const schemaCheck = await this.systemService.checkPostJobSchema();
+            if (!schemaCheck.ok) {
+                const error = `missing_columns:${schemaCheck.missingColumns.join(',')}`;
+                this.logger.warn(`[CRON] Post job recovery skipped: ${error}`);
+                await this.cronStatusService.recordRun({
+                    name: 'post_job_recovery',
+                    result: 'skipped',
+                    error,
+                });
+                return;
+            }
+
             await this.systemService.requeueStalledPostJobs();
             await this.cronStatusService.recordRun({
                 name: 'post_job_recovery',
@@ -150,7 +162,6 @@ export class SchedulerService {
                 error: message,
             });
             this.logger.error('[CRON] Post job recovery failed', message);
-            throw err;
         }
     }
 

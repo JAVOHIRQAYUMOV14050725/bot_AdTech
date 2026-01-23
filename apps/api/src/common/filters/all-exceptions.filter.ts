@@ -85,17 +85,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
         });
 
         const stack = exception instanceof Error ? exception.stack : undefined;
-        this.logger.error(
-            {
-                event: 'http_error',
-                correlationId: request.correlationId ?? null,
-                method: request.method,
-                path: request.originalUrl,
-                statusCode: status,
-                error: normalizedError,
-            },
-            stack ?? String(exception),
-        );
+        const isFaviconNotFound =
+            status === HttpStatus.NOT_FOUND
+            && request.originalUrl === '/favicon.ico';
+        const logPayload = {
+            event: 'http_error',
+            correlationId: request.correlationId ?? null,
+            method: request.method,
+            path: request.originalUrl,
+            statusCode: status,
+            error: normalizedError,
+        };
+        if (isFaviconNotFound && process.env.NODE_ENV === 'production') {
+            this.logger.debug(logPayload, stack ?? String(exception));
+        } else {
+            this.logger.error(logPayload, stack ?? String(exception));
+        }
 
         response.status(status).json(payload);
     }

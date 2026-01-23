@@ -16,8 +16,8 @@ import { IsTelegramIdString, TELEGRAM_ID_EXAMPLE } from '@/common/validators/tel
 export class AdminCreateChannelDto {
     @ApiProperty({
         example: TELEGRAM_CHANNEL_ID_EXAMPLE,
-        description: 'Telegram channel ID starting with -100 and digits only.',
-        pattern: '^-100\\d+$',
+        description: 'This must be the REAL Telegram channel id (not @username or invite link), starting with -100.',
+        pattern: '^-100\\d{5,}$',
     })
     @TrimString()
     @IsString()

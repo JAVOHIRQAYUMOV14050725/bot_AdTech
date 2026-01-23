@@ -1,4 +1,11 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    Injectable,
+    NotFoundException,
+    ServiceUnavailableException,
+} from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
 import { AdminCreateChannelDto } from './dto/admin-create-channel.dto';
@@ -6,6 +13,8 @@ import { Channel, ChannelStatus, Prisma, UserRole } from '@prisma/client';
 import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
+import { TELEGRAM_CHANNEL_ID_REGEX } from '@/common/validators/telegram-channel-id-string.decorator';
+import { TelegramCheckReason, TelegramAdminPermission } from '@/modules/telegram/telegram.types';
 
 @Injectable()
 export class ChannelsService {
@@ -16,7 +25,7 @@ export class ChannelsService {
     ) { }
 
     private parseTelegramId(value: string): bigint {
-        if (!/^-\d+$/.test(value) || !value.startsWith('-100')) {
+        if (!TELEGRAM_CHANNEL_ID_REGEX.test(value)) {
             throw new BadRequestException('Invalid telegramChannelId');
         }
 
@@ -199,9 +208,75 @@ export class ChannelsService {
             throw new BadRequestException('Channel not in pending state');
         }
 
-        const verified = await this.verificationService.verifyChannel(channel);
-        if (!verified) {
-            throw new BadRequestException('Bot is not admin of channel');
+        const checkResult = await this.verificationService.verifyChannel(channel);
+        if (!checkResult.isAdmin) {
+            const telegramChannelId = channel.telegramChannelId.toString();
+            const requiredPermissions: TelegramAdminPermission[] = [
+                'can_manage_chat',
+                'can_post_messages',
+                'can_edit_messages',
+                'can_delete_messages',
+            ];
+
+            if (checkResult.reason === TelegramCheckReason.CHAT_NOT_FOUND) {
+                throw new BadRequestException({
+                    message:
+                        'Telegram channel not found or bot has no access. Add bot to the channel (as admin) and use correct -100... id.',
+                    details: {
+                        telegramChannelId,
+                        hintSteps: [
+                            'Ensure telegramChannelId is the REAL channel id in the format -100...',
+                            'Add the bot to the channel',
+                            'Promote the bot to Administrator',
+                            'Post a test message to the channel',
+                            'Confirm bot receives a channel_post update; copy channel_post.chat.id as telegramChannelId',
+                        ],
+                        telegramError: checkResult.telegramError,
+                    },
+                });
+            }
+
+            if (checkResult.reason === TelegramCheckReason.BOT_NOT_ADMIN) {
+                throw new BadRequestException({
+                    message: 'Bot is not admin of channel',
+                    details: {
+                        telegramChannelId,
+                        requiredPermissions,
+                        telegramError: checkResult.telegramError,
+                    },
+                });
+            }
+
+            if (checkResult.reason === TelegramCheckReason.BOT_KICKED) {
+                throw new BadRequestException({
+                    message: 'Bot was removed or blocked from the channel. Re-add and promote it to Administrator.',
+                    details: {
+                        telegramChannelId,
+                        telegramError: checkResult.telegramError,
+                    },
+                });
+            }
+
+            if (
+                checkResult.reason === TelegramCheckReason.RATE_LIMIT
+                || checkResult.reason === TelegramCheckReason.NETWORK
+            ) {
+                throw new ServiceUnavailableException({
+                    message: 'Telegram unavailable or rate-limited. Retry later.',
+                    details: {
+                        retryAfterSeconds: checkResult.retryAfterSeconds ?? null,
+                        telegramError: checkResult.telegramError,
+                    },
+                });
+            }
+
+            throw new BadRequestException({
+                message: 'Unable to verify channel with Telegram. Retry later.',
+                details: {
+                    telegramChannelId,
+                    telegramError: checkResult.telegramError,
+                },
+            });
         }
 
         const updated = await this.prisma.$transaction(async (tx) => {
@@ -236,6 +311,39 @@ export class ChannelsService {
         });
 
         return this.mapChannel(updated.result);
+    }
+
+    async verifyChannelDebug(channelId: string, actor: { id: string; role: UserRole }) {
+        if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEBUG !== 'true') {
+            throw new NotFoundException('Not Found');
+        }
+
+        const channel = await this.prisma.channel.findUnique({
+            where: { id: channelId },
+        });
+
+        if (!channel) {
+            throw new NotFoundException('Channel not found');
+        }
+
+        if (
+            actor.role === UserRole.publisher
+            && channel.ownerId !== actor.id
+        ) {
+            throw new ForbiddenException('Not channel owner');
+        }
+
+        const checkResult = await this.verificationService.verifyChannel(channel);
+
+        return sanitizeForJson({
+            channelId: channel.id,
+            telegramChannelId: channel.telegramChannelId,
+            canAccessChat: checkResult.canAccessChat,
+            isAdmin: checkResult.isAdmin,
+            reason: checkResult.reason,
+            telegramError: checkResult.telegramError,
+            retryAfterSeconds: checkResult.retryAfterSeconds ?? null,
+        });
     }
 
     async approveChannel(channelId: string, adminId: string) {

@@ -3,6 +3,11 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
 import { PostJobStatus, Prisma } from '@prisma/client';
+import {
+    TelegramAdminPermission,
+    TelegramCheckReason,
+    TelegramCheckResult,
+} from './telegram.types';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
     const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
@@ -13,6 +18,13 @@ const bigintToSafeNumber = (value: bigint, field: string): number => {
     }
     return Number(value);
 };
+
+const REQUIRED_BOT_PERMISSIONS: TelegramAdminPermission[] = [
+    'can_manage_chat',
+    'can_post_messages',
+    'can_edit_messages',
+    'can_delete_messages',
+];
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -151,13 +163,178 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         throw new Error(`${action} failed`);
     }
 
-    async isBotAdmin(channelId: string): Promise<boolean> {
-        const admins = await this.withTelegramRetry(
-            'getChatAdministrators',
-            () => this.bot.telegram.getChatAdministrators(channelId),
-        );
-        const botId = await this.getBotId();
-        return admins.some((admin) => admin.user.id === botId);
+    private sanitizeTelegramError(message?: string): string | undefined {
+        if (!message) {
+            return undefined;
+        }
+        return message.replace(/(bot token|token)=\S+/gi, '$1=***').slice(0, 300);
+    }
+
+    private extractTelegramError(err: unknown): {
+        description?: string;
+        errorCode?: number;
+        retryAfterSeconds?: number;
+        message?: string;
+        code?: string;
+    } {
+        if (err && typeof err === 'object') {
+            const response = (err as { response?: { error_code?: number; description?: string; parameters?: { retry_after?: number } } }).response;
+            const responseBody = (response as { body?: { error_code?: number; description?: string; parameters?: { retry_after?: number } } })?.body;
+            return {
+                description: response?.description ?? responseBody?.description,
+                errorCode: response?.error_code ?? responseBody?.error_code,
+                retryAfterSeconds:
+                    response?.parameters?.retry_after
+                    ?? responseBody?.parameters?.retry_after
+                    ?? (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after,
+                message: err instanceof Error ? err.message : undefined,
+                code: (err as { code?: string })?.code,
+            };
+        }
+
+        return { message: typeof err === 'string' ? err : undefined };
+    }
+
+    private classifyTelegramError(err: unknown): TelegramCheckResult {
+        const { description, errorCode, retryAfterSeconds, message, code } = this.extractTelegramError(err);
+        const rawMessage = description ?? message;
+        const lowerMessage = rawMessage?.toLowerCase() ?? '';
+        const sanitizedError = this.sanitizeTelegramError(rawMessage);
+
+        if (errorCode === 429 || lowerMessage.includes('too many requests')) {
+            return {
+                canAccessChat: false,
+                isAdmin: false,
+                reason: TelegramCheckReason.RATE_LIMIT,
+                telegramError: sanitizedError,
+                retryAfterSeconds: retryAfterSeconds ?? null,
+            };
+        }
+
+        const networkCodes = new Set([
+            'ETIMEDOUT',
+            'ECONNRESET',
+            'ENOTFOUND',
+            'ECONNREFUSED',
+            'EAI_AGAIN',
+            'ENETUNREACH',
+            'EHOSTUNREACH',
+        ]);
+        if (
+            (code && networkCodes.has(code))
+            || lowerMessage.includes('timeout')
+            || lowerMessage.includes('timed out')
+            || lowerMessage.includes('network')
+            || lowerMessage.includes('socket hang up')
+        ) {
+            return {
+                canAccessChat: false,
+                isAdmin: false,
+                reason: TelegramCheckReason.NETWORK,
+                telegramError: sanitizedError,
+                retryAfterSeconds: retryAfterSeconds ?? null,
+            };
+        }
+
+        if (
+            lowerMessage.includes('bot was kicked')
+            || lowerMessage.includes('bot was banned')
+            || lowerMessage.includes('bot was blocked')
+            || lowerMessage.includes('bot was removed')
+            || lowerMessage.includes('bot is not a member')
+        ) {
+            return {
+                canAccessChat: false,
+                isAdmin: false,
+                reason: TelegramCheckReason.BOT_KICKED,
+                telegramError: sanitizedError,
+                retryAfterSeconds: retryAfterSeconds ?? null,
+            };
+        }
+
+        if (
+            lowerMessage.includes('not enough rights')
+            || lowerMessage.includes('administrator rights')
+            || lowerMessage.includes('admin rights')
+            || lowerMessage.includes('chat admin required')
+            || lowerMessage.includes('need administrator rights')
+        ) {
+            return {
+                canAccessChat: true,
+                isAdmin: false,
+                reason: TelegramCheckReason.BOT_NOT_ADMIN,
+                telegramError: sanitizedError,
+                retryAfterSeconds: retryAfterSeconds ?? null,
+            };
+        }
+
+        if (
+            lowerMessage.includes('chat not found')
+            || lowerMessage.includes('channel not found')
+        ) {
+            return {
+                canAccessChat: false,
+                isAdmin: false,
+                reason: TelegramCheckReason.CHAT_NOT_FOUND,
+                telegramError: sanitizedError,
+                retryAfterSeconds: retryAfterSeconds ?? null,
+            };
+        }
+
+        return {
+            canAccessChat: false,
+            isAdmin: false,
+            reason: TelegramCheckReason.UNKNOWN,
+            telegramError: sanitizedError,
+            retryAfterSeconds: retryAfterSeconds ?? null,
+        };
+    }
+
+    async checkBotAdmin(channelId: string): Promise<TelegramCheckResult> {
+        try {
+            const admins = await this.withTelegramRetry(
+                'getChatAdministrators',
+                () => this.bot.telegram.getChatAdministrators(channelId),
+            );
+            const botId = await this.getBotId();
+            const botAdmin = admins.find((admin) => admin.user.id === botId);
+
+            if (!botAdmin) {
+                return {
+                    canAccessChat: true,
+                    isAdmin: false,
+                    reason: TelegramCheckReason.BOT_NOT_ADMIN,
+                };
+            }
+
+            if (botAdmin.status === 'creator') {
+                return {
+                    canAccessChat: true,
+                    isAdmin: true,
+                    reason: TelegramCheckReason.UNKNOWN,
+                };
+            }
+
+            const hasRequiredPermissions = REQUIRED_BOT_PERMISSIONS.every(
+                (permission) => Boolean((botAdmin as Record<string, unknown>)[permission]),
+            );
+
+            if (!hasRequiredPermissions) {
+                return {
+                    canAccessChat: true,
+                    isAdmin: false,
+                    reason: TelegramCheckReason.BOT_NOT_ADMIN,
+                };
+            }
+
+            return {
+                canAccessChat: true,
+                isAdmin: true,
+                reason: TelegramCheckReason.UNKNOWN,
+            };
+        } catch (err) {
+            return this.classifyTelegramError(err);
+        }
     }
 
     async sendCampaignPost(postJobId: string): Promise<{ ok: boolean; telegramMessageId?: number }> {

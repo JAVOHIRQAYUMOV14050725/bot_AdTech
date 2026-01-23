@@ -1,8 +1,8 @@
 import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 
-const TELEGRAM_CHANNEL_ID_REGEX = /^-100\d+$/;
+export const TELEGRAM_CHANNEL_ID_REGEX = /^-100\d{5,}$/;
 
-export const TELEGRAM_CHANNEL_ID_EXAMPLE = '-1001234567890';
+export const TELEGRAM_CHANNEL_ID_EXAMPLE = '-1001987654321';
 
 export function IsTelegramChannelIdString(
     validationOptions?: ValidationOptions,
@@ -21,7 +21,7 @@ export function IsTelegramChannelIdString(
                     return TELEGRAM_CHANNEL_ID_REGEX.test(value);
                 },
                 defaultMessage(args: ValidationArguments) {
-                    return `${args.property} must start with -100 and contain only digits`;
+                    return `${args.property} must start with -100 and contain at least 5 digits`;
                 },
             },
         });

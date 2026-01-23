@@ -13,8 +13,7 @@ import { JsonSanitizeInterceptor } from '@/common/interceptors/json-sanitize.int
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
 import { StructuredLogger } from '@/common/logging/structured-logger.service';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { Request, Response } from 'express';
+import { setupSwagger } from './swagger';
 import { formatValidationErrors } from './common/validation/validation-errors';
 
 console.log('Starting API...');
@@ -86,29 +85,7 @@ async function bootstrap() {
 
     app.setGlobalPrefix('api');
 
-    const enableSwagger =
-        process.env.NODE_ENV !== 'production' ||
-        process.env.ENABLE_SWAGGER === 'true';
-
-    if (enableSwagger) {
-        const config = new DocumentBuilder()
-            .setTitle('AdTech API')
-            .setDescription('API documentation for AdTech services.')
-            .setVersion('1.0')
-            .addBearerAuth()
-            .addServer('/api')
-            .build();
-
-        const document = SwaggerModule.createDocument(app, config, {
-            deepScanRoutes: true,
-        });
-
-        SwaggerModule.setup('api/docs', app, document);
-        const httpAdapter = app.getHttpAdapter().getInstance();
-        httpAdapter.get('/api/docs-json', (req: Request, res: Response) =>
-            res.json(document),
-        );
-    }
+    setupSwagger(app);
 
     const port = process.env.PORT || 3000;
     await app.listen(port);

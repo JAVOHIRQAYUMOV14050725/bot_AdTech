@@ -1,6 +1,6 @@
 import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 
-const TELEGRAM_ID_REGEX = /^\d{5,20}$/;
+const TELEGRAM_ID_REGEX = /^\d+$/;
 
 export const TELEGRAM_ID_EXAMPLE = '1234567890';
 

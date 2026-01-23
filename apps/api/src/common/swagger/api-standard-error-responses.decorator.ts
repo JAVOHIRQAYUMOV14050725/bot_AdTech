@@ -22,7 +22,7 @@ export function ApiStandardErrorResponses() {
             type: ApiErrorResponseDto,
         }),
         ApiForbiddenResponse({
-            description: 'Forbidden',
+            description: 'Forbidden (Insufficient role)',
             type: ApiErrorResponseDto,
         }),
         ApiNotFoundResponse({

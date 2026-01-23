@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { Logger, LogLevel, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, Logger, LogLevel, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import compression from 'compression';
 import { startPostWorker } from '@/modules/scheduler/workers/post.worker';
@@ -13,6 +13,9 @@ import { JsonSanitizeInterceptor } from '@/common/interceptors/json-sanitize.int
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
 import { StructuredLogger } from '@/common/logging/structured-logger.service';
+import { formatValidationErrors } from '@/common/validation/validation-errors';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { Request, Response } from 'express';
 
 console.log('Starting API...');
 async function bootstrap() {
@@ -71,12 +74,41 @@ async function bootstrap() {
             whitelist: true,
             forbidNonWhitelisted: true,
             transform: true,
+            exceptionFactory: (errors) =>
+                new BadRequestException({
+                    message: 'Validation failed',
+                    details: formatValidationErrors(errors),
+                }),
         }),
     );
     app.useGlobalInterceptors(new JsonSanitizeInterceptor());
     app.useGlobalFilters(new AllExceptionsFilter());
 
     app.setGlobalPrefix('api');
+
+    const enableSwagger =
+        process.env.NODE_ENV !== 'production' ||
+        process.env.ENABLE_SWAGGER === 'true';
+
+    if (enableSwagger) {
+        const config = new DocumentBuilder()
+            .setTitle('AdTech API')
+            .setDescription('API documentation for AdTech services.')
+            .setVersion('1.0')
+            .addBearerAuth()
+            .addServer('/api')
+            .build();
+
+        const document = SwaggerModule.createDocument(app, config, {
+            deepScanRoutes: true,
+        });
+
+        SwaggerModule.setup('api/docs', app, document);
+        const httpAdapter = app.getHttpAdapter().getInstance();
+        httpAdapter.get('/api/docs-json', (req: Request, res: Response) =>
+            res.json(document),
+        );
+    }
 
     const port = process.env.PORT || 3000;
     await app.listen(port);

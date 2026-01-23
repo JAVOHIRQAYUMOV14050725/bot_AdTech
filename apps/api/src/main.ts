@@ -9,6 +9,9 @@ import { EscrowService } from '@/modules/payments/escrow.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { RedisService } from '@/modules/redis/redis.service';
+import { JsonSanitizeInterceptor } from '@/common/interceptors/json-sanitize.interceptor';
+import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
 
 console.log('Starting API...');
 async function bootstrap() {
@@ -38,6 +41,7 @@ async function bootstrap() {
 
     app.use(helmet());
     app.use(compression());
+    app.use(correlationIdMiddleware);
 
     app.useGlobalPipes(
         new ValidationPipe({
@@ -46,6 +50,8 @@ async function bootstrap() {
             transform: true,
         }),
     );
+    app.useGlobalInterceptors(new JsonSanitizeInterceptor());
+    app.useGlobalFilters(new AllExceptionsFilter());
 
     app.setGlobalPrefix('api');
 

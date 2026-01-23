@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
+import { Prisma } from '@prisma/client';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -18,14 +19,37 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const response = ctx.getResponse<Response>();
         const request = ctx.getRequest<Request>();
 
+        const isPrismaKnownError =
+            exception instanceof Prisma.PrismaClientKnownRequestError;
         const isHttpException = exception instanceof HttpException;
-        const status = isHttpException
-            ? exception.getStatus()
-            : HttpStatus.INTERNAL_SERVER_ERROR;
+        const status = (() => {
+            if (isPrismaKnownError) {
+                if (exception.code === 'P2002') {
+                    return HttpStatus.CONFLICT;
+                }
+                if (exception.code === 'P2025') {
+                    return HttpStatus.NOT_FOUND;
+                }
+            }
+            return isHttpException
+                ? exception.getStatus()
+                : HttpStatus.INTERNAL_SERVER_ERROR;
+        })();
 
-        const errorResponse = isHttpException
-            ? exception.getResponse()
-            : { message: 'Internal server error' };
+        const errorResponse = (() => {
+            if (isPrismaKnownError) {
+                if (exception.code === 'P2002') {
+                    return { message: 'Unique constraint violation' };
+                }
+                if (exception.code === 'P2025') {
+                    return { message: 'Record not found' };
+                }
+                return { message: 'Database error' };
+            }
+            return isHttpException
+                ? exception.getResponse()
+                : { message: 'Internal server error' };
+        })();
 
         const normalizedError = (() => {
             if (typeof errorResponse === 'string') {
@@ -38,7 +62,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
             if (typeof errorResponse === 'object' && errorResponse !== null) {
                 const message = (errorResponse as { message?: unknown }).message;
-                const details = { ...errorResponse };
+                const details = (errorResponse as { details?: unknown }).details ?? {
+                    ...errorResponse,
+                };
                 return {
                     message: Array.isArray(message)
                         ? 'Validation failed'
@@ -54,7 +80,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             statusCode: status,
             timestamp: new Date().toISOString(),
             path: request.originalUrl,
-            correlationId: request.correlationId ?? 'n/a',
+            correlationId: request.correlationId ?? null,
             error: normalizedError,
         });
 
@@ -62,7 +88,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         this.logger.error(
             {
                 event: 'http_error',
-                correlationId: request.correlationId ?? 'n/a',
+                correlationId: request.correlationId ?? null,
                 method: request.method,
                 path: request.originalUrl,
                 statusCode: status,

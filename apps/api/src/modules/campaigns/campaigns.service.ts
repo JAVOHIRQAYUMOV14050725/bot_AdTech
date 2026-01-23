@@ -4,7 +4,10 @@ import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { CreateCreativeDto } from './dto/create-creative.dto';
 import { CreateTargetDto } from './dto/create-target.dto';
 import {
+    AdCreative,
+    Campaign,
     CampaignStatus,
+    CampaignTarget,
     CampaignTargetStatus,
     ChannelStatus,
     Prisma,
@@ -12,6 +15,7 @@ import {
 } from '@prisma/client';
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition } from '@/modules/lifecycle/lifecycle';
+import { sanitizeForJson } from '@/common/serialization/sanitize';
 
 @Injectable()
 export class CampaignsService {
@@ -26,6 +30,45 @@ export class CampaignsService {
         } catch {
             throw new BadRequestException('Invalid decimal value');
         }
+    }
+
+    private mapCampaign(campaign: Campaign) {
+        return sanitizeForJson({
+            id: campaign.id,
+            advertiserId: campaign.advertiserId,
+            name: campaign.name,
+            totalBudget: campaign.totalBudget,
+            spentBudget: campaign.spentBudget,
+            status: campaign.status,
+            startAt: campaign.startAt,
+            endAt: campaign.endAt,
+            createdAt: campaign.createdAt,
+        });
+    }
+
+    private mapCreative(creative: AdCreative) {
+        return sanitizeForJson({
+            id: creative.id,
+            campaignId: creative.campaignId,
+            contentType: creative.contentType,
+            contentPayload: creative.contentPayload,
+            approvedBy: creative.approvedBy,
+            approvedAt: creative.approvedAt,
+        });
+    }
+
+    private mapTarget(target: CampaignTarget) {
+        return sanitizeForJson({
+            id: target.id,
+            campaignId: target.campaignId,
+            channelId: target.channelId,
+            price: target.price,
+            scheduledAt: target.scheduledAt,
+            status: target.status,
+            moderatedBy: target.moderatedBy,
+            moderatedAt: target.moderatedAt,
+            moderationReason: target.moderationReason,
+        });
     }
 
     async createCampaign(userId: string, dto: CreateCampaignDto) {
@@ -60,7 +103,7 @@ export class CampaignsService {
             metadata: { campaignId: campaign.id },
         });
 
-        return campaign;
+        return this.mapCampaign(campaign);
     }
 
     async addCreative(campaignId: string, userId: string, dto: CreateCreativeDto) {
@@ -91,7 +134,7 @@ export class CampaignsService {
             metadata: { campaignId, creativeId: creative.id },
         });
 
-        return creative;
+        return this.mapCreative(creative);
     }
 
     async addTarget(campaignId: string, userId: string, dto: CreateTargetDto) {
@@ -137,7 +180,7 @@ export class CampaignsService {
             metadata: { campaignId, targetId: target.id },
         });
 
-        return target;
+        return this.mapTarget(target);
     }
 
     async submitTarget(targetId: string, userId: string) {

@@ -4,7 +4,16 @@ import { PaymentsService } from '@/modules/payments/payments.service';
 import { SchedulerService } from '@/modules/scheduler/scheduler.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition } from '@/modules/lifecycle/lifecycle';
-import { CampaignTargetStatus, PostJobStatus } from '@prisma/client';
+import {
+    AdCreative,
+    Campaign,
+    CampaignTarget,
+    Channel,
+    CampaignTargetStatus,
+    PostJob,
+    PostJobStatus,
+} from '@prisma/client';
+import { sanitizeForJson } from '@/common/serialization/sanitize';
 
 @Injectable()
 export class ModerationService {
@@ -15,8 +24,93 @@ export class ModerationService {
         private readonly auditService: AuditService,
     ) { }
 
+    private mapChannel(channel: Channel) {
+        return sanitizeForJson({
+            id: channel.id,
+            telegramChannelId: channel.telegramChannelId,
+            title: channel.title,
+            username: channel.username,
+            category: channel.category,
+            subscriberCount: channel.subscriberCount,
+            avgViews: channel.avgViews,
+            cpm: channel.cpm,
+            status: channel.status,
+            createdAt: channel.createdAt,
+            deletedAt: channel.deletedAt,
+            ownerId: channel.ownerId,
+        });
+    }
+
+    private mapCreative(creative: AdCreative) {
+        return sanitizeForJson({
+            id: creative.id,
+            campaignId: creative.campaignId,
+            contentType: creative.contentType,
+            contentPayload: creative.contentPayload,
+            approvedBy: creative.approvedBy,
+            approvedAt: creative.approvedAt,
+        });
+    }
+
+    private mapCampaign(campaign: Campaign & { creatives?: AdCreative[] }) {
+        return sanitizeForJson({
+            id: campaign.id,
+            advertiserId: campaign.advertiserId,
+            name: campaign.name,
+            totalBudget: campaign.totalBudget,
+            spentBudget: campaign.spentBudget,
+            status: campaign.status,
+            startAt: campaign.startAt,
+            endAt: campaign.endAt,
+            createdAt: campaign.createdAt,
+            creatives: campaign.creatives?.map((creative) =>
+                this.mapCreative(creative),
+            ),
+        });
+    }
+
+    private mapPostJob(postJob?: PostJob | null) {
+        if (!postJob) {
+            return null;
+        }
+
+        return sanitizeForJson({
+            id: postJob.id,
+            campaignTargetId: postJob.campaignTargetId,
+            executeAt: postJob.executeAt,
+            attempts: postJob.attempts,
+            status: postJob.status,
+            lastError: postJob.lastError,
+        });
+    }
+
+    private mapTarget(
+        target: CampaignTarget & {
+            campaign?: Campaign & { creatives?: AdCreative[] };
+            channel?: Channel;
+            postJob?: PostJob | null;
+        },
+    ) {
+        return sanitizeForJson({
+            id: target.id,
+            campaignId: target.campaignId,
+            channelId: target.channelId,
+            price: target.price,
+            scheduledAt: target.scheduledAt,
+            status: target.status,
+            moderatedBy: target.moderatedBy,
+            moderatedAt: target.moderatedAt,
+            moderationReason: target.moderationReason,
+            campaign: target.campaign
+                ? this.mapCampaign(target.campaign)
+                : undefined,
+            channel: target.channel ? this.mapChannel(target.channel) : undefined,
+            postJob: target.postJob ? this.mapPostJob(target.postJob) : undefined,
+        });
+    }
+
     async listPending() {
-        return this.prisma.campaignTarget.findMany({
+        const targets = await this.prisma.campaignTarget.findMany({
             where: { status: CampaignTargetStatus.submitted },
             include: {
                 campaign: { include: { creatives: true } },
@@ -24,6 +118,8 @@ export class ModerationService {
             },
             orderBy: { scheduledAt: 'asc' },
         });
+
+        return targets.map((target) => this.mapTarget(target));
     }
 
     async approve(targetId: string, adminId: string) {
@@ -153,6 +249,6 @@ export class ModerationService {
             metadata: { targetId, reason: reason ?? null },
         });
 
-        return updated;
+        return this.mapTarget(updated);
     }
 }

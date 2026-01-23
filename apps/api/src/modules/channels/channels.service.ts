@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
-import { ChannelStatus, UserRole } from '@prisma/client';
+import { Channel, ChannelStatus, UserRole } from '@prisma/client';
 import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
+import { sanitizeForJson } from '@/common/serialization/sanitize';
 
 @Injectable()
 export class ChannelsService {
@@ -19,6 +20,23 @@ export class ChannelsService {
         } catch {
             throw new BadRequestException('Invalid telegramChannelId');
         }
+    }
+
+    private mapChannel(channel: Channel) {
+        return sanitizeForJson({
+            id: channel.id,
+            telegramChannelId: channel.telegramChannelId,
+            title: channel.title,
+            username: channel.username,
+            category: channel.category,
+            subscriberCount: channel.subscriberCount,
+            avgViews: channel.avgViews,
+            cpm: channel.cpm,
+            status: channel.status,
+            createdAt: channel.createdAt,
+            deletedAt: channel.deletedAt,
+            ownerId: channel.ownerId,
+        });
     }
 
     async createChannel(userId: string, dto: CreateChannelDto) {
@@ -52,14 +70,16 @@ export class ChannelsService {
             },
         });
 
-        return channel;
+        return this.mapChannel(channel);
     }
 
     async listMyChannels(userId: string) {
-        return this.prisma.channel.findMany({
+        const channels = await this.prisma.channel.findMany({
             where: { ownerId: userId },
             orderBy: { createdAt: 'desc' },
         });
+
+        return channels.map((channel) => this.mapChannel(channel));
     }
 
     async requestVerification(channelId: string, userId: string) {
@@ -115,7 +135,7 @@ export class ChannelsService {
             },
         });
 
-        return updated.result;
+        return this.mapChannel(updated.result);
     }
 
     async approveChannel(channelId: string, adminId: string) {
@@ -142,7 +162,7 @@ export class ChannelsService {
             metadata: { channelId },
         });
 
-        return updated;
+        return this.mapChannel(updated);
     }
 
     async rejectChannel(channelId: string, adminId: string, reason?: string) {
@@ -173,6 +193,6 @@ export class ChannelsService {
             metadata: { channelId, reason: reason ?? null },
         });
 
-        return updated;
+        return this.mapChannel(updated);
     }
 }

@@ -3,15 +3,17 @@ import {
     IsNotEmpty,
     IsOptional,
     IsString,
+    IsUUID,
     MaxLength,
     MinLength,
+    ValidateIf,
 } from 'class-validator';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
 import { IsTelegramChannelIdString, TELEGRAM_CHANNEL_ID_EXAMPLE } from '@/common/validators/telegram-channel-id-string.decorator';
 import { IsTelegramUsername, USERNAME_EXAMPLE } from '@/common/validators/telegram-username.decorator';
-import { IsDecimalString } from '@/common/validators/decimal-string.decorator';
+import { IsTelegramIdString, TELEGRAM_ID_EXAMPLE } from '@/common/validators/telegram-id-string.decorator';
 
-export class CreateChannelDto {
+export class AdminCreateChannelDto {
     @ApiProperty({
         example: TELEGRAM_CHANNEL_ID_EXAMPLE,
         description: 'Telegram channel ID starting with -100 and digits only.',
@@ -46,16 +48,25 @@ export class CreateChannelDto {
     @IsTelegramUsername()
     username?: string;
 
-    @IsOptional()
-    @IsString()
-    @IsDecimalString(
-        { precision: 10, scale: 2, min: '0' },
-        { message: 'cpm must be a decimal string with up to 2 decimals' },
-    )
     @ApiPropertyOptional({
-        example: '12.50',
-        description: 'Cost per mille (USD), decimal string.',
-        pattern: '^\\d+(\\.\\d{1,2})?$',
+        example: '4c56e3b8-7d2b-4db8-9b03-2d8b8f4b9f6c',
+        description: 'Publisher user ID (UUID). Required when ownerTelegramId is not provided.',
+        format: 'uuid',
     })
-    cpm?: string;
+    @ValidateIf((o) => !o.ownerTelegramId)
+    @IsUUID()
+    @IsNotEmpty()
+    ownerId?: string;
+
+    @ApiPropertyOptional({
+        example: TELEGRAM_ID_EXAMPLE,
+        description: 'Publisher telegram ID as digits-only string. Required when ownerId is not provided.',
+        pattern: '^\\d+$',
+    })
+    @ValidateIf((o) => !o.ownerId)
+    @TrimString()
+    @IsString()
+    @IsNotEmpty()
+    @IsTelegramIdString()
+    ownerTelegramId?: string;
 }

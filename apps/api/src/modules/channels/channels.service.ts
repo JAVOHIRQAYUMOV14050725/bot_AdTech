@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
+import { AdminCreateChannelDto } from './dto/admin-create-channel.dto';
 import { Channel, ChannelStatus, Prisma, UserRole } from '@prisma/client';
 import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
@@ -15,7 +16,7 @@ export class ChannelsService {
     ) { }
 
     private parseTelegramId(value: string): bigint {
-        if (!value.startsWith('-100')) {
+        if (!/^-\d+$/.test(value) || !value.startsWith('-100')) {
             throw new BadRequestException('Invalid telegramChannelId');
         }
 
@@ -23,6 +24,18 @@ export class ChannelsService {
             return BigInt(value);
         } catch {
             throw new BadRequestException('Invalid telegramChannelId');
+        }
+    }
+
+    private parseTelegramUserId(value: string): bigint {
+        if (!/^\d+$/.test(value)) {
+            throw new BadRequestException('Invalid ownerTelegramId');
+        }
+
+        try {
+            return BigInt(value);
+        } catch {
+            throw new BadRequestException('Invalid ownerTelegramId');
         }
     }
 
@@ -91,9 +104,68 @@ export class ChannelsService {
             });
 
             return this.mapChannel(channel);
-        } catch(e) {
+        } catch (e) {
             if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
                 // unique violation
+                throw new ConflictException('Channel already exists with this telegramChannelId');
+            }
+            throw e;
+        }
+    }
+
+    async createChannelForOwner(adminId: string, dto: AdminCreateChannelDto) {
+        if (dto.ownerId && dto.ownerTelegramId) {
+            throw new BadRequestException('Provide either ownerId or ownerTelegramId');
+        }
+
+        if (!dto.ownerId && !dto.ownerTelegramId) {
+            throw new BadRequestException('Owner is required');
+        }
+
+        const owner = dto.ownerId
+            ? await this.prisma.user.findUnique({
+                where: { id: dto.ownerId },
+                select: { id: true, role: true },
+            })
+            : await this.prisma.user.findUnique({
+                where: { telegramId: this.parseTelegramUserId(dto.ownerTelegramId!) },
+                select: { id: true, role: true },
+            });
+
+        if (!owner) {
+            throw new NotFoundException('Owner not found');
+        }
+
+        if (owner.role !== UserRole.publisher) {
+            throw new BadRequestException('Owner must be a publisher');
+        }
+
+        const telegramChannelId = this.parseTelegramId(dto.telegramChannelId);
+
+        try {
+            const channel = await this.prisma.channel.create({
+                data: {
+                    telegramChannelId,
+                    title: dto.title,
+                    username: dto.username,
+                    ownerId: owner.id,
+                    status: ChannelStatus.pending,
+                },
+            });
+
+            await this.auditService.log({
+                userId: adminId,
+                action: 'admin_channel_created',
+                metadata: {
+                    channelId: channel.id,
+                    ownerId: owner.id,
+                    telegramChannelId: dto.telegramChannelId,
+                },
+            });
+
+            return this.mapChannel(channel);
+        } catch (e) {
+            if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
                 throw new ConflictException('Channel already exists with this telegramChannelId');
             }
             throw e;

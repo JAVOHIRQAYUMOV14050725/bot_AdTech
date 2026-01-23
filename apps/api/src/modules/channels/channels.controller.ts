@@ -20,15 +20,15 @@ import { ChannelResponseDto } from './dto/channel-response.dto';
 @Controller('channels')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.publisher)
-@ApiTags('Channels')
+@ApiTags('Channels (publisher)')
 @ApiBearerAuth()
 export class ChannelsController {
     constructor(private readonly channelsService: ChannelsService) { }
 
     @Post()
     @ApiOperation({
-        summary: 'Create channel',
-        description: 'Create a new channel for the authenticated publisher.',
+        summary: 'Publisher-only: create a channel for the authenticated publisher',
+        description: 'Publisher-only endpoint. Admins should use /api/admin/channels for ops.',
     })
     @ApiCreatedResponse({ type: ChannelResponseDto })
     @ApiStandardErrorResponses()

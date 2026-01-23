@@ -23,7 +23,7 @@ export class RegisterDto {
     @ApiProperty({
         example: TELEGRAM_ID_EXAMPLE,
         description: 'Telegram user ID as digits-only string.',
-        pattern: '^\\d{5,20}$',
+        pattern: '^\\d+$',
     })
     @TrimString()
     @IsString()

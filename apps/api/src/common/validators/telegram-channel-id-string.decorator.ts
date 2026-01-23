@@ -1,6 +1,6 @@
 import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
 
-const TELEGRAM_CHANNEL_ID_REGEX = /^-100\d{5,20}$/;
+const TELEGRAM_CHANNEL_ID_REGEX = /^-100\d+$/;
 
 export const TELEGRAM_CHANNEL_ID_EXAMPLE = '-1001234567890';
 

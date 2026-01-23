@@ -4,10 +4,13 @@ import { LedgerService } from './ledger.service';
 import { WalletService } from './wallet.service';
 import { PaymentsService } from './payments.service';
 import { OpsModule } from '@/modules/ops/ops.module';
+import { PaymentsController } from './payments.controller';
+import { AuthModule } from '../auth/auth.module';
 
 
 @Module({
-    imports: [OpsModule],
+    imports: [OpsModule, AuthModule],
+    controllers: [PaymentsController],
     providers: [
         EscrowService,
         LedgerService,

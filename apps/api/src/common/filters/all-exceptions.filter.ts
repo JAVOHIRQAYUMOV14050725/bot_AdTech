@@ -27,17 +27,47 @@ export class AllExceptionsFilter implements ExceptionFilter {
             ? exception.getResponse()
             : { message: 'Internal server error' };
 
+        const normalizedError = (() => {
+            if (typeof errorResponse === 'string') {
+                return { message: errorResponse };
+            }
+
+            if (Array.isArray(errorResponse)) {
+                return { message: 'Validation failed', details: errorResponse };
+            }
+
+            if (typeof errorResponse === 'object' && errorResponse !== null) {
+                const message = (errorResponse as { message?: unknown }).message;
+                const details = { ...errorResponse };
+                return {
+                    message: Array.isArray(message)
+                        ? 'Validation failed'
+                        : (message as string | undefined) ?? 'Request failed',
+                    details,
+                };
+            }
+
+            return { message: 'Request failed' };
+        })();
+
         const payload = sanitizeForJson({
             statusCode: status,
             timestamp: new Date().toISOString(),
             path: request.originalUrl,
             correlationId: request.correlationId ?? 'n/a',
-            error: errorResponse,
+            error: normalizedError,
         });
 
         const stack = exception instanceof Error ? exception.stack : undefined;
         this.logger.error(
-            `[${request.correlationId ?? 'n/a'}] ${request.method} ${request.originalUrl} ${status}`,
+            {
+                event: 'http_error',
+                correlationId: request.correlationId ?? 'n/a',
+                method: request.method,
+                path: request.originalUrl,
+                statusCode: status,
+                error: normalizedError,
+            },
             stack ?? String(exception),
         );
 

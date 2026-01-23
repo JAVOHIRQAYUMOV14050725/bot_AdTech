@@ -50,7 +50,7 @@ export const sanitizeForJson = <T>(value: T, seen = new WeakMap()): T => {
 
     if (typeof value === 'object') {
         if (seen.has(value as object)) {
-            return seen.get(value as object) as T;
+            return '[Circular]' as T;
         }
 
         if (value instanceof Map) {
@@ -79,4 +79,8 @@ export const sanitizeForJson = <T>(value: T, seen = new WeakMap()): T => {
     }
 
     return value;
+};
+
+export const safeJsonStringify = (value: unknown): string => {
+    return JSON.stringify(sanitizeForJson(value));
 };

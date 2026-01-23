@@ -15,6 +15,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { safeJsonStringify } from '@/common/serialization/sanitize';
 
 @Injectable()
 export class PaymentsService {
@@ -51,6 +52,15 @@ export class PaymentsService {
         const balance = new Prisma.Decimal(wallet.balance ?? 0);
 
         if (!ledgerSum.equals(balance)) {
+            this.logger.error(
+                safeJsonStringify({
+                    event: 'ledger_invariant_violation',
+                    metric: 'ledger_invariant_violation',
+                    walletId,
+                    balance: balance.toFixed(2),
+                    ledger: ledgerSum.toFixed(2),
+                }),
+            );
             throw new ConflictException(
                 `Ledger invariant violated for wallet=${walletId}`,
             );
@@ -174,7 +184,11 @@ export class PaymentsService {
     /**
      * 💰 USER DEPOSIT
      */
-    async deposit(userId: string, amount: Prisma.Decimal) {
+    async deposit(
+        userId: string,
+        amount: Prisma.Decimal,
+        idempotencyKey: string,
+    ) {
         const normalizedAmount = this.normalizeDecimal(amount);
         if (normalizedAmount.lte(0)) {
             throw new BadRequestException('Deposit amount must be positive');
@@ -185,17 +199,29 @@ export class PaymentsService {
                 where: { userId },
             });
 
+            const existing = await tx.ledgerEntry.findUnique({
+                where: { idempotencyKey },
+            });
+            if (existing) {
+                return {
+                    ok: true,
+                    idempotent: true,
+                    idempotencyKey,
+                };
+            }
+
             await this.recordWalletMovement({
                 tx,
                 walletId: wallet.id,
                 amount: normalizedAmount,
                 type: LedgerType.credit,
                 reason: LedgerReason.deposit,
+                idempotencyKey,
                 actor: 'system',
-                correlationId: `deposit:${userId}`,
+                correlationId: `deposit:${userId}:${idempotencyKey}`,
             });
 
-            return { ok: true };
+            return { ok: true, idempotencyKey };
         });
     }
 

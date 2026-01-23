@@ -37,9 +37,14 @@ export class JsonSanitizeInterceptor implements NestInterceptor {
             tap(() => {
                 const duration = Date.now() - start;
                 const correlationId = request.correlationId ?? 'n/a';
-                this.logger.log(
-                    `[${correlationId}] ${request.method} ${request.originalUrl} ${response.statusCode} ${duration}ms`,
-                );
+                this.logger.log({
+                    event: 'http_request',
+                    correlationId,
+                    method: request.method,
+                    path: request.originalUrl,
+                    statusCode: response.statusCode,
+                    durationMs: duration,
+                });
             }),
         );
     }

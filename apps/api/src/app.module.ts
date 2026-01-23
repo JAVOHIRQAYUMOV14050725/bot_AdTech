@@ -20,6 +20,8 @@ import { SchedulerModule } from '@/modules/scheduler/scheduler.module';
 
 import { SystemModule } from '@/modules/system/system.module';
 import { RedisModule } from '@/modules/redis/redis.module';
+import { JwtModule } from '@nestjs/jwt';
+import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
 @Module({
     imports: [
@@ -43,6 +45,9 @@ import { RedisModule } from '@/modules/redis/redis.module';
         SystemModule,
         RedisModule,
         HealthModule,
+        JwtModule
     ],
+    providers: [JwtAuthGuard],
+    exports: [JwtModule,JwtAuthGuard],
 })
 export class AppModule { }

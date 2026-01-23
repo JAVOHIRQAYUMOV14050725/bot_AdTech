@@ -21,16 +21,18 @@ export class SchedulerService {
      * =========================================================
      */
     async enqueuePost(postJobId: string, executeAt: Date) {
+        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
+        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
         await postQueue.add(
             'execute-post',
             { postJobId },
             {
                 jobId: postJobId,
                 delay: Math.max(executeAt.getTime() - Date.now(), 0),
-                attempts: 3,
+                attempts: maxAttempts,
                 backoff: {
                     type: 'exponential',
-                    delay: 5000,
+                    delay: backoffMs,
                 },
                 removeOnComplete: true,
                 removeOnFail: false,
@@ -110,6 +112,44 @@ export class SchedulerService {
                 error: message,
             });
             this.logger.error('[CRON] Ledger invariant failed', message);
+            throw err;
+        }
+    }
+
+    /**
+     * =========================================================
+     * 🧯 STALLED POST JOB RECOVERY
+     * =========================================================
+     */
+    @Cron(CronExpression.EVERY_5_MINUTES)
+    async postJobRecovery() {
+        const enabled = await this.killSwitchService.isEnabled('worker_watchdogs');
+        if (!enabled) {
+            this.logger.warn('[CRON] Post job recovery paused by kill switch');
+            await this.cronStatusService.recordRun({
+                name: 'post_job_recovery',
+                result: 'skipped',
+                error: 'kill_switch_disabled',
+            });
+            return;
+        }
+
+        this.logger.warn('[CRON] Post job recovery triggered');
+        try {
+            await this.systemService.requeueStalledPostJobs();
+            await this.cronStatusService.recordRun({
+                name: 'post_job_recovery',
+                result: 'success',
+            });
+            this.logger.log('[CRON] Post job recovery completed');
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await this.cronStatusService.recordRun({
+                name: 'post_job_recovery',
+                result: 'failed',
+                error: message,
+            });
+            this.logger.error('[CRON] Post job recovery failed', message);
             throw err;
         }
     }

@@ -21,6 +21,7 @@ import {
     assertEscrowTransition,
     assertPostJobOutcomeForEscrow,
 } from '@/modules/lifecycle/lifecycle';
+import { safeJsonStringify } from '@/common/serialization/sanitize';
 
 @Injectable()
 export class EscrowService {
@@ -130,7 +131,7 @@ export class EscrowService {
             const expectedTotal = payoutAmount.add(commissionAmount);
             if (!expectedTotal.equals(total)) {
                 this.logger.error(
-                    JSON.stringify({
+                    safeJsonStringify({
                         event: 'escrow_amount_mismatch',
                         campaignTargetId,
                         escrowAmount: total.toFixed(2),
@@ -157,7 +158,7 @@ export class EscrowService {
                 !new Prisma.Decimal(holdLedger.amount).abs().equals(total)
             ) {
                 this.logger.error(
-                    JSON.stringify({
+                    safeJsonStringify({
                         event: 'escrow_hold_ledger_mismatch',
                         campaignTargetId,
                         escrowAmount: total.toFixed(2),
@@ -243,7 +244,7 @@ export class EscrowService {
             }
 
             this.logger.warn(
-                JSON.stringify({
+                safeJsonStringify({
                     event: 'escrow_released',
                     campaignTargetId,
                     escrowId: escrow.id,
@@ -377,7 +378,7 @@ export class EscrowService {
             );
 
             this.logger.warn(
-                JSON.stringify({
+                safeJsonStringify({
                     event: 'escrow_refunded',
                     campaignTargetId,
                     escrowId: escrow.id,

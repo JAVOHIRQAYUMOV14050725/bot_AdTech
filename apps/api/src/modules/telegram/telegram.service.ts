@@ -121,8 +121,41 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return { id: me.id, username: me.username };
     }
 
+    private async withTelegramRetry<T>(action: string, fn: () => Promise<T>): Promise<T> {
+        const maxAttempts = Number(process.env.TELEGRAM_SEND_MAX_ATTEMPTS ?? 3);
+        const baseDelayMs = Number(process.env.TELEGRAM_SEND_BASE_DELAY_MS ?? 1000);
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+                return await fn();
+            } catch (err) {
+                const retryAfterSeconds =
+                    (err as { response?: { parameters?: { retry_after?: number } } })?.response?.parameters?.retry_after ??
+                    (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after;
+
+                if (attempt === maxAttempts) {
+                    throw err;
+                }
+
+                const backoffMs =
+                    typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
+                        ? retryAfterSeconds * 1000
+                        : baseDelayMs * 2 ** (attempt - 1);
+                this.logger.warn(
+                    `${action} failed (attempt ${attempt}/${maxAttempts}), retrying in ${backoffMs}ms`,
+                );
+                await new Promise((r) => setTimeout(r, backoffMs));
+            }
+        }
+
+        throw new Error(`${action} failed`);
+    }
+
     async isBotAdmin(channelId: string): Promise<boolean> {
-        const admins = await this.bot.telegram.getChatAdministrators(channelId);
+        const admins = await this.withTelegramRetry(
+            'getChatAdministrators',
+            () => this.bot.telegram.getChatAdministrators(channelId),
+        );
         const botId = await this.getBotId();
         return admins.some((admin) => admin.user.id === botId);
     }
@@ -138,8 +171,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         if (!postJob) throw new Error('PostJob not found');
 
+        if (postJob.telegramMessageId) {
+            return {
+                ok: true,
+                telegramMessageId: bigintToSafeNumber(
+                    postJob.telegramMessageId,
+                    'telegramMessageId',
+                ),
+            };
+        }
+
         const existingExecution = postJob.executions.find((e) => e.telegramMessageId);
         if (existingExecution?.telegramMessageId) {
+            if (!postJob.telegramMessageId) {
+                await this.prisma.postJob.update({
+                    where: { id: postJobId },
+                    data: { telegramMessageId: existingExecution.telegramMessageId },
+                });
+            }
             return {
                 ok: true,
                 telegramMessageId: bigintToSafeNumber(existingExecution.telegramMessageId, 'telegramMessageId'),

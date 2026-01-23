@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, LogLevel, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import compression from 'compression';
 import { startPostWorker } from '@/modules/scheduler/workers/post.worker';
@@ -12,13 +12,34 @@ import { RedisService } from '@/modules/redis/redis.service';
 import { JsonSanitizeInterceptor } from '@/common/interceptors/json-sanitize.interceptor';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
+import { StructuredLogger } from '@/common/logging/structured-logger.service';
 
 console.log('Starting API...');
 async function bootstrap() {
+    const allowedLevels: LogLevel[] = [
+        'log',
+        'error',
+        'warn',
+        'debug',
+        'verbose',
+    ];
+    const configuredLevels = process.env.LOG_LEVEL?.split(',')
+        .map((level) => level.trim())
+        .filter((level) => allowedLevels.includes(level as LogLevel)) as
+        | LogLevel[]
+        | undefined;
+    const logger = new StructuredLogger(
+        configuredLevels && configuredLevels.length > 0
+            ? configuredLevels
+            : undefined,
+    );
+    Logger.overrideLogger(logger);
     const workerMode = process.env.WORKER_MODE === 'true';
 
     if (workerMode) {
-        const app = await NestFactory.createApplicationContext(AppModule);
+        const app = await NestFactory.createApplicationContext(AppModule, {
+            logger,
+        });
         const prisma = app.get(PrismaService);
         const escrowService = app.get(EscrowService);
         const telegramService = app.get(TelegramService);
@@ -37,7 +58,9 @@ async function bootstrap() {
         return;
     }
 
-    const app = await NestFactory.create(AppModule);
+    const app = await NestFactory.create(AppModule, {
+        logger,
+    });
 
     app.use(helmet());
     app.use(compression());

@@ -81,12 +81,42 @@ export class HealthService {
                 `,
             );
             const exists = result?.[0]?.exists ?? false;
-            return exists
-                ? { status: 'ok' }
-                : {
+            if (!exists) {
+                return {
                     status: 'failed',
                     details: { error: 'kill_switches table missing' },
                 };
+            }
+
+            const columns = await prisma.$queryRaw<{ column_name: string }[]>(
+                Prisma.sql`
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'post_jobs';
+                `,
+            );
+            const columnSet = new Set(columns.map((row) => row.column_name));
+            const requiredColumns = [
+                'sendingAt',
+                'lastAttemptAt',
+                'telegramMessageId',
+            ];
+            const missingColumns = requiredColumns.filter(
+                (column) => !columnSet.has(column),
+            );
+
+            if (missingColumns.length > 0) {
+                return {
+                    status: 'failed',
+                    details: {
+                        error: 'post_jobs schema mismatch',
+                        missingColumns,
+                    },
+                };
+            }
+
+            return { status: 'ok' };
         } catch (err) {
             return {
                 status: 'failed',

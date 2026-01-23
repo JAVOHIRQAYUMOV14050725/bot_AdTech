@@ -22,7 +22,8 @@ export class AuthService {
     }
 
     async register(dto: RegisterDto) {
-        if (!PUBLIC_ROLES.includes(dto.role)) {
+        const role = dto.role ?? UserRole.publisher;
+        if (!PUBLIC_ROLES.includes(role)) {
             throw new BadRequestException('Invalid role for registration');
         }
 
@@ -43,7 +44,7 @@ export class AuthService {
                 data: {
                     telegramId,
                     username: dto.username,
-                    role: dto.role,
+                    role,
                     status: UserStatus.active,
                     passwordHash,
                 },
@@ -62,7 +63,7 @@ export class AuthService {
                     userId: created.id,
                     action: 'user_registered',
                     metadata: {
-                        role: dto.role,
+                        role,
                     },
                 },
             });

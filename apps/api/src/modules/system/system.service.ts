@@ -309,6 +309,28 @@ export class SystemService {
      * 🧹 POST JOB STALL RECOVERY
      * =========================================================
      */
+    async checkPostJobSchema() {
+        const result = await this.prisma.$queryRaw<{ column_name: string }[]>(
+            Prisma.sql`
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'post_jobs';
+            `,
+        );
+
+        const columns = new Set(result.map((row) => row.column_name));
+        const requiredColumns = ['sendingAt', 'lastAttemptAt', 'telegramMessageId'];
+        const missingColumns = requiredColumns.filter(
+            (column) => !columns.has(column),
+        );
+
+        return {
+            ok: missingColumns.length === 0,
+            missingColumns,
+        };
+    }
+
     async requeueStalledPostJobs() {
         const stalledMinutes = Number(
             process.env.POST_JOB_STALLED_MINUTES ?? 15,

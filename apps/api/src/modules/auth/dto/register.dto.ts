@@ -44,14 +44,16 @@ export class RegisterDto {
     @IsNotEmpty()
     password!: string;
 
-    @ApiProperty({
+    @ApiPropertyOptional({
         enum: PUBLIC_ROLES,
-        description: 'Role for registration.',
-        example: UserRole.advertiser,
+        description: 'Role for registration (defaults to publisher).',
+        example: UserRole.publisher,
+        default: UserRole.publisher,
     })
+    @IsOptional()
     @IsEnum(UserRole)
     @IsIn(PUBLIC_ROLES)
-    role!: PublicRole;
+    role?: PublicRole;
 
     @ApiPropertyOptional({
         example: USERNAME_EXAMPLE,

@@ -16,6 +16,9 @@ import {
     Prisma,
 } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
+import { safeJsonStringify } from '@/common/serialization/sanitize';
+import { postQueue } from '@/modules/scheduler/queues';
+import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
     if (value === null) {
@@ -216,7 +219,7 @@ export class SystemService {
 
             if (!ledgerSum.equals(balance)) {
                 this.logger.error(
-                    JSON.stringify({
+                    safeJsonStringify({
                         event: 'ledger_invariant_violation',
                         walletId: wallet.id,
                         balance: balance.toFixed(2),
@@ -289,7 +292,7 @@ export class SystemService {
         });
 
         this.logger.warn(
-            JSON.stringify({
+            safeJsonStringify({
                 event: 'kill_switch_update',
                 key,
                 enabled,
@@ -301,6 +304,148 @@ export class SystemService {
         return result;
     }
 
+    /**
+     * =========================================================
+     * 🧹 POST JOB STALL RECOVERY
+     * =========================================================
+     */
+    async requeueStalledPostJobs() {
+        const stalledMinutes = Number(
+            process.env.POST_JOB_STALLED_MINUTES ?? 15,
+        );
+        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
+        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
+        const cutoff = new Date(Date.now() - stalledMinutes * 60 * 1000);
+
+        const stalledJobs = await this.prisma.postJob.findMany({
+            where: {
+                status: PostJobStatus.sending,
+                sendingAt: { lt: cutoff },
+            },
+            include: {
+                executions: true,
+            },
+            take: 50,
+        });
+
+        for (const job of stalledJobs) {
+            const hasExecution = job.executions.some(
+                (execution) => execution.telegramMessageId,
+            );
+
+            try {
+                if (hasExecution) {
+                    await this.prisma.$transaction(async (tx) => {
+                        assertPostJobTransition({
+                            postJobId: job.id,
+                            from: job.status,
+                            to: PostJobStatus.success,
+                            actor: 'system',
+                            correlationId: job.id,
+                        });
+
+                        await tx.postJob.update({
+                            where: { id: job.id },
+                            data: {
+                                status: PostJobStatus.success,
+                                sendingAt: null,
+                                telegramMessageId:
+                                    job.executions.find(
+                                        (execution) => execution.telegramMessageId,
+                                    )?.telegramMessageId ?? null,
+                            },
+                        });
+
+                        await this.escrowService.release(job.campaignTargetId, {
+                            transaction: tx,
+                            actor: 'system',
+                            correlationId: job.id,
+                        });
+                    });
+                    continue;
+                }
+
+                if (job.attempts >= maxAttempts) {
+                    await this.prisma.$transaction(async (tx) => {
+                        assertPostJobTransition({
+                            postJobId: job.id,
+                            from: job.status,
+                            to: PostJobStatus.failed,
+                            actor: 'system',
+                            correlationId: job.id,
+                        });
+
+                        await tx.postJob.update({
+                            where: { id: job.id },
+                            data: {
+                                status: PostJobStatus.failed,
+                                sendingAt: null,
+                                lastError: 'stalled_max_attempts',
+                            },
+                        });
+
+                        await this.escrowService.refund(job.campaignTargetId, {
+                            reason: 'stalled_max_attempts',
+                            transaction: tx,
+                            actor: 'system',
+                            correlationId: job.id,
+                        });
+                    });
+                    continue;
+                }
+
+                await this.prisma.postJob.update({
+                    where: { id: job.id },
+                    data: {
+                        status: PostJobStatus.queued,
+                        sendingAt: null,
+                        executeAt: new Date(Date.now() + backoffMs),
+                        lastError: 'stalled_requeued',
+                    },
+                });
+
+                try {
+                    await postQueue.add(
+                        'execute-post',
+                        { postJobId: job.id },
+                        {
+                            jobId: job.id,
+                            delay: backoffMs,
+                            attempts: maxAttempts,
+                            backoff: {
+                                type: 'exponential',
+                                delay: backoffMs,
+                            },
+                            removeOnComplete: true,
+                            removeOnFail: false,
+                        },
+                    );
+                } catch (enqueueError) {
+                    this.logger.warn(
+                        safeJsonStringify({
+                            event: 'post_job_requeue_skipped',
+                            postJobId: job.id,
+                            reason: 'already_queued',
+                            error: enqueueError instanceof Error
+                                ? enqueueError.message
+                                : String(enqueueError),
+                        }),
+                    );
+                }
+            } catch (err) {
+                this.logger.error(
+                    safeJsonStringify({
+                        event: 'post_job_requeue_failed',
+                        postJobId: job.id,
+                        error: err instanceof Error ? err.message : String(err),
+                    }),
+                );
+            }
+        }
+
+        return { checked: stalledJobs.length };
+    }
+
     async runRevenueReconciliation(params?: {
         mode?: ReconciliationMode;
         actorUserId?: string;
@@ -310,7 +455,7 @@ export class SystemService {
         const correlationId = params?.correlationId ?? `recon:${Date.now()}`;
 
         this.logger.warn(
-            JSON.stringify({
+            safeJsonStringify({
                 event: 'reconciliation_requested',
                 mode,
                 actorUserId: params?.actorUserId ?? null,
@@ -342,7 +487,7 @@ export class SystemService {
                 ledgerTotal: ledgerTotal.toFixed(2),
                 correlationId,
             };
-            this.logger.error(JSON.stringify(payload));
+            this.logger.error(safeJsonStringify(payload));
             discrepancies.push(payload);
         }
 
@@ -369,7 +514,7 @@ export class SystemService {
                 payoutTotal: payoutTotal.toFixed(2),
                 correlationId,
             };
-            this.logger.error(JSON.stringify(payload));
+            this.logger.error(safeJsonStringify(payload));
             discrepancies.push(payload);
         }
 
@@ -397,7 +542,7 @@ export class SystemService {
                 escrows: staleEscrows,
                 correlationId,
             };
-            this.logger.error(JSON.stringify(payload));
+            this.logger.error(safeJsonStringify(payload));
             discrepancies.push(payload);
         }
 
@@ -434,13 +579,13 @@ export class SystemService {
                 targets: postedWithoutRelease,
                 correlationId,
             };
-            this.logger.error(JSON.stringify(payload));
+            this.logger.error(safeJsonStringify(payload));
             discrepancies.push(payload);
         }
 
         if (mode === ReconciliationMode.FIX) {
             this.logger.warn(
-                JSON.stringify({
+                safeJsonStringify({
                     event: 'reconciliation_fix_requested',
                     correlationId,
                     actorUserId: params?.actorUserId ?? null,

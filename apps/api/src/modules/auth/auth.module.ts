@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PrismaModule } from '@/prisma/prisma.module';
+import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
 
 @Module({
     imports: [
@@ -24,7 +25,7 @@ import { PrismaModule } from '@/prisma/prisma.module';
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtAuthGuard],
+    providers: [AuthService, JwtAuthGuard, AuthRateLimitGuard],
     exports: [AuthService, JwtModule, JwtAuthGuard],
 })
 export class AuthModule { }

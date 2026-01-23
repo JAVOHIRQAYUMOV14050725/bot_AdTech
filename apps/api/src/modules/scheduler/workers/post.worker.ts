@@ -9,6 +9,7 @@ import { postDlq, redisConnection } from '../queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { KillSwitchKey, PostJobStatus } from '@prisma/client';
 import { RedisService } from '@/modules/redis/redis.service';
+import { runWithCorrelationId } from '@/common/logging/correlation-id.store';
 
 export function startPostWorker(
     prisma: PrismaService,
@@ -45,12 +46,20 @@ export function startPostWorker(
     }, heartbeatIntervalMs);
     const worker = new Worker(
         'post-queue',
-        async (job) => {
+        async (job) => runWithCorrelationId(job.data?.postJobId, async () => {
             const { postJobId } = job.data;
+            const now = new Date();
+            const maxAttempts = job.opts.attempts
+                ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
 
             const reservation = await prisma.postJob.updateMany({
                 where: { id: postJobId, status: PostJobStatus.queued },
-                data: { status: PostJobStatus.sending },
+                data: {
+                    status: PostJobStatus.sending,
+                    sendingAt: now,
+                    lastAttemptAt: now,
+                    attempts: { increment: 1 },
+                },
             });
 
             if (reservation.count === 0) {
@@ -113,7 +122,13 @@ export function startPostWorker(
 
                     await tx.postJob.update({
                         where: { id: postJob.id },
-                        data: { status: PostJobStatus.success },
+                        data: {
+                            status: PostJobStatus.success,
+                            sendingAt: null,
+                            telegramMessageId: telegramResult.telegramMessageId
+                                ? BigInt(telegramResult.telegramMessageId)
+                                : null,
+                        },
                     });
 
                     await escrowService.release(postJob.campaignTargetId, {
@@ -128,12 +143,14 @@ export function startPostWorker(
                     telegramMessageId: telegramResult.telegramMessageId,
                 };
             } catch (err) {
-                // ❌ FAILED FLOW (ATOMIC)
+                const attemptsMade = job.attemptsMade + 1;
+                const shouldRetry = attemptsMade < maxAttempts;
+
                 await prisma.$transaction(async (tx) => {
                     assertPostJobTransition({
                         postJobId: postJob.id,
                         from: postJob.status,
-                        to: PostJobStatus.failed,
+                        to: shouldRetry ? PostJobStatus.queued : PostJobStatus.failed,
                         actor: 'worker',
                         correlationId: postJob.id,
                     });
@@ -141,24 +158,28 @@ export function startPostWorker(
                     await tx.postJob.update({
                         where: { id: postJob.id },
                         data: {
-                            status: PostJobStatus.failed,
-                            attempts: { increment: 1 },
+                            status: shouldRetry
+                                ? PostJobStatus.queued
+                                : PostJobStatus.failed,
                             lastError:
                                 err instanceof Error ? err.message : String(err),
+                            sendingAt: null,
                         },
                     });
 
-                    await escrowService.refund(postJob.campaignTargetId, {
-                        reason: 'post_failed',
-                        transaction: tx,
-                        actor: 'worker',
-                        correlationId: postJob.id,
-                    });
+                    if (!shouldRetry) {
+                        await escrowService.refund(postJob.campaignTargetId, {
+                            reason: 'post_failed',
+                            transaction: tx,
+                            actor: 'worker',
+                            correlationId: postJob.id,
+                        });
+                    }
                 });
 
                 throw err;
             }
-        },
+        }),
         {
             connection: redisConnection,
             concurrency: 5,

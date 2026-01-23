@@ -9,6 +9,7 @@ export const envSchema = z.object({
     DATABASE_URL: z.string().min(1),
     REDIS_HOST: z.string().min(1),
     REDIS_PORT: z.coerce.number().int().positive(),
+    REDIS_PASSWORD: z.string().optional(),
     JWT_SECRET: z.string().min(16),
     JWT_EXPIRES_IN: z.string().min(1).default('1d'),
     TELEGRAM_BOT_TOKEN: z.string().min(1),
@@ -17,6 +18,15 @@ export const envSchema = z.object({
     TELEGRAM_SEND_BASE_DELAY_MS: z.coerce.number().int().positive().default(1000),
     WORKER_MODE: booleanString.default('false'),
     WORKER_AUTOSTART: booleanString.default('false'),
+    AUTH_RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(5),
+    AUTH_RATE_LIMIT_TTL_MS: z.coerce.number().int().positive().default(60000),
+    POST_JOB_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+    POST_JOB_RETRY_BACKOFF_MS: z.coerce.number().int().positive().default(5000),
+    POST_JOB_STALLED_MINUTES: z.coerce.number().int().positive().default(15),
+    SUPER_ADMIN_TELEGRAM_ID: z.string().optional(),
+    SUPER_ADMIN_USERNAME: z.string().optional(),
+    SUPER_ADMIN_PASSWORD: z.string().optional(),
+    LOG_LEVEL: z.string().optional(),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
-import { Channel, ChannelStatus, UserRole } from '@prisma/client';
+import { Channel, ChannelStatus, Prisma, UserRole } from '@prisma/client';
 import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
@@ -15,11 +15,28 @@ export class ChannelsService {
     ) { }
 
     private parseTelegramId(value: string): bigint {
+        if (!value.startsWith('-100')) {
+            throw new BadRequestException('Invalid telegramChannelId');
+        }
+
         try {
             return BigInt(value);
         } catch {
             throw new BadRequestException('Invalid telegramChannelId');
         }
+    }
+
+    private parseCpm(value?: string): Prisma.Decimal | undefined {
+        if (value === undefined) {
+            return undefined;
+        }
+
+        const decimal = new Prisma.Decimal(value);
+        if (decimal.isNeg()) {
+            throw new BadRequestException('cpm must be positive');
+        }
+
+        return decimal;
     }
 
     private mapChannel(channel: Channel) {
@@ -50,6 +67,7 @@ export class ChannelsService {
         }
 
         const telegramChannelId = this.parseTelegramId(dto.telegramChannelId);
+        const cpm = this.parseCpm(dto.cpm);
 
         const channel = await this.prisma.channel.create({
             data: {
@@ -58,6 +76,7 @@ export class ChannelsService {
                 username: dto.username,
                 ownerId: userId,
                 status: ChannelStatus.pending,
+                cpm,
             },
         });
 

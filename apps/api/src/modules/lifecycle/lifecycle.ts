@@ -9,6 +9,7 @@ import {
     EscrowStatus,
     PostJobStatus,
 } from '@prisma/client';
+import { safeJsonStringify } from '@/common/serialization/sanitize';
 
 export type TransitionActor = 'system' | 'worker' | 'admin' | 'advertiser';
 
@@ -82,6 +83,7 @@ const postJobTransitions: TransitionMap<PostJobStatus> = {
     [PostJobStatus.sending]: {
         [PostJobStatus.success]: { actors: ['worker', 'system'] },
         [PostJobStatus.failed]: { actors: ['worker', 'system'] },
+        [PostJobStatus.queued]: { actors: ['worker', 'system'] },
     },
     [PostJobStatus.success]: {},
     [PostJobStatus.failed]: {
@@ -142,7 +144,7 @@ function assertTransition<S extends string>({
     }
 
     logger.log(
-        JSON.stringify({
+        safeJsonStringify({
             event: 'state_transition',
             entity,
             id,

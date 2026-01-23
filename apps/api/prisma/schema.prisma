@@ -278,6 +278,9 @@ model PostJob {
   campaignTargetId String @unique
 
   executeAt DateTime
+  sendingAt DateTime?
+  lastAttemptAt DateTime?
+  telegramMessageId BigInt?
   attempts  Int           @default(0)
   status    PostJobStatus @default(queued)
   lastError String?
@@ -286,6 +289,7 @@ model PostJob {
   executions     PostExecutionLog[]
 
   @@index([executeAt, status])
+  @@index([status, sendingAt])
   @@map("post_jobs")
 }
 

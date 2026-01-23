@@ -5,6 +5,7 @@ import {
     Logger,
     ServiceUnavailableException,
 } from '@nestjs/common';
+import { safeJsonStringify } from '@/common/serialization/sanitize';
 
 @Injectable()
 export class KillSwitchService {
@@ -63,7 +64,7 @@ export class KillSwitchService {
         const enabled = await this.isEnabled(params.key);
         if (!enabled) {
             this.logger.error(
-                JSON.stringify({
+                safeJsonStringify({
                     event: 'kill_switch_blocked',
                     key: params.key,
                     reason: params.reason,

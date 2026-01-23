@@ -14,8 +14,8 @@ import { IsDecimalString } from '@/common/validators/decimal-string.decorator';
 export class CreateChannelDto {
     @ApiProperty({
         example: TELEGRAM_CHANNEL_ID_EXAMPLE,
-        description: 'Telegram channel ID starting with -100 and digits only.',
-        pattern: '^-100\\d+$',
+        description: 'This must be the REAL Telegram channel id (not @username or invite link), starting with -100.',
+        pattern: '^-100\\d{5,}$',
     })
     @TrimString()
     @IsString()

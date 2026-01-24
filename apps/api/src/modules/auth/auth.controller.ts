@@ -8,9 +8,10 @@ import { Actor } from './decorators/actor.decorator';
 import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';
 import { AuthResponseDto, MeResponseDto } from './dto/auth-response.dto';
+import { RegisterResponseDto } from './dto/register-response.dto';
+import { RefreshDto } from './dto/refresh.dto';
 
 // DTO qo'sh (oddiy)
-class RefreshDto { refreshToken!: string; }
 class ResetPasswordDto { telegramId!: string; newPassword!: string; }
 
 @Controller('auth')
@@ -21,7 +22,7 @@ export class AuthController {
     @Post('register')
     @UseGuards(AuthRateLimitGuard)
     @ApiOperation({ summary: 'Register new user' })
-    @ApiCreatedResponse({ type: AuthResponseDto })
+    @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
     register(@Body() dto: RegisterDto) {
         return this.authService.register(dto);

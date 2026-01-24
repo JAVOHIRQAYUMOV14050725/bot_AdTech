@@ -32,8 +32,9 @@ async function seedSuperAdmin() {
     const telegramIdRaw = process.env.SUPER_ADMIN_TELEGRAM_ID;
     const password = process.env.SUPER_ADMIN_PASSWORD;
     const username = process.env.SUPER_ADMIN_USERNAME;
+    const bootstrapToken = process.env.SUPER_ADMIN_BOOTSTRAP_TOKEN;
 
-    if (!telegramIdRaw || !password) {
+    if (!telegramIdRaw || !password || !bootstrapToken) {
         return;
     }
 
@@ -55,6 +56,7 @@ async function seedSuperAdmin() {
             role: UserRole.super_admin,
             status: UserStatus.active,
             passwordHash,
+            passwordUpdatedAt: new Date(),
         },
     });
 

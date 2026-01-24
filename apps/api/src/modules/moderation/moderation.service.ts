@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { SchedulerService } from '@/modules/scheduler/scheduler.service';
@@ -12,6 +12,7 @@ import {
     CampaignTargetStatus,
     PostJob,
     PostJobStatus,
+    ChannelStatus,
 } from '@prisma/client';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 
@@ -251,4 +252,57 @@ export class ModerationService {
 
         return this.mapTarget(updated);
     }
+
+    async submitTarget(campaignId: string, targetId: string, advertiserId: string) {
+        const target = await this.prisma.campaignTarget.findUnique({
+            where: { id: targetId },
+            include: {
+                campaign: { include: { creatives: true } },
+                channel: true,
+            },
+        });
+
+        if (!target || target.campaignId !== campaignId) {
+            throw new NotFoundException('Campaign target not found');
+        }
+
+        if (target.campaign.advertiserId !== advertiserId) {
+            throw new ForbiddenException('Not your campaign');
+        }
+
+        if (target.status !== CampaignTargetStatus.pending) {
+            throw new BadRequestException(`Target cannot be submitted from status ${target.status}`);
+        }
+
+        if (target.channel.status !== ChannelStatus.approved) {
+            throw new BadRequestException('Channel is not approved');
+        }
+
+        if (!target.campaign.creatives?.length) {
+            throw new BadRequestException('Campaign has no creatives');
+        }
+
+        if (target.scheduledAt.getTime() < Date.now() + 30_000) {
+            throw new BadRequestException('scheduledAt must be in the future');
+        }
+
+        assertCampaignTargetTransition({
+            campaignTargetId: targetId,
+            from: target.status,
+            to: CampaignTargetStatus.submitted,
+            actor: 'advertiser',
+            correlationId: targetId,
+        });
+
+        return this.prisma.campaignTarget.update({
+            where: { id: targetId },
+            data: {
+                status: CampaignTargetStatus.submitted,
+                moderatedBy: null,
+                moderatedAt: null,
+                moderationReason: null,
+            },
+        });
+    }
+
 }

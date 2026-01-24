@@ -18,6 +18,7 @@ import {
     ModerationApproveResponseDto,
     ModerationTargetDto,
 } from './dto/moderation-response.dto';
+import { CampaignsService } from '../campaigns/campaigns.service';
 
 @Controller('admin/moderation')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -25,7 +26,9 @@ import {
 @ApiTags('Moderation')
 @ApiBearerAuth()
 export class ModerationController {
-    constructor(private readonly moderationService: ModerationService) { }
+    constructor(private readonly moderationService: ModerationService,
+        private readonly campaignsService: CampaignsService
+    ) { }
 
     @Get('pending')
     @ApiOperation({
@@ -75,5 +78,20 @@ export class ModerationController {
         @Body() dto: ModerationDecisionDto,
     ) {
         return this.moderationService.reject(targetId, actor.id, dto.reason);
+    }
+
+    @Post(':campaignId/targets/:targetId/submit')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.advertiser)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Submit campaign target for moderation' })
+    @ApiParam({ name: 'campaignId', format: 'uuid' })
+    @ApiParam({ name: 'targetId', format: 'uuid' })
+    submitTarget(
+        @Param('campaignId', ParseUUIDPipe) campaignId: string,
+        @Param('targetId', ParseUUIDPipe) targetId: string,
+        @Actor() actor: { id: string },
+    ) {
+        return this.campaignsService.submitTarget(campaignId, targetId, actor.id);
     }
 }

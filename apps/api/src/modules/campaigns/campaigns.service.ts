@@ -183,7 +183,7 @@ export class CampaignsService {
         return this.mapTarget(target);
     }
 
-    async submitTarget(targetId: string, userId: string) {
+    async submitTarget(targetId: string, userId: string, id: string) {
         const target = await this.prisma.campaignTarget.findUnique({
             where: { id: targetId },
             include: { campaign: true },

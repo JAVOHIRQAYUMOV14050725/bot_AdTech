@@ -32,6 +32,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly bot: Telegraf<Context>;
     private started = false;
     private botId?: number;
+    
+    
 
     constructor(
         private readonly prisma: PrismaService,
@@ -43,18 +45,31 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     async onModuleInit() {
+        // faqat dev/testda
+        if (process.env.TELEGRAM_STARTUP_TEST === 'true') {
+            void this.sendTestToMyChannel();
+        }
+
         this.registerAdminCommands();
 
-        // ✅ API start bloklanmasin
         const autostart = process.env.TELEGRAM_AUTOSTART === 'true';
         if (!autostart) {
             this.logger.warn('Telegram autostart disabled (set TELEGRAM_AUTOSTART=true to enable)');
             return;
         }
 
-        // ✅ await qilmaymiz — Nest HTTP server ochilib ketadi
         void this.startBot();
     }
+
+    private async sendTestToMyChannel() {
+        const channel = process.env.TELEGRAM_TEST_CHANNEL;
+        if (!channel) {
+            this.logger.warn('TELEGRAM_TEST_CHANNEL not set, skipping startup test');
+            return;
+        }
+        await this.bot.telegram.sendMessage(channel, '✅ bot startup test');
+    }
+
 
     async onModuleDestroy() {
         if (!this.started) return;
@@ -66,8 +81,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
     }
 
+   
+
     private async startBot() {
         if (this.started) return;
+
+        // ✅ Debug: real channel id ni olish (dev-only)
+        if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG === 'true') {
+            this.bot.on('channel_post', (ctx) => {
+                const chat: any = ctx.chat;
+                this.logger.warn(`[CHANNEL_POST DEBUG] id=${chat?.id} title=${chat?.title ?? ''} username=@${chat?.username ?? ''}`);
+            });
+        }
+
         try {
             this.logger.log('Launching Telegram bot...');
             await this.bot.launch({ dropPendingUpdates: true });
@@ -79,6 +105,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             );
         }
     }
+
+
+ 
 
     // ===============================
     // ADMIN COMMAND ROUTER

@@ -5,6 +5,7 @@ import { PUBLIC_ROLES, RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { UserRole, UserStatus } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
 
 const ms = (val: string) => val; // placeholder; expiresIn jwt format bo'ladi: "15m", "30d"
 
@@ -104,6 +105,73 @@ export class AuthService {
        
         return {
                 user: {
+                id: user.id,
+                telegramId: user.telegramId.toString(),
+                role: user.role,
+                username: user.username,
+            },
+        };
+    }
+
+    async bootstrapSuperAdmin(dto: BootstrapSuperAdminDto) {
+        const bootstrapSecret = process.env.SUPER_ADMIN_BOOTSTRAP_SECRET;
+        if (!bootstrapSecret) {
+            throw new BadRequestException('Bootstrap secret not configured');
+        }
+
+        if (dto.bootstrapSecret !== bootstrapSecret) {
+            throw new ForbiddenException('Invalid bootstrap secret');
+        }
+
+        const existingSuperAdmin = await this.prisma.user.findFirst({
+            where: { role: UserRole.super_admin },
+            select: { id: true },
+        });
+
+        if (existingSuperAdmin) {
+            throw new BadRequestException('Super admin already exists');
+        }
+
+        const telegramId = this.parseTelegramId(dto.telegramId);
+        const existing = await this.prisma.user.findUnique({
+            where: { telegramId },
+            select: { id: true },
+        });
+        if (existing) {
+            throw new BadRequestException('User already exists');
+        }
+
+        const passwordHash = await bcrypt.hash(dto.password, 10);
+
+        const user = await this.prisma.$transaction(async (tx) => {
+            const created = await tx.user.create({
+                data: {
+                    telegramId,
+                    username: dto.username,
+                    role: UserRole.super_admin,
+                    status: UserStatus.active,
+                    passwordHash,
+                    passwordUpdatedAt: new Date(),
+                },
+            });
+
+            await tx.wallet.create({
+                data: { userId: created.id, balance: 0, currency: 'USD' },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: created.id,
+                    action: 'super_admin_bootstrap',
+                    metadata: { via: 'bootstrap_secret' },
+                },
+            });
+
+            return created;
+        });
+
+        return {
+            user: {
                 id: user.id,
                 telegramId: user.telegramId.toString(),
                 role: user.role,

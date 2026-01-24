@@ -2,6 +2,7 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import {
     CampaignTargetStatus,
+    CampaignStatus,
     EscrowStatus,
     KillSwitchKey,
     LedgerReason,
@@ -289,6 +290,12 @@ export class PaymentsService {
                 );
             }
 
+            if (target.campaign.status !== CampaignStatus.active) {
+                throw new ConflictException(
+                    `Campaign ${target.campaignId} is not active`,
+                );
+            }
+
             const advertiserWallet = target.campaign.advertiser.wallet;
             const publisherWallet = target.channel.owner.wallet;
 
@@ -297,6 +304,14 @@ export class PaymentsService {
             }
 
             const amount = this.normalizeDecimal(target.price);
+            const totalBudget = this.normalizeDecimal(target.campaign.totalBudget);
+            const spentBudget = this.normalizeDecimal(target.campaign.spentBudget ?? new Prisma.Decimal(0));
+            const remainingBudget = totalBudget.sub(spentBudget);
+            if (remainingBudget.lt(amount)) {
+                throw new ConflictException(
+                    `Campaign ${target.campaignId} budget exceeded`,
+                );
+            }
 
             await this.recordWalletMovement({
                 tx,

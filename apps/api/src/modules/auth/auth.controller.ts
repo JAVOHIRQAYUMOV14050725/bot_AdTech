@@ -10,9 +10,11 @@ import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-r
 import { AuthResponseDto, MeResponseDto } from './dto/auth-response.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
 import { RefreshDto } from './dto/refresh.dto';
-
-// DTO qo'sh (oddiy)
-class ResetPasswordDto { telegramId!: string; newPassword!: string; }
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
+import { RolesGuard } from './guards/roles.guard';
+import { Roles } from './decorators/roles.decorator';
+import { UserRole } from '@prisma/client';
 
 @Controller('auth')
 @ApiTags('Auth')
@@ -26,6 +28,15 @@ export class AuthController {
     @ApiStandardErrorResponses()
     register(@Body() dto: RegisterDto) {
         return this.authService.register(dto);
+    }
+
+    @Post('bootstrap-super-admin')
+    @UseGuards(AuthRateLimitGuard)
+    @ApiOperation({ summary: 'Bootstrap initial super admin (one-time)' })
+    @ApiCreatedResponse({ type: RegisterResponseDto })
+    @ApiStandardErrorResponses()
+    bootstrapSuperAdmin(@Body() dto: BootstrapSuperAdminDto) {
+        return this.authService.bootstrapSuperAdmin(dto);
     }
 
     @Post('login')
@@ -65,7 +76,10 @@ export class AuthController {
     // ⚠️ DEV/ADMIN: password esdan chiqqanda tez yechim
     // Prod'da bunu Telegram OTP flow bilan almashtirasan.
     @Post('reset-password')
-    @ApiOperation({ summary: 'DEV: Reset password by telegramId' })
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.super_admin)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Admin: Reset password by telegramId' })
     resetPassword(@Body() dto: ResetPasswordDto) {
         return this.authService.resetPasswordByTelegramId(dto.telegramId, dto.newPassword);
     }

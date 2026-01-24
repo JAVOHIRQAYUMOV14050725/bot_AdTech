@@ -223,6 +223,11 @@ export class EscrowService {
                 });
             }
 
+            await tx.campaign.update({
+                where: { id: campaignTarget!.campaignId },
+                data: { spentBudget: { increment: total } },
+            });
+
             await tx.escrow.update({
                 where: { id: escrow.id },
                 data: {

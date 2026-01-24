@@ -45,8 +45,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     async onModuleInit() {
-        // faqat dev/testda
-        if (process.env.TELEGRAM_STARTUP_TEST === 'true') {
+        const smokeTestEnabled = process.env.ENABLE_TELEGRAM_SMOKE_TEST === 'true';
+        if (smokeTestEnabled && process.env.NODE_ENV !== 'production') {
             void this.sendTestToMyChannel();
         }
 

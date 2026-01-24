@@ -81,4 +81,29 @@ export class CampaignsController {
     ) {
         return this.campaignsService.addTarget(campaignId, actor.id, dto);
     }
+
+    @Post(':campaignId/targets/:targetId/submit')
+    @ApiOperation({
+        summary: 'Submit target',
+        description: 'Submit a campaign target for moderation.',
+    })
+    @ApiParam({
+        name: 'campaignId',
+        description: 'Campaign UUID.',
+        format: 'uuid',
+    })
+    @ApiParam({
+        name: 'targetId',
+        description: 'Campaign target UUID.',
+        format: 'uuid',
+    })
+    @ApiOkResponse({ type: TargetResponseDto })
+    @ApiStandardErrorResponses()
+    submitTarget(
+        @Param('campaignId', new ParseUUIDPipe()) campaignId: string,
+        @Param('targetId', new ParseUUIDPipe()) targetId: string,
+        @Actor() actor: { id: string },
+    ) {
+        return this.campaignsService.submitTarget(campaignId, targetId, actor.id);
+    }
 }

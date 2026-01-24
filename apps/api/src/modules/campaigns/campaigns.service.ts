@@ -183,13 +183,16 @@ export class CampaignsService {
         return this.mapTarget(target);
     }
 
-    async submitTarget(targetId: string, userId: string, id: string) {
+    async submitTarget(campaignId: string, targetId: string, userId: string) {
         const target = await this.prisma.campaignTarget.findUnique({
             where: { id: targetId },
-            include: { campaign: true },
+            include: {
+                campaign: { include: { creatives: true } },
+                channel: true,
+            },
         });
 
-        if (!target) {
+        if (!target || target.campaignId !== campaignId) {
             throw new NotFoundException('Campaign target not found');
         }
 
@@ -197,7 +200,26 @@ export class CampaignsService {
             throw new BadRequestException('Not campaign owner');
         }
 
-        const transition = assertCampaignTargetTransition({
+        if (target.status !== CampaignTargetStatus.pending) {
+            throw new BadRequestException(
+                `Target cannot be submitted from status ${target.status}`,
+            );
+        }
+
+        if (!target.channel || target.channel.status !== ChannelStatus.approved) {
+            throw new BadRequestException('Channel must be approved');
+        }
+
+        if (!target.campaign.creatives?.length) {
+            throw new BadRequestException('Campaign has no creatives');
+        }
+
+        const minLeadMs = Number(process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30000);
+        if (target.scheduledAt.getTime() < Date.now() + minLeadMs) {
+            throw new BadRequestException('scheduledAt must be in the future');
+        }
+
+        assertCampaignTargetTransition({
             campaignTargetId: targetId,
             from: target.status,
             to: CampaignTargetStatus.submitted,
@@ -205,12 +227,15 @@ export class CampaignsService {
             correlationId: targetId,
         });
 
-        if (!transition.noop) {
-            await this.prisma.campaignTarget.update({
-                where: { id: targetId },
-                data: { status: CampaignTargetStatus.submitted },
-            });
-        }
+        const updated = await this.prisma.campaignTarget.update({
+            where: { id: targetId },
+            data: {
+                status: CampaignTargetStatus.submitted,
+                moderatedBy: null,
+                moderatedAt: null,
+                moderationReason: null,
+            },
+        });
 
         await this.auditService.log({
             userId,
@@ -218,6 +243,6 @@ export class CampaignsService {
             metadata: { targetId },
         });
 
-        return { ok: true, targetId };
+        return this.mapTarget(updated);
     }
 }

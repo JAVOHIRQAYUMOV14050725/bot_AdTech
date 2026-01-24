@@ -99,12 +99,17 @@ enum KillSwitchKey {
 //////////////////////
 
 model User {
-  id         String     @id @default(uuid())
-  telegramId BigInt     @unique
-  username   String?
+  id           String   @id @default(uuid())
+  telegramId   BigInt   @unique
+  username     String?
   passwordHash String?
-  role       UserRole
-  status     UserStatus @default(active)
+  role         UserRole
+  status       UserStatus @default(active)
+
+  // ✅ refresh infra
+  refreshTokenHash      String?
+  refreshTokenExpiresAt DateTime?
+  passwordUpdatedAt     DateTime  @default(now())
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -115,15 +120,16 @@ model User {
   wallet    Wallet?
   campaigns Campaign[]
 
-  // ✅ QO‘SHILADI
   verifiedChannels  ChannelVerification[]
   approvedCreatives AdCreative[]
   moderatedTargets  CampaignTarget[] @relation("CampaignTargetModerator")
 
   @@index([telegramId])
   @@index([status])
+  @@index([refreshTokenExpiresAt]) // ✅ ixtiyoriy, lekin foydali
   @@map("users")
 }
+
 
 model UserAuditLog {
   id        String   @id @default(uuid())

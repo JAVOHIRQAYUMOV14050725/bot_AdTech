@@ -32,8 +32,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly bot: Telegraf<Context>;
     private started = false;
     private botId?: number;
-    
-    
+
+
 
     constructor(
         private readonly prisma: PrismaService,
@@ -45,8 +45,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     async onModuleInit() {
-        // faqat dev/testda
-        if (process.env.TELEGRAM_STARTUP_TEST === 'true') {
+        const smokeTestEnabled = process.env.ENABLE_TELEGRAM_SMOKE_TEST === 'true';
+        if (smokeTestEnabled && process.env.NODE_ENV !== 'production') {
             void this.sendTestToMyChannel();
         }
 
@@ -81,7 +81,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
     }
 
-   
+
 
     private async startBot() {
         if (this.started) return;
@@ -107,7 +107,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
 
- 
+
 
     // ===============================
     // ADMIN COMMAND ROUTER

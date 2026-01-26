@@ -329,6 +329,9 @@ export class ChannelsService {
         if (!channel) {
             throw new NotFoundException('Channel not found');
         }
+        if (channel.status === ChannelStatus.approved) {
+            return this.mapChannel(channel);
+        }
 
         if (channel.status !== ChannelStatus.verified) {
             throw new BadRequestException('Channel not verified');

@@ -696,7 +696,7 @@ This allowed:
 
 ```bash
 # Verify endpoint no longer works
-curl -X POST http://localhost:3000/api/campaign-targets/some-id/submit \
+curl -X POST http://localhost:4002/api/campaign-targets/some-id/submit \
   -H "Authorization: Bearer $TOKEN"
 # Should return 404 (route not found)
 ```

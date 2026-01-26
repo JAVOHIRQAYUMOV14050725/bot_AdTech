@@ -2,7 +2,7 @@
 
 **Test Environment**:
 
-- API: `http://localhost:3000/api`
+- API: `http://localhost:4002/api`
 - Database: PostgreSQL (local or Docker)
 - Auth: JWT Bearer tokens
 
@@ -18,7 +18,7 @@
 ### Step 1: Bootstrap Super-Admin
 
 ```bash
-curl -X POST http://localhost:3000/api/auth/bootstrap-super-admin \
+curl -X POST http://localhost:4002/api/auth/bootstrap-super-admin \
   -H "Content-Type: application/json" \
   -d '{
     "telegramId": "123456789",
@@ -50,7 +50,7 @@ curl -X POST http://localhost:3000/api/auth/bootstrap-super-admin \
 ### Step 2: Register Advertiser
 
 ```bash
-curl -X POST http://localhost:3000/api/auth/register \
+curl -X POST http://localhost:4002/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "telegramId": "987654321",
@@ -81,7 +81,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 ### Step 3: Register Publisher (Channel Owner)
 
 ```bash
-curl -X POST http://localhost:3000/api/auth/register \
+curl -X POST http://localhost:4002/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "telegramId": "555666777",
@@ -98,7 +98,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 ### Step 4: Publisher Creates Channel
 
 ```bash
-curl -X POST http://localhost:3000/api/channels \
+curl -X POST http://localhost:4002/api/channels \
   -H "Authorization: Bearer $PUBLISHER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -129,7 +129,7 @@ curl -X POST http://localhost:3000/api/channels \
 ### Step 5: Admin Approves Channel
 
 ```bash
-curl -X POST "http://localhost:3000/api/admin/channels/$CHANNEL_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/channels/$CHANNEL_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -156,7 +156,7 @@ SELECT id, status FROM channels WHERE id = 'uuid-channel-id';
 ### Step 6: Advertiser Creates Campaign (Draft)
 
 ```bash
-curl -X POST http://localhost:3000/api/campaigns \
+curl -X POST http://localhost:4002/api/campaigns \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -194,7 +194,7 @@ SELECT id, status, "advertiserId" FROM campaigns WHERE id = 'uuid-campaign-id';
 ### Step 7: Advertiser Adds Creative to Campaign
 
 ```bash
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/creatives" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/creatives" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -226,7 +226,7 @@ curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/creatives" \
 ### Step 8: Advertiser Activates Campaign ✅ CRITICAL TEST
 
 ```bash
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/activate" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/activate" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -269,7 +269,7 @@ ORDER BY "createdAt" DESC LIMIT 1;
 # Calculate scheduledAt (minimum 30 seconds in future)
 SCHEDULED_AT=$(date -u -d '+2 minutes' +%Y-%m-%dT%H:%M:%SZ)
 
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/targets" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/targets" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
@@ -309,7 +309,7 @@ SELECT id, status, "campaignId", "channelId" FROM campaign_targets WHERE id = 'u
 ### Step 10: Advertiser Submits Target ✅ CRITICAL TEST
 
 ```bash
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/targets/$TARGET_ID/submit" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/targets/$TARGET_ID/submit" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -348,7 +348,7 @@ ORDER BY "createdAt" DESC LIMIT 1;
 ### Step 11: Admin Lists Pending Moderation
 
 ```bash
-curl -X GET http://localhost:3000/api/admin/moderation/pending \
+curl -X GET http://localhost:4002/api/admin/moderation/pending \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -384,7 +384,7 @@ curl -X GET http://localhost:3000/api/admin/moderation/pending \
 ### Step 12: Admin Approves Target ✅ CRITICAL TEST (ATOMICITY)
 
 ```bash
-curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -454,7 +454,7 @@ ORDER BY "createdAt" DESC LIMIT 1;
 #    In real system: worker via scheduler picks queued jobs
 
 # 2. Simulate successful post
-curl -X POST "http://localhost:3000/api/internal/post-jobs/$POST_JOB_ID/success" \
+curl -X POST "http://localhost:4002/api/internal/post-jobs/$POST_JOB_ID/success" \
   -H "Authorization: Bearer $INTERNAL_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -512,7 +512,7 @@ SELECT balance FROM wallets WHERE "userId" = 'uuid-advertiser-id';
 ```bash
 # Admin tries to activate advertiser's campaign using advertiser actor
 # (To test: needs different advertiser to attempt this)
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/activate" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/activate" \
   -H "Authorization: Bearer $OTHER_ADVERTISER_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -535,7 +535,7 @@ curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/activate" \
 
 ```bash
 # After successful activation in E.8
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/activate" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/activate" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -558,7 +558,7 @@ curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/activate" \
 
 ```bash
 # Create campaign without adding creative
-curl -X POST http://localhost:3000/api/campaigns \
+curl -X POST http://localhost:4002/api/campaigns \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -568,7 +568,7 @@ curl -X POST http://localhost:3000/api/campaigns \
 # Response: 201, CAMPAIGN_NO_CREATIVE_ID
 
 # Activate it
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_NO_CREATIVE_ID/activate" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_NO_CREATIVE_ID/activate" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN"
 # Response: 400 (no creative)
 ```
@@ -589,28 +589,28 @@ curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_NO_CREATIVE_ID/activ
 
 ```bash
 # Create campaign (draft) with creative
-curl -X POST http://localhost:3000/api/campaigns \
+curl -X POST http://localhost:4002/api/campaigns \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{ "name": "Draft Cam", "totalBudget": "500.00" }'
 # Response: 201, CAMPAIGN_DRAFT_ID
 
 # Add creative
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_DRAFT_ID/creatives" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_DRAFT_ID/creatives" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{ "contentType": "text", "contentPayload": { "text": "test" } }'
 # Response: 200, CREATIVE_ID
 
 # Add target
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_DRAFT_ID/targets" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_DRAFT_ID/targets" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{ \"channelId\": \"$CHANNEL_ID\", \"price\": \"25.00\", \"scheduledAt\": \"$(date -u -d '+2 minutes' +%Y-%m-%dT%H:%M:%SZ)\" }"
 # Response: 200, TARGET_DRAFT_ID
 
 # Try to submit WITHOUT activating campaign first
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_DRAFT_ID/targets/$TARGET_DRAFT_ID/submit" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_DRAFT_ID/targets/$TARGET_DRAFT_ID/submit" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN"
 ```
 
@@ -644,7 +644,7 @@ SELECT status FROM campaign_targets WHERE id = 'target-draft-id';
 # Submit target (target → submitted)
 # THEN pause campaign
 
-curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/targets/$TARGET_ID/activate" \
+curl -X POST "http://localhost:4002/api/campaigns/$CAMPAIGN_ID/targets/$TARGET_ID/activate" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN"
 # (This is not a real endpoint, just for example)
 # In reality: manually update DB or use admin endpoint
@@ -653,7 +653,7 @@ curl -X POST "http://localhost:3000/api/campaigns/$CAMPAIGN_ID/targets/$TARGET_I
 # Or manually: UPDATE campaigns SET status = 'paused' WHERE id = '...';
 
 # Now try to approve target
-curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -698,7 +698,7 @@ WHERE action = 'moderation_approved'
 
 ```bash
 # After successful approval in E.12
-curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -738,7 +738,7 @@ SELECT SUM(amount) FROM ledger_entries WHERE "campaignTargetId" = 'uuid-target-i
 ### Test N7: Advertiser Cannot Approve (403 Forbidden)
 
 ```bash
-curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
   -H "Authorization: Bearer $ADVERTISER_TOKEN"
 ```
 
@@ -765,13 +765,13 @@ curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
 # (In bash: run both in background, background process)
 
 # Admin 1
-curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN" &
 ADMIN1_PID=$!
 
 # Admin 2 (slight delay to increase race chance)
 sleep 0.1
-curl -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+curl -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
   -H "Authorization: Bearer $ADMIN_TOKEN" &
 ADMIN2_PID=$!
 
@@ -860,26 +860,26 @@ HAVING (w.balance != SUM(le.amount));
 
 for i in {1..10}; do
   # Create campaign
-  CAM=$(curl -s -X POST http://localhost:3000/api/campaigns \
+  CAM=$(curl -s -X POST http://localhost:4002/api/campaigns \
     -H "Authorization: Bearer $ADVERTISER_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{ \"name\": \"Campaign $i\", \"totalBudget\": \"1000.00\" }" \
     | jq -r '.id')
 
   # Activate
-  curl -s -X POST "http://localhost:3000/api/campaigns/$CAM/activate" \
+  curl -s -X POST "http://localhost:4002/api/campaigns/$CAM/activate" \
     -H "Authorization: Bearer $ADVERTISER_TOKEN" > /dev/null
 
   # Create 5 targets
   for j in {1..5}; do
-    TAR=$(curl -s -X POST "http://localhost:3000/api/campaigns/$CAM/targets" \
+    TAR=$(curl -s -X POST "http://localhost:4002/api/campaigns/$CAM/targets" \
       -H "Authorization: Bearer $ADVERTISER_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{ \"channelId\": \"$CHANNEL_ID\", \"price\": \"20.00\", \"scheduledAt\": \"$(date -u -d '+5 minutes' +%Y-%m-%dT%H:%M:%SZ)\" }" \
       | jq -r '.id')
 
     # Submit
-    curl -s -X POST "http://localhost:3000/api/campaigns/$CAM/targets/$TAR/submit" \
+    curl -s -X POST "http://localhost:4002/api/campaigns/$CAM/targets/$TAR/submit" \
       -H "Authorization: Bearer $ADVERTISER_TOKEN" > /dev/null
 
     echo "Campaign $i, Target $j submitted"
@@ -888,11 +888,11 @@ done
 
 # Now approve all 50 targets
 echo "Approving 50 targets..."
-curl -s http://localhost:3000/api/admin/moderation/pending \
+curl -s http://localhost:4002/api/admin/moderation/pending \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   | jq -r '.[].id' \
   | while read TARGET_ID; do
-    curl -s -X POST "http://localhost:3000/api/admin/moderation/$TARGET_ID/approve" \
+    curl -s -X POST "http://localhost:4002/api/admin/moderation/$TARGET_ID/approve" \
       -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
     echo "Approved: $TARGET_ID"
   done

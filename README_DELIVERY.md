@@ -201,7 +201,7 @@ kubectl rollout status deployment/adtech-api
 
 ```bash
 # Health check
-curl http://api:3000/api/health/ready
+curl http://api:4002/api/health/ready
 
 # Smoke test (from TEST_PLAN.md E.1)
 # Create campaign → Activate → Submit target

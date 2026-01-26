@@ -124,7 +124,7 @@ pg_dump $PROD_DATABASE_URL > backup_$(date +%s).sql
 # "Deploying campaign activation fixes. No data migrations, code-only change."
 
 # 1d. Confirm kill-switches enabled
-curl http://localhost:3000/api/health/ready
+curl http://localhost:4002/api/health/ready
 # Check: kill-switch: enabled, payouts: enabled, new_escrows: enabled
 ```
 
@@ -145,7 +145,7 @@ docker push bot_adtech:v1.2.0
 # Example with docker-compose:
 # 1. Start new instance: docker-compose -p adtech-v1 up -d
 # 2. Switch load balancer to new instance
-# 3. Verify health: curl new-instance:3000/api/health/live
+# 3. Verify health: curl new-instance:4002/api/health/live
 # 4. Kill old instance after 5 minutes verification
 ```
 
@@ -153,10 +153,10 @@ docker push bot_adtech:v1.2.0
 
 ```bash
 # 3a. Check API health
-curl http://new-api:3000/api/health/live
+curl http://new-api:4002/api/health/live
 # Expected: { ok: true }
 
-curl http://new-api:3000/api/health/ready
+curl http://new-api:4002/api/health/ready
 # Expected: all checks ok or disabled
 
 # 3b. Run smoke test (from TEST_PLAN.md E.1 steps 1-5)
@@ -207,18 +207,18 @@ SQL
 # (previously was potentially unbounded due to separate transactions)
 
 # 4d. Manual test: Create a campaign and activate it
-TEST_TOKEN=$(curl -s -X POST http://api:3000/api/auth/login \
+TEST_TOKEN=$(curl -s -X POST http://api:4002/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"test_advertiser","password":"..."}' \
   | jq -r '.accessToken')
 
-CAMPAIGN=$(curl -s -X POST http://api:3000/api/campaigns \
+CAMPAIGN=$(curl -s -X POST http://api:4002/api/campaigns \
   -H "Authorization: Bearer $TEST_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Prod Test","totalBudget":"100.00"}' \
   | jq -r '.id')
 
-ACTIVATE_RESPONSE=$(curl -s -X POST "http://api:3000/api/campaigns/$CAMPAIGN/activate" \
+ACTIVATE_RESPONSE=$(curl -s -X POST "http://api:4002/api/campaigns/$CAMPAIGN/activate" \
   -H "Authorization: Bearer $TEST_TOKEN")
 
 echo "Activation response: $ACTIVATE_RESPONSE"
@@ -247,7 +247,7 @@ SQL
 kubectl rollout undo deployment/adtech-api
 
 # 5b. Verify old version is healthy
-curl http://api:3000/api/health/live
+curl http://api:4002/api/health/live
 
 # 5c. Investigate root cause
 # Check logs for error patterns

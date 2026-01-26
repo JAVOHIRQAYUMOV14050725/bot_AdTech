@@ -230,10 +230,10 @@ cat PRODUCTION_CHECKLIST.md
 
 ```bash
 # 1. Health check
-curl http://api:3000/api/health/ready
+curl http://api:4002/api/health/ready
 
 # 2. Test activation (from TEST_PLAN.md E.1 step 8)
-curl -X POST http://api:3000/api/campaigns/$ID/activate \
+curl -X POST http://api:4002/api/campaigns/$ID/activate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json"
 

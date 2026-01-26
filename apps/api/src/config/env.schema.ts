@@ -5,7 +5,7 @@ const booleanString = z
     .transform((value: 'true' | 'false') => value === 'true');
 
 export const envSchema = z.object({
-    PORT: z.coerce.number().int().positive().default(3000),
+    PORT: z.coerce.number().int().positive().default(4002),
     DATABASE_URL: z.string().min(1),
     REDIS_HOST: z.string().min(1),
     REDIS_PORT: z.coerce.number().int().positive(),

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_URL="${API_URL:-http://localhost:3000/api}"
+API_URL="${API_URL:-http://localhost:4002/api}"
 
 echo "== Live/Ready checks"
 curl -sS "${API_URL}/health/live"

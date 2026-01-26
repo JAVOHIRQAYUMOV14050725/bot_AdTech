@@ -104,7 +104,7 @@ npm run prisma:migrate:deploy
 
 ```bash
 # 1. Check that new code paths work
-curl -X POST http://localhost:3000/api/campaigns/$CAMPAIGN_ID/activate \
+curl -X POST http://localhost:4002/api/campaigns/$CAMPAIGN_ID/activate \
   -H "Authorization: Bearer $ADVERTISER_TOKEN" \
   -H "Content-Type: application/json"
 

@@ -15,7 +15,6 @@ import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { TELEGRAM_CHANNEL_ID_REGEX } from '@/common/validators/telegram-channel-id-string.decorator';
 import { TelegramAdminPermission, TelegramCheckReason } from '@/modules/telegram/telegram.types';
-import { channelVerifyQueue } from '../scheduler/queues';
 @Injectable()
 export class ChannelsService {
     constructor(
@@ -198,42 +197,95 @@ export class ChannelsService {
 
         if (!channel) throw new NotFoundException('Channel not found');
         if (channel.ownerId !== userId) throw new BadRequestException('Not channel owner');
-        if (channel.status !== ChannelStatus.pending) {
+        if (channel.status !== ChannelStatus.pending)
             throw new BadRequestException('Channel not in pending state');
+
+        let checkResult;
+        try {
+            checkResult = await this.verificationService.verifyChannel(channel);
+        } catch (err) {
+            // 🔴 Telegram / network error — LEKIN DBga YOZAMIZ
+            await this.prisma.channelVerification.upsert({
+                where: { channelId },
+                update: {
+                    lastError: JSON.stringify({
+                        reason: 'NETWORK',
+                        error: String(err),
+                    }),
+                    checkedAt: new Date(),
+                    notes: 'telegram_network_error',
+                },
+                create: {
+                    channelId,
+                    fraudScore: 0,
+                    notes: 'telegram_network_error',
+                    lastError: JSON.stringify({
+                        reason: 'NETWORK',
+                        error: String(err),
+                    }),
+                    checkedAt: new Date(),
+                },
+            });
+
+            throw new ServiceUnavailableException(
+                'Telegram unavailable. Retry later.',
+            );
         }
 
-        // 1️⃣ verification record (queue state)
-        await this.prisma.channelVerification.upsert({
-            where: { channelId },
-            update: { notes: 'queued' },
-            create: {
-                channelId,
-                fraudScore: 0,
-                notes: 'queued',
-            },
+        if (!checkResult.isAdmin) {
+            // ❌ Verification failed — BOT admin emas / chat topilmadi
+            await this.prisma.channelVerification.upsert({
+                where: { channelId },
+                update: {
+                    lastError: JSON.stringify({
+                        reason: checkResult.reason,
+                        telegramError: checkResult.telegramError ?? null,
+                    }),
+                    checkedAt: new Date(),
+                    notes: 'verification_failed',
+                },
+                create: {
+                    channelId,
+                    fraudScore: 0,
+                    notes: 'verification_failed',
+                    lastError: JSON.stringify({
+                        reason: checkResult.reason,
+                        telegramError: checkResult.telegramError ?? null,
+                    }),
+                    checkedAt: new Date(),
+                },
+            });
+
+            throw new BadRequestException('Channel verification failed');
+        }
+
+        // ✅ SUCCESS — auto verified
+        const updated = await this.prisma.$transaction(async (tx) => {
+            await tx.channelVerification.upsert({
+                where: { channelId },
+                update: {
+                    lastError: null,
+                    checkedAt: new Date(),
+                    notes: 'auto_verified',
+                },
+                create: {
+                    channelId,
+                    fraudScore: 0,
+                    notes: 'auto_verified',
+                    checkedAt: new Date(),
+                },
+            });
+
+            return tx.channel.update({
+                where: { id: channelId },
+                data: { status: ChannelStatus.verified },
+            });
         });
 
-        // 2️⃣ DEDUPED job
-        await channelVerifyQueue.add(
-            'verify-channel',
-            { channelId },
-            {
-                jobId: `verify:${channelId}`,
-                attempts: 10,
-                backoff: { type: 'exponential', delay: 15_000 },
-                removeOnComplete: true,
-            },
-        );
-
-        // 3️⃣ audit
-        await this.auditService.log({
-            userId,
-            action: 'channel_verification_queued',
-            metadata: { channelId },
-        });
-
-        return this.mapChannel(channel);
+        return this.mapChannel(updated);
     }
+
+
 
 
     async verifyChannelDebug(channelId: string, actor: { id: string; role: UserRole }) {

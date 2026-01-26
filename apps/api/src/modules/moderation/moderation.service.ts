@@ -218,6 +218,20 @@ export class ModerationService {
                 correlationId: targetId,
             });
 
+           
+
+            // 11. ONLY NOW update target status to approved (after all preconditions met)
+            const updatedTarget = await tx.campaignTarget.update({
+                where: { id: targetId },
+                data: {
+                    status: CampaignTargetStatus.approved,
+                    moderatedBy: adminId,
+                    moderatedAt: new Date(),
+                    moderationReason: null,
+                },
+            });
+
+
             // 9. Hold escrow (CRITICAL: with transaction client to ensure atomicity)
             await this.paymentsService.holdEscrow(targetId, {
                 transaction: tx,
@@ -255,16 +269,8 @@ export class ModerationService {
                 }
             }
 
-            // 11. ONLY NOW update target status to approved (after all preconditions met)
-            const updatedTarget = await tx.campaignTarget.update({
-                where: { id: targetId },
-                data: {
-                    status: CampaignTargetStatus.approved,
-                    moderatedBy: adminId,
-                    moderatedAt: new Date(),
-                    moderationReason: null,
-                },
-            });
+
+
 
             // 12. Log audit only if we created the escrow/postjob
             if (created) {

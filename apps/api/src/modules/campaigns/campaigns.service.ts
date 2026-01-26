@@ -14,7 +14,7 @@ import {
     UserRole,
 } from '@prisma/client';
 import { AuditService } from '@/modules/audit/audit.service';
-import { assertCampaignTargetTransition } from '@/modules/lifecycle/lifecycle';
+import { assertCampaignTargetTransition, assertCampaignTransition } from '@/modules/lifecycle/lifecycle';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 
 @Injectable()
@@ -183,6 +183,65 @@ export class CampaignsService {
         return this.mapTarget(target);
     }
 
+    async activateCampaign(campaignId: string, userId: string) {
+        const campaign = await this.prisma.campaign.findUnique({
+            where: { id: campaignId },
+            select: { id: true, advertiserId: true, status: true, creatives: true, startAt: true, endAt: true },
+        });
+
+        if (!campaign) {
+            throw new NotFoundException('Campaign not found');
+        }
+
+        if (campaign.advertiserId !== userId) {
+            throw new BadRequestException('Not campaign owner');
+        }
+
+        if (campaign.status !== CampaignStatus.draft) {
+            throw new BadRequestException(
+                `Campaign cannot be activated from status ${campaign.status}`,
+            );
+        }
+
+        if (!campaign.creatives || campaign.creatives.length === 0) {
+            throw new BadRequestException('Campaign must have at least one creative');
+        }
+
+        // Validate dates if provided
+        if (campaign.startAt && campaign.endAt) {
+            if (campaign.startAt > campaign.endAt) {
+                throw new BadRequestException('startAt must be before endAt');
+            }
+        }
+
+        if (campaign.endAt && campaign.endAt <= new Date()) {
+            throw new BadRequestException('endAt must be in the future');
+        }
+
+        assertCampaignTransition({
+            campaignId,
+            from: campaign.status,
+            to: CampaignStatus.active,
+            actor: 'advertiser',
+            correlationId: campaignId,
+        });
+
+        const updated = await this.prisma.campaign.update({
+            where: { id: campaignId },
+            data: {
+                status: CampaignStatus.active,
+            },
+        });
+
+        await this.auditService.log({
+            userId,
+            action: 'campaign_activated',
+            metadata: { campaignId },
+        });
+
+        return this.mapCampaign(updated);
+    }
+
     async submitTarget(campaignId: string, targetId: string, userId: string) {
         const target = await this.prisma.campaignTarget.findUnique({
             where: { id: targetId },
@@ -198,6 +257,12 @@ export class CampaignsService {
 
         if (target.campaign.advertiserId !== userId) {
             throw new BadRequestException('Not campaign owner');
+        }
+
+        if (target.campaign.status !== CampaignStatus.active) {
+            throw new BadRequestException(
+                `Campaign must be active to submit targets (current status: ${target.campaign.status})`,
+            );
         }
 
         if (target.status !== CampaignTargetStatus.pending) {

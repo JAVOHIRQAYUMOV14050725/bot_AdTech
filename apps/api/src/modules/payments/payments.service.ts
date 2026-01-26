@@ -196,9 +196,18 @@ export class PaymentsService {
         }
 
         return this.prisma.$transaction(async (tx) => {
-            const wallet = await tx.wallet.findUniqueOrThrow({
+            let wallet = await tx.wallet.findUnique({
                 where: { userId },
             });
+
+            if (!wallet) {
+                wallet = await tx.wallet.create({
+                    data: {
+                        userId,
+                        balance: new Prisma.Decimal(0),
+                    },
+                });
+            }
 
             const existing = await tx.ledgerEntry.findUnique({
                 where: { idempotencyKey },

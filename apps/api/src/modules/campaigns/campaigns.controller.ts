@@ -82,10 +82,29 @@ export class CampaignsController {
         return this.campaignsService.addTarget(campaignId, actor.id, dto);
     }
 
+    @Post(':id/activate')
+    @ApiOperation({
+        summary: 'Activate campaign',
+        description: 'Transition campaign from draft to active status. Required before submitting targets.',
+    })
+    @ApiParam({
+        name: 'id',
+        description: 'Campaign UUID.',
+        format: 'uuid',
+    })
+    @ApiOkResponse({ type: CampaignResponseDto })
+    @ApiStandardErrorResponses()
+    activateCampaign(
+        @Param('id', new ParseUUIDPipe()) campaignId: string,
+        @Actor() actor: { id: string },
+    ) {
+        return this.campaignsService.activateCampaign(campaignId, actor.id);
+    }
+
     @Post(':campaignId/targets/:targetId/submit')
     @ApiOperation({
         summary: 'Submit target',
-        description: 'Submit a campaign target for moderation.',
+        description: 'Submit a campaign target for moderation. Campaign must be active.',
     })
     @ApiParam({
         name: 'campaignId',

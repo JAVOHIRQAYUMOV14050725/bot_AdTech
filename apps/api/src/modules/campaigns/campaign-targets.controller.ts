@@ -14,6 +14,6 @@ export class CampaignTargetsController {
 
     @Post(':id/submit')
     submit(@Param('id') targetId: string, @Actor() actor: { id: string }) {
-        return this.campaignsService.submitTarget(targetId, actor.id);
+        return this.campaignsService.submitTarget('', targetId, actor.id);
     }
 }

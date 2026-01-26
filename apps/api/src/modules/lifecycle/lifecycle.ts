@@ -26,16 +26,16 @@ const logger = new Logger('LifecycleFSM');
 
 const campaignTransitions: TransitionMap<CampaignStatus> = {
     [CampaignStatus.draft]: {
-        [CampaignStatus.active]: { actors: ['admin', 'system'] },
+        [CampaignStatus.active]: { actors: ['advertiser', 'admin', 'system'] },
         [CampaignStatus.cancelled]: { actors: ['admin'] },
     },
     [CampaignStatus.active]: {
-        [CampaignStatus.paused]: { actors: ['admin'] },
+        [CampaignStatus.paused]: { actors: ['advertiser', 'admin'] },
         [CampaignStatus.completed]: { actors: ['admin', 'system'] },
-        [CampaignStatus.cancelled]: { actors: ['admin'] },
+        [CampaignStatus.cancelled]: { actors: ['advertiser', 'admin'] },
     },
     [CampaignStatus.paused]: {
-        [CampaignStatus.active]: { actors: ['admin'] },
+        [CampaignStatus.active]: { actors: ['advertiser', 'admin'] },
         [CampaignStatus.cancelled]: { actors: ['admin'] },
     },
     [CampaignStatus.completed]: {},

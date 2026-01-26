@@ -10,6 +10,8 @@ import {
     CampaignTarget,
     Channel,
     CampaignTargetStatus,
+    CampaignStatus,
+    ChannelStatus,
     PostJob,
     PostJobStatus,
     Prisma,
@@ -124,42 +126,90 @@ export class ModerationService {
     }
 
     async approve(targetId: string, adminId: string) {
-        const target = await this.prisma.campaignTarget.findUnique({
+        // Initial outer fetch to check if already approved (idempotency shortcut)
+        const initialTarget = await this.prisma.campaignTarget.findUnique({
             where: { id: targetId },
             include: { postJob: true },
         });
 
-        if (!target) {
+        if (!initialTarget) {
             throw new NotFoundException('Campaign target not found');
         }
 
-        if (target.status === CampaignTargetStatus.approved && target.postJob) {
+        // If already approved with postJob, return idempotently
+        if (initialTarget.status === CampaignTargetStatus.approved && initialTarget.postJob) {
             return {
                 ok: true,
                 targetId,
-                postJobId: target.postJob.id,
+                postJobId: initialTarget.postJob.id,
                 alreadyApproved: true,
             };
         }
 
+        // Now enter atomic transaction for all approval logic
         const result = await this.prisma.$transaction(async (tx) => {
+            // 1. Fetch fresh state (for update)
             const fresh = await tx.campaignTarget.findUnique({
                 where: { id: targetId },
-                include: { postJob: true },
+                include: {
+                    campaign: { include: { creatives: true } },
+                    channel: true,
+                    postJob: true,
+                },
             });
 
             if (!fresh) {
                 throw new NotFoundException('Campaign target not found');
             }
 
+            // 2. If PostJob already exists (race condition from parallel approve), return it
             if (fresh.postJob) {
-                return { target: fresh, postJob: fresh.postJob };
+                return {
+                    target: fresh,
+                    postJob: fresh.postJob,
+                    created: false,
+                };
             }
 
+            // 3. Validate target status
             if (fresh.status !== CampaignTargetStatus.submitted) {
-                throw new BadRequestException('Target not submitted');
+                throw new BadRequestException(
+                    `Target cannot be approved from status ${fresh.status}`,
+                );
             }
 
+            // 4. Validate campaign is active (CRITICAL FIX)
+            if (!fresh.campaign) {
+                throw new NotFoundException('Campaign not found');
+            }
+
+            if (fresh.campaign.status !== CampaignStatus.active) {
+                throw new BadRequestException(
+                    `Campaign ${fresh.campaignId} must be active (current: ${fresh.campaign.status})`,
+                );
+            }
+
+            // 5. Validate creatives exist
+            if (!fresh.campaign.creatives || fresh.campaign.creatives.length === 0) {
+                throw new BadRequestException('Campaign has no creatives');
+            }
+
+            // 6. Validate channel is approved
+            if (!fresh.channel) {
+                throw new NotFoundException('Channel not found');
+            }
+
+            if (fresh.channel.status !== ChannelStatus.approved) {
+                throw new BadRequestException('Channel must be approved');
+            }
+
+            // 7. Validate scheduledAt is still in future
+            const minLeadMs = Number(process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30000);
+            if (fresh.scheduledAt.getTime() < Date.now() + minLeadMs) {
+                throw new BadRequestException('scheduledAt must be in the future');
+            }
+
+            // 8. Validate FSM transition
             assertCampaignTargetTransition({
                 campaignTargetId: targetId,
                 from: fresh.status,
@@ -168,23 +218,21 @@ export class ModerationService {
                 correlationId: targetId,
             });
 
-            const updatedTarget = await tx.campaignTarget.update({
-                where: { id: targetId },
-                data: {
-                    status: CampaignTargetStatus.approved,
-                    moderatedBy: adminId,
-                    moderatedAt: new Date(),
-                    moderationReason: null,
-                },
+            // 9. Hold escrow (CRITICAL: with transaction client to ensure atomicity)
+            await this.paymentsService.holdEscrow(targetId, {
+                transaction: tx,
+                actor: 'admin',
+                correlationId: targetId,
             });
 
+            // 10. Create PostJob idempotently
             let postJob: PostJob;
             let created = true;
             try {
                 postJob = await tx.postJob.create({
                     data: {
                         campaignTargetId: targetId,
-                        executeAt: updatedTarget.scheduledAt,
+                        executeAt: fresh.scheduledAt,
                         status: PostJobStatus.queued,
                     },
                 });
@@ -193,6 +241,7 @@ export class ModerationService {
                     err instanceof Prisma.PrismaClientKnownRequestError
                     && err.code === 'P2002'
                 ) {
+                    // Unique constraint violation: PostJob already exists
                     const existing = await tx.postJob.findUnique({
                         where: { campaignTargetId: targetId },
                     });
@@ -206,13 +255,19 @@ export class ModerationService {
                 }
             }
 
-            if (created) {
-                await this.paymentsService.holdEscrow(targetId, {
-                    transaction: tx,
-                    actor: 'admin',
-                    correlationId: targetId,
-                });
+            // 11. ONLY NOW update target status to approved (after all preconditions met)
+            const updatedTarget = await tx.campaignTarget.update({
+                where: { id: targetId },
+                data: {
+                    status: CampaignTargetStatus.approved,
+                    moderatedBy: adminId,
+                    moderatedAt: new Date(),
+                    moderationReason: null,
+                },
+            });
 
+            // 12. Log audit only if we created the escrow/postjob
+            if (created) {
                 await this.auditService.log({
                     userId: adminId,
                     action: 'moderation_approved',
@@ -223,6 +278,7 @@ export class ModerationService {
             return { target: updatedTarget, postJob, created };
         });
 
+        // 13. After transaction succeeds, enqueue scheduler (outside transaction)
         if (result.created) {
             await this.schedulerService.enqueuePost(
                 result.postJob.id,

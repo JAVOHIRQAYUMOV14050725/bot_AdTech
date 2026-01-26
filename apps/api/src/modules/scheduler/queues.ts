@@ -9,10 +9,14 @@ export const redisConnection = {
     retryStrategy: (times: number) => Math.min(1000 * 2 ** times, 30000),
 };
 
-export const postQueue = new Queue('post-queue', {
+export const postQueue = new Queue('post-queue', { connection: redisConnection });
+export const postDlq = new Queue('post-queue-dlq', { connection: redisConnection });
+
+// ✅ NEW
+export const channelVerifyQueue = new Queue('channel-verify-queue', {
     connection: redisConnection,
 });
 
-export const postDlq = new Queue('post-queue-dlq', {
+export const channelVerifyDlq = new Queue('channel-verify-queue-dlq', {
     connection: redisConnection,
 });

@@ -197,13 +197,17 @@ model ChannelVerification {
   verifiedBy String?
   fraudScore Int
   notes      String?
+
+  // ✅ YANGI MAYDONLAR
+  lastError  String?
+  checkedAt  DateTime?
+
   createdAt  DateTime @default(now())
 
   channel Channel @relation(fields: [channelId], references: [id])
   admin   User?   @relation(fields: [verifiedBy], references: [id])
-
-  @@map("channel_verification")
 }
+
 
 //////////////////////
 // CAMPAIGNS

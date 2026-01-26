@@ -15,6 +15,7 @@ import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { TELEGRAM_CHANNEL_ID_REGEX } from '@/common/validators/telegram-channel-id-string.decorator';
 import { TelegramAdminPermission, TelegramCheckReason } from '@/modules/telegram/telegram.types';
+import { channelVerifyQueue } from '../scheduler/queues';
 @Injectable()
 export class ChannelsService {
     constructor(
@@ -195,122 +196,45 @@ export class ChannelsService {
             where: { id: channelId },
         });
 
-        if (!channel) {
-            throw new NotFoundException('Channel not found');
-        }
-
-        if (channel.ownerId !== userId) {
-            throw new BadRequestException('Not channel owner');
-        }
-
+        if (!channel) throw new NotFoundException('Channel not found');
+        if (channel.ownerId !== userId) throw new BadRequestException('Not channel owner');
         if (channel.status !== ChannelStatus.pending) {
             throw new BadRequestException('Channel not in pending state');
         }
 
-        const checkResult = await this.verificationService.verifyChannel(channel);
-        if (!checkResult.isAdmin) {
-            const telegramChannelId = channel.telegramChannelId.toString();
-            const requiredPermissions: TelegramAdminPermission[] = [
-                'can_manage_chat',
-                'can_post_messages',
-                'can_edit_messages',
-                'can_delete_messages',
-            ];
-
-            if (checkResult.reason === TelegramCheckReason.CHAT_NOT_FOUND) {
-                throw new BadRequestException({
-                    message:
-                        'Telegram channel not found or bot has no access. Add bot to the channel (as admin) and use correct -100... id.',
-                    details: {
-                        telegramChannelId,
-                        hintSteps: [
-                            'Ensure telegramChannelId is the REAL channel id in the format -100...',
-                            'Add the bot to the channel',
-                            'Promote the bot to Administrator',
-                            'Post a test message to the channel',
-                            'Confirm bot receives a channel_post update; copy channel_post.chat.id as telegramChannelId',
-                        ],
-                        telegramError: checkResult.telegramError,
-                    },
-                });
-            }
-
-            if (checkResult.reason === TelegramCheckReason.BOT_NOT_ADMIN) {
-                throw new BadRequestException({
-                    message: 'Bot is not admin of channel',
-                    details: {
-                        telegramChannelId,
-                        requiredPermissions,
-                        telegramError: checkResult.telegramError,
-                    },
-                });
-            }
-
-            if (checkResult.reason === TelegramCheckReason.BOT_KICKED) {
-                throw new BadRequestException({
-                    message: 'Bot was removed or blocked from the channel. Re-add and promote it to Administrator.',
-                    details: {
-                        telegramChannelId,
-                        telegramError: checkResult.telegramError,
-                    },
-                });
-            }
-
-            if (
-                checkResult.reason === TelegramCheckReason.RATE_LIMIT
-                || checkResult.reason === TelegramCheckReason.NETWORK
-            ) {
-                throw new ServiceUnavailableException({
-                    message: 'Telegram unavailable or rate-limited. Retry later.',
-                    details: {
-                        retryAfterSeconds: checkResult.retryAfterSeconds ?? null,
-                        telegramError: checkResult.telegramError,
-                    },
-                });
-            }
-
-            throw new BadRequestException({
-                message: 'Unable to verify channel with Telegram. Retry later.',
-                details: {
-                    telegramChannelId,
-                    telegramError: checkResult.telegramError,
-                },
-            });
-        }
-
-        const updated = await this.prisma.$transaction(async (tx) => {
-            const verification = await tx.channelVerification.upsert({
-                where: { channelId: channel.id },
-                update: {
-                    fraudScore: 0,
-                    notes: 'auto_verified',
-                },
-                create: {
-                    channelId: channel.id,
-                    fraudScore: 0,
-                    notes: 'auto_verified',
-                },
-            });
-
-            const result = await tx.channel.update({
-                where: { id: channel.id },
-                data: { status: ChannelStatus.verified },
-            });
-
-            return { result, verification };
-        });
-
-        await this.auditService.log({
-            userId,
-            action: 'channel_verification_requested',
-            metadata: {
-                channelId: channel.id,
-                status: updated.result.status,
+        // 1️⃣ verification record (queue state)
+        await this.prisma.channelVerification.upsert({
+            where: { channelId },
+            update: { notes: 'queued' },
+            create: {
+                channelId,
+                fraudScore: 0,
+                notes: 'queued',
             },
         });
 
-        return this.mapChannel(updated.result);
+        // 2️⃣ DEDUPED job
+        await channelVerifyQueue.add(
+            'verify-channel',
+            { channelId },
+            {
+                jobId: `verify:${channelId}`,
+                attempts: 10,
+                backoff: { type: 'exponential', delay: 15_000 },
+                removeOnComplete: true,
+            },
+        );
+
+        // 3️⃣ audit
+        await this.auditService.log({
+            userId,
+            action: 'channel_verification_queued',
+            metadata: { channelId },
+        });
+
+        return this.mapChannel(channel);
     }
+
 
     async verifyChannelDebug(channelId: string, actor: { id: string; role: UserRole }) {
         if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEBUG !== 'true') {

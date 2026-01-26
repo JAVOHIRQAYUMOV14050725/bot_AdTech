@@ -7,9 +7,7 @@ export function setupSwagger(app: INestApplication): void {
         process.env.NODE_ENV !== 'production' ||
         process.env.ENABLE_SWAGGER === 'true';
 
-    if (!enableSwagger) {
-        return;
-    }
+    if (!enableSwagger) return;
 
     const config = new DocumentBuilder()
         .setTitle('bot_AdTech API')
@@ -25,9 +23,6 @@ export function setupSwagger(app: INestApplication): void {
             },
             'bearer',
         )
-        // Do NOT add a `/api` server here.
-        // The global prefix is already embedded into the generated paths,
-        // so adding `/api` would double-prefix Swagger URLs to `/api/api/*`.
         .build();
 
     const document = SwaggerModule.createDocument(app, config, {
@@ -35,12 +30,10 @@ export function setupSwagger(app: INestApplication): void {
         ignoreGlobalPrefix: false,
     });
 
+    // Swagger UI: /api/docs
     SwaggerModule.setup('docs', app, document, { useGlobalPrefix: true });
 
-    const globalPrefix = app.setGlobalPrefix('api');
+    // Swagger JSON: /api/docs-json
     const httpAdapter = app.getHttpAdapter().getInstance();
-    httpAdapter.get(
-        `/${globalPrefix}/docs-json`,
-        (req: Request, res: Response) => res.json(document),
-    );
+    httpAdapter.get('/api/docs-json', (req: Request, res: Response) => res.json(document));
 }

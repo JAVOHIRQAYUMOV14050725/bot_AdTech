@@ -1,27 +1,27 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { Logger } from '@nestjs/common';
 import { Worker } from 'bullmq';
-import { ChannelStatus } from '@prisma/client';
 
-import { redisConnection, channelVerifyDlq } from '../queues';
-import { VerificationService } from '@/modules/channels/verification.service';
-import { TelegramCheckReason } from '@/modules/telegram/telegram.types';
+import { TelegramService } from '@/modules/telegram/telegram.service';
+import { EscrowService } from '@/modules/payments/escrow.service';
+import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
+import { postDlq, redisConnection } from '../queues';
+import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { KillSwitchKey, PostJobStatus } from '@prisma/client';
 import { RedisService } from '@/modules/redis/redis.service';
 import { runWithCorrelationId } from '@/common/logging/correlation-id.store';
 
-export function startChannelVerifyWorker(
+export function startPostWorker(
     prisma: PrismaService,
-    verificationService: VerificationService,
+    escrowService: EscrowService,
+    telegramService: TelegramService,
+    killSwitchService: KillSwitchService,
     redisService: RedisService,
 ) {
-    const logger = new Logger('ChannelVerifyWorker');
-
-    /* ============================
-       HEARTBEAT (PostWorker bilan bir xil)
-       ============================ */
+    const logger = new Logger('PostWorker');
     const redisClient = redisService.getClient();
-    const heartbeatKey = 'worker:heartbeat:channel_verify';
-    const heartbeatIntervalMs = 10_000;
+    const heartbeatKey = 'worker:heartbeat';
+    const heartbeatIntervalMs = 10000;
     const heartbeatTtlSeconds = 40;
 
     const updateHeartbeat = async () => {
@@ -34,146 +34,170 @@ export function startChannelVerifyWorker(
             );
         } catch (err) {
             logger.error(
-                '[HEARTBEAT] Failed',
+                '[HEARTBEAT] Failed to update worker heartbeat',
                 err instanceof Error ? err.stack : String(err),
             );
         }
     };
 
     void updateHeartbeat();
-    const heartbeatTimer = setInterval(updateHeartbeat, heartbeatIntervalMs);
-
-    /* ============================
-       WORKER
-       ============================ */
+    const heartbeatTimer = setInterval(() => {
+        void updateHeartbeat();
+    }, heartbeatIntervalMs);
     const worker = new Worker(
-        'channel-verify-queue',
-        async (job) =>
-            runWithCorrelationId(job.data?.channelId, async () => {
-                const { channelId } = job.data as { channelId: string };
-                const now = new Date();
+        'post-queue',
+        async (job) => runWithCorrelationId(job.data?.postJobId, async () => {
+            const { postJobId } = job.data;
+            const now = new Date();
+            const maxAttempts = job.opts.attempts
+                ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
 
-                /* 1️⃣ Channel fetch */
-                const channel = await prisma.channel.findUnique({
-                    where: { id: channelId },
-                    include: { verification: true },
-                });
+            const reservation = await prisma.postJob.updateMany({
+                where: { id: postJobId, status: PostJobStatus.queued },
+                data: {
+                    status: PostJobStatus.sending,
+                    sendingAt: now,
+                    lastAttemptAt: now,
+                    attempts: { increment: 1 },
+                },
+            });
 
-                if (!channel) {
-                    return { skipped: true, reason: 'channel_not_found' };
+            if (reservation.count === 0) {
+                return { skipped: true };
+            }
+
+            const postJob = await prisma.postJob.findUnique({
+                where: { id: postJobId },
+                include: {
+                    campaignTarget: true,
+                },
+            });
+
+            if (!postJob) {
+                throw new Error('PostJob not found');
+            }
+
+            try {
+                const workerEnabled = await killSwitchService.isEnabled(
+                    KillSwitchKey.worker_post,
+                );
+                if (!workerEnabled) {
+                    const delayMs = 5 * 60 * 1000;
+                    logger.warn(
+                        `[KILL_SWITCH] worker_post blocked, delaying job ${postJob.id}`,
+                    );
+                    await job.moveToDelayed(Date.now() + delayMs);
+                    return { delayed: true, reason: 'worker_post' };
                 }
 
-                if (channel.status !== ChannelStatus.pending) {
-                    return { skipped: true, reason: `status=${channel.status}` };
+                const telegramEnabled = await killSwitchService.isEnabled(
+                    KillSwitchKey.telegram_posting,
+                );
+                if (!telegramEnabled) {
+                    const delayMs = 5 * 60 * 1000;
+                    logger.warn(
+                        `[KILL_SWITCH] telegram_posting blocked, delaying job ${postJob.id}`,
+                    );
+                    await job.moveToDelayed(Date.now() + delayMs);
+                    return { delayed: true, reason: 'telegram_posting' };
                 }
 
-                /* 2️⃣ RESERVATION (LOCK)
-                   faqat `queued` bo‘lsa `running` ga o‘tadi */
-                const reservation = await prisma.channelVerification.updateMany({
-                    where: {
-                        channelId,
-                        notes: 'queued',
-                    },
-                    data: {
-                        notes: 'running',
-                        lastError: null,
-                        checkedAt: now,
-                    },
-                });
+                // 🚀 REAL TELEGRAM SEND
+                const telegramResult =
+                    await telegramService.sendCampaignPost(postJob.id);
 
-                if (reservation.count === 0) {
-                    return { skipped: true, reason: 'already_processing' };
+                if (!telegramResult.ok) {
+                    throw new Error('Telegram send failed');
                 }
 
-                /* 3️⃣ TELEGRAM CHECK */
-                const result = await verificationService.verifyChannel(channel);
-
-                /* ============================
-                   ✅ SUCCESS
-                   ============================ */
-                if (result.isAdmin) {
-                    await prisma.$transaction(async (tx) => {
-                        await tx.channel.update({
-                            where: { id: channelId },
-                            data: { status: ChannelStatus.verified },
-                        });
-
-                        await tx.channelVerification.update({
-                            where: { channelId },
-                            data: {
-                                fraudScore: 0,
-                                notes: 'auto_verified',
-                                lastError: null,
-                                checkedAt: now,
-                            },
-                        });
+                // ✅ SUCCESS FLOW (ATOMIC)
+                await prisma.$transaction(async (tx) => {
+                    assertPostJobTransition({
+                        postJobId: postJob.id,
+                        from: postJob.status,
+                        to: PostJobStatus.success,
+                        actor: 'worker',
+                        correlationId: postJob.id,
                     });
 
-                    return { ok: true };
-                }
-
-                /* ============================
-                   ❌ NON-RETRYABLE
-                   (user action talab qilinadi)
-                   ============================ */
-                const nonRetryable = new Set<TelegramCheckReason>([
-                    TelegramCheckReason.CHAT_NOT_FOUND,
-                    TelegramCheckReason.BOT_NOT_ADMIN,
-                    TelegramCheckReason.BOT_KICKED,
-                ]);
-
-                if (nonRetryable.has(result.reason)) {
-                    await prisma.channelVerification.update({
-                        where: { channelId },
+                    await tx.postJob.update({
+                        where: { id: postJob.id },
                         data: {
-                            notes: `failed:${result.reason}`,
-                            lastError: result.telegramError ?? result.reason,
-                            checkedAt: now,
+                            status: PostJobStatus.success,
+                            sendingAt: null,
+                            telegramMessageId: telegramResult.telegramMessageId
+                                ? BigInt(telegramResult.telegramMessageId)
+                                : null,
                         },
                     });
 
-                    return {
-                        ok: false,
-                        retry: false,
-                        reason: result.reason,
-                    };
-                }
-
-                /* ============================
-                   🔁 RETRYABLE
-                   (RATE_LIMIT / NETWORK / UNKNOWN)
-                   ============================ */
-                await prisma.channelVerification.update({
-                    where: { channelId },
-                    data: {
-                        notes: `retrying:${result.reason}`,
-                        lastError: result.telegramError ?? result.reason,
-                        checkedAt: now,
-                    },
+                    await escrowService.release(postJob.campaignTargetId, {
+                        transaction: tx,
+                        actor: 'worker',
+                        correlationId: postJob.id,
+                    });
                 });
 
-                // 🔥 MUHIM: throw → BullMQ retry/backoff
-                throw new Error(`telegram_retryable:${result.reason}`);
-            }),
+                return {
+                    ok: true,
+                    telegramMessageId: telegramResult.telegramMessageId,
+                };
+            } catch (err) {
+                const attemptsMade = job.attemptsMade + 1;
+                const shouldRetry = attemptsMade < maxAttempts;
+
+                await prisma.$transaction(async (tx) => {
+                    assertPostJobTransition({
+                        postJobId: postJob.id,
+                        from: postJob.status,
+                        to: shouldRetry ? PostJobStatus.queued : PostJobStatus.failed,
+                        actor: 'worker',
+                        correlationId: postJob.id,
+                    });
+
+                    await tx.postJob.update({
+                        where: { id: postJob.id },
+                        data: {
+                            status: shouldRetry
+                                ? PostJobStatus.queued
+                                : PostJobStatus.failed,
+                            lastError:
+                                err instanceof Error ? err.message : String(err),
+                            sendingAt: null,
+                        },
+                    });
+
+                    if (!shouldRetry) {
+                        await escrowService.refund(postJob.campaignTargetId, {
+                            reason: 'post_failed',
+                            transaction: tx,
+                            actor: 'worker',
+                            correlationId: postJob.id,
+                        });
+                    }
+                });
+
+                throw err;
+            }
+        }),
         {
             connection: redisConnection,
             concurrency: 5,
         },
     );
 
-    /* ============================
-       DLQ (PostWorker bilan bir xil)
-       ============================ */
     worker.on('failed', async (job, err) => {
-        if (!job) return;
+        if (!job) {
+            return;
+        }
 
         const maxAttempts = job.opts.attempts ?? 1;
         if (job.attemptsMade >= maxAttempts) {
             try {
-                await channelVerifyDlq.add(
-                    'channel-verify-failed',
+                await postDlq.add(
+                    'post-failed',
                     {
-                        channelId: job.data.channelId,
+                        postJobId: job.data.postJobId,
                         error: err instanceof Error ? err.message : String(err),
                     },
                     {
@@ -182,13 +206,12 @@ export function startChannelVerifyWorker(
                         removeOnFail: false,
                     },
                 );
-
                 logger.error(
-                    `Moved channel verify job ${job.id} to DLQ after ${job.attemptsMade} attempts`,
+                    `Moved job ${job.id} to DLQ after ${job.attemptsMade} attempts`,
                 );
             } catch (dlqError) {
                 logger.error(
-                    'Failed to enqueue channel verify DLQ',
+                    `Failed to enqueue DLQ for job ${job.id}`,
                     dlqError instanceof Error ? dlqError.stack : String(dlqError),
                 );
             }
@@ -202,14 +225,11 @@ export function startChannelVerifyWorker(
         );
     });
 
-    /* ============================
-       SHUTDOWN
-       ============================ */
     const shutdown = async () => {
-        logger.log('Shutting down channel verify worker');
+        logger.log('Shutting down post worker');
         clearInterval(heartbeatTimer);
         await worker.close();
-        await channelVerifyDlq.close();
+        await postDlq.close();
     };
 
     process.once('SIGTERM', shutdown);

@@ -290,14 +290,20 @@ export class PaymentsService {
                 throw new BadRequestException('Campaign target not found');
             }
 
-            if (target.status !== CampaignTargetStatus.approved) {
+            const allowed: CampaignTargetStatus[] = [
+                CampaignTargetStatus.submitted,
+                CampaignTargetStatus.approved,
+            ];
+
+            if (!allowed.includes(target.status)) {
                 this.logger.error(
                     `[FSM] Escrow hold blocked: campaignTarget=${campaignTargetId} is ${target.status}`,
                 );
                 throw new ConflictException(
-                    `Escrow hold requires campaign target ${campaignTargetId} to be approved`,
+                    `Escrow hold requires campaign target ${campaignTargetId} to be submitted/approved (current: ${target.status})`,
                 );
             }
+
 
             if (target.campaign.status !== CampaignStatus.active) {
                 throw new ConflictException(

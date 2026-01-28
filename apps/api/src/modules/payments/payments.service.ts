@@ -12,19 +12,22 @@ import {
 import {
     BadRequestException,
     ConflictException,
+    Inject,
     Injectable,
     Logger,
+    LoggerService,
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
-import { safeJsonStringify } from '@/common/serialization/sanitize';
+
 
 @Injectable()
 export class PaymentsService {
-    private readonly logger = new Logger(PaymentsService.name);
+   
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly killSwitchService: KillSwitchService,
+        @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
 
     private normalizeDecimal(value: Prisma.Decimal) {
@@ -53,15 +56,20 @@ export class PaymentsService {
         const balance = new Prisma.Decimal(wallet.balance ?? 0);
 
         if (!ledgerSum.equals(balance)) {
-            this.logger.error(
-                safeJsonStringify({
-                    event: 'ledger_invariant_violation',
-                    metric: 'ledger_invariant_violation',
-                    walletId,
-                    balance: balance.toFixed(2),
-                    ledger: ledgerSum.toFixed(2),
-                }),
+            this.logger.error({
+                    event: 'ledger_wallet_invariant_violation',
+                    alert: true,
+                    entityType: 'wallet',
+                    entityId: walletId,
+                    data: {
+                        walletBalance: balance.toFixed(2),
+                        ledgerSum: ledgerSum.toFixed(2),
+                    },
+                },
+                undefined,
+                'PaymentsService',
             );
+
             throw new ConflictException(
                 `Ledger invariant violated for wallet=${walletId}`,
             );
@@ -296,9 +304,15 @@ export class PaymentsService {
             ];
 
             if (!allowed.includes(target.status)) {
-                this.logger.error(
-                    `[FSM] Escrow hold blocked: campaignTarget=${campaignTargetId} is ${target.status}`,
+                this.logger.warn({
+                        event: 'escrow_hold_invalid_status',
+                        entityType: 'campaign_target',
+                        entityId: campaignTargetId,
+                        data: { currentStatus: target.status },
+                    },
+                    'PaymentsService',
                 );
+
                 throw new ConflictException(
                     `Escrow hold requires campaign target ${campaignTargetId} to be submitted/approved (current: ${target.status})`,
                 );

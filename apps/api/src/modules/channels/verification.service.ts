@@ -14,7 +14,7 @@ export class VerificationService {
 
         if (!result.isAdmin) {
             this.logger.warn({
-                message: 'Channel verification failed',
+                message: `Bot is not admin in channel ${channelId}`,
                 channelId,
                 reason: result.reason,
                 telegramError: result.telegramError ?? null,
@@ -23,8 +23,13 @@ export class VerificationService {
         }
 
         if (result.reason === TelegramCheckReason.UNKNOWN && !result.isAdmin) {
-            this.logger.error(
-                `Channel verification returned unknown failure for ${channelId}`,
+            this.logger.error({
+                message: `Unexpected failure verifying bot admin status in channel ${channelId}`,
+                channelId,
+                telegramError: result.telegramError ?? null,
+                canAccessChat: result.canAccessChat,
+            },
+                'VerificationService',
             );
         }
 

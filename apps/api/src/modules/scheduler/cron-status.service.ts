@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, LoggerService } from '@nestjs/common';
 import { RedisService } from '@/modules/redis/redis.service';
 
 export type CronResult = 'success' | 'failed' | 'skipped';
@@ -12,10 +12,12 @@ export interface CronStatus {
 
 @Injectable()
 export class CronStatusService {
-    private readonly logger = new Logger(CronStatusService.name);
     private readonly fallback = new Map<string, CronStatus>();
+   
 
-    constructor(private readonly redisService: RedisService) { }
+    constructor(private readonly redisService: RedisService,
+        @Inject('LOGGER') private readonly logger: LoggerService
+    ) { }
 
     private key(name: string) {
         return `cron:status:${name}`;
@@ -40,8 +42,8 @@ export class CronStatusService {
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             this.logger.error(
-                `[CRON] Failed to record status for ${params.name}`,
-                err instanceof Error ? err.stack : String(err),
+                `[CRON] Failed to record status for ${params.name}: ${errorMessage}`,
+                err instanceof Error ? err.stack : String(err),                
             );
             this.fallback.set(params.name, {
                 name: params.name,
@@ -68,7 +70,7 @@ export class CronStatusService {
             };
         } catch (err) {
             this.logger.error(
-                `[CRON] Failed to read status for ${name}`,
+                `[CRON] Failed to get status for ${name}: ${err instanceof Error ? err.message : String(err)}`,
                 err instanceof Error ? err.stack : String(err),
             );
             return this.fallback.get(name) ?? null;

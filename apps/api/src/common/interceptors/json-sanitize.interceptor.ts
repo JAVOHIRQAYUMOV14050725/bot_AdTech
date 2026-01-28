@@ -38,12 +38,12 @@ export class JsonSanitizeInterceptor implements NestInterceptor {
                 const duration = Date.now() - start;
                 const correlationId = request.correlationId ?? 'n/a';
                 this.logger.log({
-                    event: 'http_request',
+                    message: `Handled ${request.method} ${request.url} - ${response.statusCode} in ${duration}ms`,
                     correlationId,
                     method: request.method,
-                    path: request.originalUrl,
+                    url: request.url,
                     statusCode: response.statusCode,
-                    durationMs: duration,
+                    durationMs: duration,                  
                 });
             }),
         );

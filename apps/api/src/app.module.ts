@@ -22,6 +22,8 @@ import { SystemModule } from '@/modules/system/system.module';
 import { RedisModule } from '@/modules/redis/redis.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { LoggingModule } from './common/logging/logging.module';
+
 
 @Module({
     imports: [
@@ -33,6 +35,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
         }),
 
         ScheduleModule.forRoot(),
+        LoggingModule,
         PrismaModule,
         AuthModule,
         UsersModule,

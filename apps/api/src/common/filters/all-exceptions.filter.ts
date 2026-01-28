@@ -97,9 +97,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
             error: normalizedError,
         };
         if (isFaviconNotFound && process.env.NODE_ENV === 'production') {
-            this.logger.debug(logPayload, stack ?? String(exception));
+            this.logger.debug({
+                ...logPayload,
+                message: 'Favicon not found',
+            },
+                stack);
         } else {
-            this.logger.error(logPayload, stack ?? String(exception));
+            this.logger.error({
+                ...logPayload,
+                message: 'HTTP exception occurred',
+            },
+                stack);
         }
 
         response.status(status).json(payload);

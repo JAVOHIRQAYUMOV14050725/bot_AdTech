@@ -9,7 +9,7 @@ import {
     EscrowStatus,
     PostJobStatus,
 } from '@prisma/client';
-import { safeJsonStringify } from '@/common/serialization/sanitize';
+
 
 export type TransitionActor = 'system' | 'worker' | 'admin' | 'advertiser';
 
@@ -126,8 +126,16 @@ function assertTransition<S extends string>({
     const rule = transitions[from]?.[to];
 
     if (!rule) {
-        logger.error(
-            `[FSM] Forbidden ${entity} transition ${from} -> ${to} (id=${id}, actor=${actor})`,
+        logger.error({
+            event: 'invalid_state_transition',
+            entity,
+            id,
+            from,
+            to,
+            actor,
+            correlationId: correlationId ?? null,
+        },
+            'LifecycleFSM',
         );
         throw new ConflictException(
             `${entity} ${id} cannot transition from ${from} to ${to}`,
@@ -143,16 +151,16 @@ function assertTransition<S extends string>({
         );
     }
 
-    logger.log(
-        safeJsonStringify({
-            event: 'state_transition',
-            entity,
-            id,
-            from,
-            to,
-            actor,
-            correlationId: correlationId ?? null,
-        }),
+    logger.log({
+        event: 'state_transition',
+        entity,
+        id,
+        from,
+        to,
+        actor,
+        correlationId: correlationId ?? null,
+    },
+        'LifecycleFSM',
     );
 
     return { noop: false };

@@ -1,8 +1,9 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import {
     BadRequestException,
+    Inject,
     Injectable,
-    Logger,
+    LoggerService,
 } from '@nestjs/common';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { ResolveAction } from './dto/resolve-escrow.dto';
@@ -16,7 +17,6 @@ import {
     Prisma,
 } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
-import { safeJsonStringify } from '@/common/serialization/sanitize';
 import { postQueue } from '@/modules/scheduler/queues';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 
@@ -55,11 +55,12 @@ const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
 };
 @Injectable()
 export class SystemService {
-    private readonly logger = new Logger(SystemService.name);
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly escrowService: EscrowService,
+                @Inject('LOGGER') private readonly logger: LoggerService,
+        
     ) { }
 
     /**
@@ -112,8 +113,22 @@ export class SystemService {
         }
 
         this.logger.warn(
-            `[SYSTEM] Escrow ${action} executed for campaignTarget=${campaignTargetId}`,
+            {
+                event: 'escrow_manual_resolve',
+                entityType: 'escrow',
+                entityId: escrow.id,
+                actorId: actorUserId,
+                data: {
+                    campaignTargetId,
+                    action,
+                    reason,
+                    escrowStatus: escrow.status,
+                },
+                correlationId: campaignTargetId,
+            },
+            'SystemService',
         );
+
 
         return {
             ok: true,
@@ -161,8 +176,12 @@ export class SystemService {
 
         for (const escrow of stuckEscrows) {
             try {
-                this.logger.warn(
-                    `[WATCHDOG] Refunding stuck escrow ${escrow.id}`,
+                this.logger.warn({
+                    event: 'escrow_watchdog_refund_attempt',
+                    escrowId: escrow.id,
+                    campaignTargetId: escrow.campaignTargetId,
+                    postJobStatus: escrow.campaignTarget.postJob?.status,
+                }
                 );
 
                 await this.escrowService.refund(
@@ -185,9 +204,14 @@ export class SystemService {
                     },
                 });
             } catch (err) {
-                this.logger.error(
-                    `[WATCHDOG] Failed refund escrow ${escrow.id}`,
-                    err instanceof Error ? err.stack : String(err),
+                this.logger.error({
+                    event: 'escrow_watchdog_refund_failed',
+                    escrowId: escrow.id,
+                    campaignTargetId: escrow.campaignTargetId,
+                    error: err instanceof Error ? err.message : String(err),
+
+                },
+                    'SystemService',
                 );
             }
         }
@@ -202,7 +226,10 @@ export class SystemService {
      * =========================================================
      */
     async checkLedgerInvariant() {
-        this.logger.warn('[INVARIANT] Ledger check started');
+        this.logger.warn({
+            event: 'ledger_invariant_check_start',
+        },
+            'SystemService',);
 
         const wallets = await this.prisma.wallet.findMany({
             select: { id: true, balance: true },
@@ -218,14 +245,17 @@ export class SystemService {
             const balance = new Decimal(wallet.balance);
 
             if (!ledgerSum.equals(balance)) {
-                this.logger.error(
-                    safeJsonStringify({
-                        event: 'ledger_invariant_violation',
-                        walletId: wallet.id,
-                        balance: balance.toFixed(2),
-                        ledger: ledgerSum.toFixed(2),
-                    }),
-                );
+                this.logger.error({
+                    event: 'ledger_invariant_violated',
+                    entityType: 'wallet',
+                    entityId: wallet.id,
+                    data: {
+                        walletBalance: balance.toString(),
+                        ledgerSum: ledgerSum.toString(),
+                         }
+                },
+                    'SystemService',
+                )
 
                 // 🔥 PRODUCTION DECISION:
                 // - crash
@@ -237,7 +267,12 @@ export class SystemService {
             }
         }
 
-        this.logger.log('[INVARIANT] Ledger check passed');
+        this.logger.log({
+            event: 'ledger_invariant_check_complete',
+
+        },
+            'SystemService',
+        );
     }
 
     async updateKillSwitch(params: {
@@ -291,14 +326,16 @@ export class SystemService {
             return killSwitch;
         });
 
-        this.logger.warn(
-            safeJsonStringify({
-                event: 'kill_switch_update',
-                key,
-                enabled,
-                reason: reason ?? null,
-                actorUserId,
-            }),
+        this.logger.warn({
+            event: 'kill_switch_updated',
+            entityType: 'kill_switch',
+            entityId: result.key,
+            actorId: actorUserId,
+            data: {
+                enabled: result.enabled,
+            }
+        },
+            'SystemService',
         );
 
         return result;
@@ -442,26 +479,24 @@ export class SystemService {
                             removeOnFail: false,
                         },
                     );
-                } catch (enqueueError) {
+                } catch(enqueueError) {
                     this.logger.warn(
-                        safeJsonStringify({
-                            event: 'post_job_requeue_skipped',
+                        {
+                            event: 'post_job_requeue_enqueue_failed',
                             postJobId: job.id,
-                            reason: 'already_queued',
-                            error: enqueueError instanceof Error
-                                ? enqueueError.message
-                                : String(enqueueError),
-                        }),
+                            error: enqueueError instanceof Error ? enqueueError.message : String(enqueueError),
+                        },
+                        'SystemService',
                     );
                 }
             } catch (err) {
-                this.logger.error(
-                    safeJsonStringify({
-                        event: 'post_job_requeue_failed',
-                        postJobId: job.id,
-                        error: err instanceof Error ? err.message : String(err),
-                    }),
-                );
+                this.logger.error({
+                    event: 'post_job_requeue_failed',
+                    postJobId: job.id,
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                    'SystemService',
+                )
             }
         }
 
@@ -476,14 +511,13 @@ export class SystemService {
         const mode = params?.mode ?? ReconciliationMode.DRY_RUN;
         const correlationId = params?.correlationId ?? `recon:${Date.now()}`;
 
-        this.logger.warn(
-            safeJsonStringify({
-                event: 'reconciliation_requested',
-                mode,
-                actorUserId: params?.actorUserId ?? null,
-                correlationId,
-            }),
-        );
+        this.logger.warn({
+            event: 'revenue_reconciliation_start',
+            mode,
+            correlationId,
+        },
+            'SystemService',
+        )
 
         if (mode === ReconciliationMode.FIX && !params?.actorUserId) {
             throw new BadRequestException('Fix mode requires admin actor');
@@ -509,7 +543,15 @@ export class SystemService {
                 ledgerTotal: ledgerTotal.toFixed(2),
                 correlationId,
             };
-            this.logger.error(safeJsonStringify(payload));
+            this.logger.error({
+                event: 'reconciliation_mismatch',
+                check: 'wallet_vs_ledger',
+                walletTotal: walletTotal.toFixed(2),
+                ledgerTotal: ledgerTotal.toFixed(2),
+                correlationId,
+            },
+                'SystemService',
+            );
             discrepancies.push(payload);
         }
 
@@ -536,7 +578,15 @@ export class SystemService {
                 payoutTotal: payoutTotal.toFixed(2),
                 correlationId,
             };
-            this.logger.error(safeJsonStringify(payload));
+            this.logger.error({
+                event: 'reconciliation_mismatch',
+                check: 'escrow_vs_payouts',
+                escrowTotal: escrowTotal.toFixed(2),
+                payoutTotal: payoutTotal.toFixed(2),
+                correlationId,
+            },
+                'SystemService',
+            );
             discrepancies.push(payload);
         }
 
@@ -564,7 +614,15 @@ export class SystemService {
                 escrows: staleEscrows,
                 correlationId,
             };
-            this.logger.error(safeJsonStringify(payload));
+            this.logger.error({
+                event: 'reconciliation_mismatch',
+                check: 'stale_escrows',
+                count: staleEscrows.length,
+                escrows: staleEscrows,
+                correlationId,
+            },
+                'SystemService',
+            );
             discrepancies.push(payload);
         }
 
@@ -601,19 +659,25 @@ export class SystemService {
                 targets: postedWithoutRelease,
                 correlationId,
             };
-            this.logger.error(safeJsonStringify(payload));
+            this.logger.error({
+                event: 'reconciliation_mismatch',
+                check: 'posted_without_release',
+                count: postedWithoutRelease.length,
+                targets: postedWithoutRelease,
+                correlationId,
+            },
+                );
             discrepancies.push(payload);
         }
 
         if (mode === ReconciliationMode.FIX) {
-            this.logger.warn(
-                safeJsonStringify({
-                    event: 'reconciliation_fix_requested',
-                    correlationId,
-                    actorUserId: params?.actorUserId ?? null,
-                    discrepancies: discrepancies.length,
-                }),
-            );
+            this.logger.warn({
+                event: 'revenue_reconciliation_fix_start',
+                correlationId,
+                discrepanciesCount: discrepancies.length,
+            },
+                'SystemService',
+            )
 
             const jsonDiscrepancies: Prisma.InputJsonArray = discrepancies.map(
                 (entry) => toJsonValue(entry),

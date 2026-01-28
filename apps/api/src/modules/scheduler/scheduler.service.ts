@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, LoggerService } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SystemService } from '@/modules/system/system.service';
 import { postQueue } from './queues';
@@ -7,15 +7,15 @@ import { CronStatusService } from './cron-status.service';
 
 @Injectable()
 export class SchedulerService {
-    private readonly logger = new Logger(SchedulerService.name);
-
     constructor(
         private readonly systemService: SystemService,
         private readonly killSwitchService: KillSwitchService,
         private readonly cronStatusService: CronStatusService,
+        @Inject('LOGGER') private readonly logger: LoggerService,
+
     ) { }
 
-    /**
+    /** 
      * =========================================================
      * 📬 POST EXECUTION QUEUE (EVENT-DRIVEN)
      * =========================================================
@@ -58,14 +58,24 @@ export class SchedulerService {
             return;
         }
 
-        this.logger.warn('[CRON] Escrow watchdog triggered');
+        this.logger.warn({
+            event: 'escrow_watchdog_triggered',
+            enabled
+        },
+            'SchedulerService'
+        );
         try {
             await this.systemService.refundStuckEscrows();
             await this.cronStatusService.recordRun({
                 name: 'escrow_watchdog',
                 result: 'success',
             });
-            this.logger.log('[CRON] Escrow watchdog completed');
+            this.logger.log({
+                event: 'escrow_watchdog_completed',
+                enabled
+            },
+                'SchedulerService'
+            );
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             await this.cronStatusService.recordRun({
@@ -73,7 +83,13 @@ export class SchedulerService {
                 result: 'failed',
                 error: message,
             });
-            this.logger.error('[CRON] Escrow watchdog failed', message);
+            this.logger.error({
+                event: 'escrow_watchdog_failed',
+                error: message,
+                enabled
+            },
+                'SchedulerService'
+            );
             throw err;
         }
     }
@@ -87,7 +103,13 @@ export class SchedulerService {
     async ledgerInvariantWatchdog() {
         const enabled = await this.killSwitchService.isEnabled('worker_watchdogs');
         if (!enabled) {
-            this.logger.warn('[CRON] Ledger watchdog paused by kill switch');
+            this.logger.warn({
+                event: 'ledger_invariant_watchdog_paused',
+                reason: 'kill_switch_disabled',
+                enabled
+            },
+                'SchedulerService'
+             );
             await this.cronStatusService.recordRun({
                 name: 'ledger_invariant',
                 result: 'skipped',
@@ -103,7 +125,10 @@ export class SchedulerService {
                 name: 'ledger_invariant',
                 result: 'success',
             });
-            this.logger.log('[CRON] Ledger invariant completed');
+            this.logger.log({
+                event: 'ledger_invariant_check_completed',
+                enabled
+            }, 'SchedulerService');
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             await this.cronStatusService.recordRun({
@@ -111,7 +136,12 @@ export class SchedulerService {
                 result: 'failed',
                 error: message,
             });
-            this.logger.error('[CRON] Ledger invariant failed', message);
+            this.logger.error({
+                event: 'ledger_invariant_check_failed',
+                error: message,
+                enabled
+            },
+                'SchedulerService');
             throw err;
         }
     }
@@ -125,7 +155,13 @@ export class SchedulerService {
     async postJobRecovery() {
         const enabled = await this.killSwitchService.isEnabled('worker_watchdogs');
         if (!enabled) {
-            this.logger.warn('[CRON] Post job recovery paused by kill switch');
+            this.logger.warn({
+                event: 'post_job_recovery_paused',
+                reason: 'kill_switch_disabled',
+                enabled
+            },
+                'SchedulerService'
+            );
             await this.cronStatusService.recordRun({
                 name: 'post_job_recovery',
                 result: 'skipped',
@@ -134,12 +170,23 @@ export class SchedulerService {
             return;
         }
 
-        this.logger.warn('[CRON] Post job recovery triggered');
+        this.logger.warn({
+            event: 'post_job_recovery_triggered',
+            enabled
+
+        },
+            'SchedulerService');
         try {
             const schemaCheck = await this.systemService.checkPostJobSchema();
             if (!schemaCheck.ok) {
                 const error = `missing_columns:${schemaCheck.missingColumns.join(',')}`;
-                this.logger.warn(`[CRON] Post job recovery skipped: ${error}`);
+                this.logger.warn({
+                    event: 'post_job_recovery_skipped',
+                    reason: 'schema_invariant_failed',
+                    missingColumns: schemaCheck.missingColumns,
+                    enabled
+                },
+                    'SchedulerService');
                 await this.cronStatusService.recordRun({
                     name: 'post_job_recovery',
                     result: 'skipped',
@@ -153,7 +200,11 @@ export class SchedulerService {
                 name: 'post_job_recovery',
                 result: 'success',
             });
-            this.logger.log('[CRON] Post job recovery completed');
+            this.logger.log({
+                event: 'post_job_recovery_completed',
+                enabled
+            },
+                'SchedulerService');
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             await this.cronStatusService.recordRun({
@@ -161,7 +212,12 @@ export class SchedulerService {
                 result: 'failed',
                 error: message,
             });
-            this.logger.error('[CRON] Post job recovery failed', message);
+            this.logger.error({
+                event: 'post_job_recovery_failed',
+                error: message,
+                enabled
+            },
+                'SchedulerService');
         }
     }
 
@@ -176,7 +232,13 @@ export class SchedulerService {
             'worker_reconciliation',
         );
         if (!enabled) {
-            this.logger.warn('[CRON] Reconciliation paused by kill switch');
+            this.logger.warn({
+                event: 'revenue_reconciliation_paused',
+                reason: 'kill_switch_disabled',
+                enabled
+            },
+                'SchedulerService'
+            );
             await this.cronStatusService.recordRun({
                 name: 'revenue_reconciliation',
                 result: 'skipped',
@@ -185,14 +247,22 @@ export class SchedulerService {
             return;
         }
 
-        this.logger.warn('[CRON] Revenue reconciliation triggered');
+        this.logger.warn({
+            event: 'revenue_reconciliation_triggered',
+            enabled
+        },
+            'SchedulerService');
         try {
             await this.systemService.runRevenueReconciliation();
             await this.cronStatusService.recordRun({
                 name: 'revenue_reconciliation',
                 result: 'success',
             });
-            this.logger.log('[CRON] Revenue reconciliation completed');
+            this.logger.log({
+                event: 'revenue_reconciliation_completed',
+                enabled
+            },
+                'SchedulerService');
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             await this.cronStatusService.recordRun({
@@ -200,7 +270,13 @@ export class SchedulerService {
                 result: 'failed',
                 error: message,
             });
-            this.logger.error('[CRON] Revenue reconciliation failed', message);
+            this.logger.error({
+                event: 'revenue_reconciliation_failed',
+                error: message,
+                enabled
+            },
+                'SchedulerService'
+            );
             throw err;
         }
     }

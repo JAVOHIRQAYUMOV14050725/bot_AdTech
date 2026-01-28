@@ -1,5 +1,5 @@
 import { PrismaService } from '@/prisma/prisma.service';
-import { Logger } from '@nestjs/common';
+import { LoggerService } from '@nestjs/common'; // ✅
 import { Worker } from 'bullmq';
 
 import { TelegramService } from '@/modules/telegram/telegram.service';
@@ -17,8 +17,8 @@ export function startPostWorker(
     telegramService: TelegramService,
     killSwitchService: KillSwitchService,
     redisService: RedisService,
+    logger: LoggerService, // ✅ endi tashqaridan keladi
 ) {
-    const logger = new Logger('PostWorker');
     const redisClient = redisService.getClient();
     const heartbeatKey = 'worker:heartbeat';
     const heartbeatIntervalMs = 10000;
@@ -34,162 +34,193 @@ export function startPostWorker(
             );
         } catch (err) {
             logger.error(
-                '[HEARTBEAT] Failed to update worker heartbeat',
-                err instanceof Error ? err.stack : String(err),
+                {
+                    event: 'worker_heartbeat_failed',
+                    alert: true,
+                    entityType: 'worker',
+                    entityId: 'post_worker',
+                    data: {
+                        heartbeatKey,
+                        error: err instanceof Error ? err.message : String(err),
+                    },
+                },
+                err instanceof Error ? err.stack : undefined,
+                'PostWorker',
             );
         }
     };
 
     void updateHeartbeat();
-    const heartbeatTimer = setInterval(() => {
-        void updateHeartbeat();
-    }, heartbeatIntervalMs);
+    const heartbeatTimer = setInterval(() => void updateHeartbeat(), heartbeatIntervalMs);
+
     const worker = new Worker(
         'post-queue',
-        async (job) => runWithCorrelationId(job.data?.postJobId, async () => {
-            const { postJobId } = job.data;
-            const now = new Date();
-            const maxAttempts = job.opts.attempts
-                ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
+        async (job) =>
+            runWithCorrelationId(job.data?.postJobId, async () => {
+                const { postJobId } = job.data;
+                const now = new Date();
+                const maxAttempts = job.opts.attempts ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
 
-            const reservation = await prisma.postJob.updateMany({
-                where: { id: postJobId, status: PostJobStatus.queued },
-                data: {
-                    status: PostJobStatus.sending,
-                    sendingAt: now,
-                    lastAttemptAt: now,
-                    attempts: { increment: 1 },
-                },
-            });
-
-            if (reservation.count === 0) {
-                return { skipped: true };
-            }
-
-            const postJob = await prisma.postJob.findUnique({
-                where: { id: postJobId },
-                include: {
-                    campaignTarget: true,
-                },
-            });
-
-            if (!postJob) {
-                throw new Error('PostJob not found');
-            }
-
-            try {
-                const workerEnabled = await killSwitchService.isEnabled(
-                    KillSwitchKey.worker_post,
-                );
-                if (!workerEnabled) {
-                    const delayMs = 5 * 60 * 1000;
-                    logger.warn(
-                        `[KILL_SWITCH] worker_post blocked, delaying job ${postJob.id}`,
-                    );
-                    await job.moveToDelayed(Date.now() + delayMs);
-                    return { delayed: true, reason: 'worker_post' };
-                }
-
-                const telegramEnabled = await killSwitchService.isEnabled(
-                    KillSwitchKey.telegram_posting,
-                );
-                if (!telegramEnabled) {
-                    const delayMs = 5 * 60 * 1000;
-                    logger.warn(
-                        `[KILL_SWITCH] telegram_posting blocked, delaying job ${postJob.id}`,
-                    );
-                    await job.moveToDelayed(Date.now() + delayMs);
-                    return { delayed: true, reason: 'telegram_posting' };
-                }
-
-                // 🚀 REAL TELEGRAM SEND
-                const telegramResult =
-                    await telegramService.sendCampaignPost(postJob.id);
-
-                if (!telegramResult.ok) {
-                    throw new Error('Telegram send failed');
-                }
-
-                // ✅ SUCCESS FLOW (ATOMIC)
-                await prisma.$transaction(async (tx) => {
-                    assertPostJobTransition({
-                        postJobId: postJob.id,
-                        from: postJob.status,
-                        to: PostJobStatus.success,
-                        actor: 'worker',
-                        correlationId: postJob.id,
-                    });
-
-                    await tx.postJob.update({
-                        where: { id: postJob.id },
-                        data: {
-                            status: PostJobStatus.success,
-                            sendingAt: null,
-                            telegramMessageId: telegramResult.telegramMessageId
-                                ? BigInt(telegramResult.telegramMessageId)
-                                : null,
-                        },
-                    });
-
-                    await escrowService.release(postJob.campaignTargetId, {
-                        transaction: tx,
-                        actor: 'worker',
-                        correlationId: postJob.id,
-                    });
+                const reservation = await prisma.postJob.updateMany({
+                    where: { id: postJobId, status: PostJobStatus.queued },
+                    data: {
+                        status: PostJobStatus.sending,
+                        sendingAt: now,
+                        lastAttemptAt: now,
+                        attempts: { increment: 1 },
+                    },
                 });
 
-                return {
-                    ok: true,
-                    telegramMessageId: telegramResult.telegramMessageId,
-                };
-            } catch (err) {
-                const attemptsMade = job.attemptsMade + 1;
-                const shouldRetry = attemptsMade < maxAttempts;
-
-                await prisma.$transaction(async (tx) => {
-                    assertPostJobTransition({
-                        postJobId: postJob.id,
-                        from: postJob.status,
-                        to: shouldRetry ? PostJobStatus.queued : PostJobStatus.failed,
-                        actor: 'worker',
-                        correlationId: postJob.id,
-                    });
-
-                    await tx.postJob.update({
-                        where: { id: postJob.id },
-                        data: {
-                            status: shouldRetry
-                                ? PostJobStatus.queued
-                                : PostJobStatus.failed,
-                            lastError:
-                                err instanceof Error ? err.message : String(err),
-                            sendingAt: null,
+                if (reservation.count === 0) {
+                    logger.warn(
+                        {
+                            event: 'post_job_reservation_failed',
+                            entityType: 'post_job',
                         },
-                    });
+                        'PostWorker',
+                    );
+                }
 
-                    if (!shouldRetry) {
-                        await escrowService.refund(postJob.campaignTargetId, {
-                            reason: 'post_failed',
+                const postJob = await prisma.postJob.findUnique({
+                    where: { id: postJobId },
+                    include: { campaignTarget: true },
+                });
+
+                if (!postJob) {
+                    throw new Error('PostJob not found');
+                }
+
+                try {
+                    const workerEnabled = await killSwitchService.isEnabled(KillSwitchKey.worker_post);
+                    if (!workerEnabled) {
+                        const delayMs = 5 * 60 * 1000;
+                        logger.warn(
+                            {
+                                event: 'kill_switch_blocked',
+                                entityType: 'post_job',
+                                entityId: postJob.id,
+                                data: { key: 'worker_post', delayMs },
+                            },
+                            'PostWorker',
+                        );
+                        await job.moveToDelayed(Date.now() + delayMs);
+                        return { delayed: true, reason: 'worker_post' };
+                    }
+
+                    const telegramEnabled = await killSwitchService.isEnabled(KillSwitchKey.telegram_posting);
+                    if (!telegramEnabled) {
+                        const delayMs = 5 * 60 * 1000;
+                        logger.warn(
+                            {
+                                event: 'kill_switch_blocked',
+                                entityType: 'post_job',
+                                entityId: postJob.id,
+                                data: { key: 'telegram_posting', delayMs },
+                            },
+                            'PostWorker',
+                        );
+                        await job.moveToDelayed(Date.now() + delayMs);
+                        return { delayed: true, reason: 'telegram_posting' };
+                    }
+
+                    const telegramResult = await telegramService.sendCampaignPost(postJob.id);
+                    if (!telegramResult.ok) throw new Error('Telegram send failed');
+
+                    await prisma.$transaction(async (tx) => {
+                        assertPostJobTransition({
+                            postJobId: postJob.id,
+                            from: postJob.status,
+                            to: PostJobStatus.success,
+                            actor: 'worker',
+                            correlationId: postJob.id,
+                        });
+
+                        await tx.postJob.update({
+                            where: { id: postJob.id },
+                            data: {
+                                status: PostJobStatus.success,
+                                sendingAt: null,
+                                telegramMessageId: telegramResult.telegramMessageId
+                                    ? BigInt(telegramResult.telegramMessageId)
+                                    : null,
+                            },
+                        });
+
+                        await escrowService.release(postJob.campaignTargetId, {
                             transaction: tx,
                             actor: 'worker',
                             correlationId: postJob.id,
                         });
-                    }
-                });
+                    });
 
-                throw err;
-            }
-        }),
-        {
-            connection: redisConnection,
-            concurrency: 5,
-        },
+                    logger.log(
+                        {
+                            event: 'post_job_sent_success',
+                            entityType: 'post_job',
+                            entityId: postJob.id,
+                            data: { telegramMessageId: telegramResult.telegramMessageId ?? null },
+                        },
+                        'PostWorker',
+                    );
+
+                    return { ok: true, telegramMessageId: telegramResult.telegramMessageId };
+                } catch (err) {
+                    const attemptsMade = job.attemptsMade + 1;
+                    const shouldRetry = attemptsMade < maxAttempts;
+
+                    await prisma.$transaction(async (tx) => {
+                        assertPostJobTransition({
+                            postJobId: postJob.id,
+                            from: postJob.status,
+                            to: shouldRetry ? PostJobStatus.queued : PostJobStatus.failed,
+                            actor: 'worker',
+                            correlationId: postJob.id,
+                        });
+
+                        await tx.postJob.update({
+                            where: { id: postJob.id },
+                            data: {
+                                status: shouldRetry ? PostJobStatus.queued : PostJobStatus.failed,
+                                lastError: err instanceof Error ? err.message : String(err),
+                                sendingAt: null,
+                            },
+                        });
+
+                        if (!shouldRetry) {
+                            await escrowService.refund(postJob.campaignTargetId, {
+                                reason: 'post_failed',
+                                transaction: tx,
+                                actor: 'worker',
+                                correlationId: postJob.id,
+                            });
+                        }
+                    });
+
+                    logger.error(
+                        {
+                            event: 'post_job_failed',
+                            alert: !shouldRetry,
+                            entityType: 'post_job',
+                            entityId: postJob.id,
+                            data: {
+                                attemptsMade,
+                                maxAttempts,
+                                shouldRetry,
+                                error: err instanceof Error ? err.message : String(err),
+                            },
+                        },
+                        err instanceof Error ? err.stack : undefined,
+                        'PostWorker',
+                    );
+
+                    throw err;
+                }
+            }),
+        { connection: redisConnection, concurrency: 5 },
     );
 
     worker.on('failed', async (job, err) => {
-        if (!job) {
-            return;
-        }
+        if (!job) return;
 
         const maxAttempts = job.opts.attempts ?? 1;
         if (job.attemptsMade >= maxAttempts) {
@@ -200,19 +231,33 @@ export function startPostWorker(
                         postJobId: job.data.postJobId,
                         error: err instanceof Error ? err.message : String(err),
                     },
-                    {
-                        jobId: `dlq:${job.id}`,
-                        removeOnComplete: true,
-                        removeOnFail: false,
-                    },
+                    { jobId: `dlq:${job.id}`, removeOnComplete: true, removeOnFail: false },
                 );
-                logger.error(
-                    `Moved job ${job.id} to DLQ after ${job.attemptsMade} attempts`,
+
+                logger.warn(
+                    {
+                        event: 'post_job_moved_to_dlq',
+                        alert: true,
+                        entityType: 'post_job',
+                        entityId: String(job.data.postJobId),
+                        data: { jobId: job.id, attemptsMade: job.attemptsMade },
+                    },
+                    'PostWorker',
                 );
             } catch (dlqError) {
                 logger.error(
-                    `Failed to enqueue DLQ for job ${job.id}`,
-                    dlqError instanceof Error ? dlqError.stack : String(dlqError),
+                    {
+                        event: 'dlq_enqueue_failed',
+                        alert: true,
+                        entityType: 'post_job',
+                        entityId: String(job.data.postJobId),
+                        data: {
+                            jobId: job.id,
+                            error: dlqError instanceof Error ? dlqError.message : String(dlqError),
+                        },
+                    },
+                    dlqError instanceof Error ? dlqError.stack : undefined,
+                    'PostWorker',
                 );
             }
         }
@@ -220,13 +265,23 @@ export function startPostWorker(
 
     worker.on('error', (err) => {
         logger.error(
-            'Worker error',
-            err instanceof Error ? err.stack : String(err),
+            {
+                event: 'worker_runtime_error',
+                alert: true,
+                entityType: 'worker',
+                entityId: 'post_worker',
+                data: { error: err instanceof Error ? err.message : String(err) },
+            },
+            err instanceof Error ? err.stack : undefined,
+            'PostWorker',
         );
     });
 
     const shutdown = async () => {
-        logger.log('Shutting down post worker');
+        logger.log(
+            { event: 'worker_shutdown', entityType: 'worker', entityId: 'post_worker' },
+            'PostWorker',
+        );
         clearInterval(heartbeatTimer);
         await worker.close();
         await postDlq.close();

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, LoggerService } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
@@ -28,7 +28,6 @@ const REQUIRED_BOT_PERMISSIONS: TelegramAdminPermission[] = [
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
-    private readonly logger = new Logger(TelegramService.name);
     private readonly bot: Telegraf<Context>;
     private started = false;
     private botId?: number;
@@ -38,6 +37,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     constructor(
         private readonly prisma: PrismaService,
         private readonly adminHandler: AdminHandler,
+          @Inject('LOGGER') private readonly logger: LoggerService,
     ) {
         const token = process.env.TELEGRAM_BOT_TOKEN;
         if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
@@ -54,7 +54,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         const autostart = process.env.TELEGRAM_AUTOSTART === 'true';
         if (!autostart) {
-            this.logger.warn('Telegram autostart disabled (set TELEGRAM_AUTOSTART=true to enable)');
+            this.logger.warn({
+                event: 'telegram_bot_autostart_disabled',
+                autostart
+            },
+                'TelegramService'
+            );
             return;
         }
 
@@ -64,7 +69,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private async sendTestToMyChannel() {
         const channel = process.env.TELEGRAM_TEST_CHANNEL;
         if (!channel) {
-            this.logger.warn('TELEGRAM_TEST_CHANNEL not set, skipping startup test');
+            this.logger.warn({
+                event: 'telegram_smoke_test_channel_not_set',
+            },
+                'TelegramService'
+            );
             return;
         }
         await this.bot.telegram.sendMessage(channel, '✅ bot startup test');
@@ -75,9 +84,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         if (!this.started) return;
         try {
             this.bot.stop('shutdown');
-            this.logger.log('Telegram bot stopped');
+            this.logger.log({
+                event: 'telegram_bot_stopped',
+                id: this.botId ?? null,
+
+            },
+                'TelegramService');
         } catch (e) {
-            this.logger.warn(`Telegram bot stop error: ${e instanceof Error ? e.message : String(e)}`);
+            this.logger.warn({
+                event: 'telegram_bot_stop_failed',
+                error: e instanceof Error ? e.message : String(e),
+                id: this.botId ?? null,      
+            },
+                'TelegramService'
+            );
         }
     }
 
@@ -90,19 +110,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG === 'true') {
             this.bot.on('channel_post', (ctx) => {
                 const chat: any = ctx.chat;
-                this.logger.warn(`[CHANNEL_POST DEBUG] id=${chat?.id} title=${chat?.title ?? ''} username=@${chat?.username ?? ''}`);
+                this.logger.warn({
+                    event: 'telegram_channel_post_received',
+                    channelId: chat.id,
+                    channelTitle: chat.title,
+                    chatType: chat.type,
+                },
+                    'TelegramService'
+                );
             });
         }
 
         try {
-            this.logger.log('Launching Telegram bot...');
+            this.logger.log({
+                event: 'telegram_bot_starting',
+                botId: this.botId ?? null,
+
+            },
+                'TelegramService');
             await this.bot.launch({ dropPendingUpdates: true });
             this.started = true;
-            this.logger.log('Telegram bot started');
+            this.logger.log({
+                event: 'telegram_bot_started',
+                id: this.botId ?? null,
+            },
+                'TelegramService');
         } catch (e) {
-            this.logger.error(
-                `Telegram bot failed to start: ${e instanceof Error ? e.message : String(e)}`,
-            );
+            this.logger.error({
+                event: 'telegram_bot_start_failed',
+                error: e instanceof Error ? e.message : String(e),
+            },
+                'TelegramService');
         }
     }
 
@@ -182,8 +220,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
                     typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
                         ? retryAfterSeconds * 1000
                         : baseDelayMs * 2 ** (attempt - 1);
-                this.logger.warn(
-                    `${action} failed (attempt ${attempt}/${maxAttempts}), retrying in ${backoffMs}ms`,
+                this.logger.warn({
+                    event: 'telegram_action_retry',
+                    action,
+                    attempt,
+                    maxAttempts,
+                    backoffMs,
+                    error: this.sanitizeTelegramError(
+                        this.extractTelegramError(err).message,
+                    ),
+                },
+                    'TelegramService'
                 );
                 await new Promise((r) => setTimeout(r, backoffMs));
             }
@@ -450,7 +497,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
                 return { ok: true, telegramMessageId: messageId };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
-                this.logger.warn(`Telegram send failed (attempt ${attempt}/${maxAttempts}): ${msg}`);
+                this.logger.warn({
+                    event: 'telegram_send_post_retry',
+                    postJobId,
+                    attempt,
+                    maxAttempts,
+                    error: this.sanitizeTelegramError(msg),
+                },
+                    'TelegramService'
+                );
 
                 if (attempt === maxAttempts) return { ok: false };
 

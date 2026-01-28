@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, ConflictException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, ConflictException, Logger, Inject, LoggerService } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 
 import {
@@ -21,16 +21,16 @@ import {
     assertEscrowTransition,
     assertPostJobOutcomeForEscrow,
 } from '@/modules/lifecycle/lifecycle';
-import { safeJsonStringify } from '@/common/serialization/sanitize';
+
 
 @Injectable()
 export class EscrowService {
-    private readonly logger = new Logger(EscrowService.name);
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentsService: PaymentsService,
         private readonly killSwitchService: KillSwitchService,
+        @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
 
     private async lockEscrow(
@@ -130,16 +130,22 @@ export class EscrowService {
 
             const expectedTotal = payoutAmount.add(commissionAmount);
             if (!expectedTotal.equals(total)) {
-                this.logger.error(
-                    safeJsonStringify({
+                this.logger.error({
                         event: 'escrow_amount_mismatch',
-                        campaignTargetId,
-                        escrowAmount: total.toFixed(2),
-                        payout: payoutAmount.toFixed(2),
-                        commission: commissionAmount.toFixed(2),
+                        alert: true,
+                        entityType: 'campaign_target',
+                        entityId: campaignTargetId,
+                        actorId: actor,
+                        data: {
+                            escrowId: escrow.id,
+                            escrowAmount: total.toFixed(2),
+                            expectedAmount: expectedTotal.toFixed(2),
+                        },
                         correlationId,
-                    }),
+                    },
+                    'EscrowService',
                 );
+
                 throw new ConflictException(
                     `Escrow amount mismatch for campaignTarget=${campaignTargetId}`,
                 );
@@ -157,15 +163,25 @@ export class EscrowService {
                 !holdLedger ||
                 !new Prisma.Decimal(holdLedger.amount).abs().equals(total)
             ) {
-                this.logger.error(
-                    safeJsonStringify({
+                this.logger.error({
                         event: 'escrow_hold_ledger_mismatch',
-                        campaignTargetId,
-                        escrowAmount: total.toFixed(2),
-                        ledgerAmount: holdLedger?.amount ?? null,
+                        alert: true,
+                        entityType: 'campaign_target',
+                        entityId: campaignTargetId,
+                        actorId: actor,
+                        data: {
+                            escrowId: escrow.id,
+                            escrowAmount: total.toFixed(2),
+                            ledgerAmount: holdLedger
+                                ? new Prisma.Decimal(holdLedger.amount).toFixed(2)
+                                : null,
+                        },
                         correlationId,
-                    }),
+                    },
+                    undefined,
+                    'EscrowService',
                 );
+
                 throw new ConflictException(
                     `Escrow hold ledger mismatch for campaignTarget=${campaignTargetId}`,
                 );
@@ -247,18 +263,22 @@ export class EscrowService {
                     platformWalletId,
                 );
             }
-
-            this.logger.warn(
-                safeJsonStringify({
+            this.logger.log({
                     event: 'escrow_released',
-                    campaignTargetId,
-                    escrowId: escrow.id,
-                    payout: payoutAmount.toFixed(2),
-                    commission: commissionAmount.toFixed(2),
-                    actor,
+                    entityType: 'escrow',
+                    entityId: escrow.id,
+                    actorId: actor,
+                    data: {
+                        campaignTargetId,
+                        payout: payoutAmount.toFixed(2),
+                        commission: commissionAmount.toFixed(2),
+                        platformWalletId,
+                    },
                     correlationId,
-                }),
+                },
+                'EscrowService',
             );
+
 
             return {
                 ok: true,
@@ -382,17 +402,21 @@ export class EscrowService {
                 escrow.advertiserWalletId,
             );
 
-            this.logger.warn(
-                safeJsonStringify({
+            this.logger.log({
                     event: 'escrow_refunded',
-                    campaignTargetId,
-                    escrowId: escrow.id,
-                    refunded: amount.toFixed(2),
-                    actor,
+                    entityType: 'escrow',
+                    entityId: escrow.id,
+                    actorId: actor,
+                    data: {
+                        campaignTargetId,
+                        refunded: amount.toFixed(2),
+                        reason,
+                    },
                     correlationId,
-                    reason,
-                }),
+                },
+                'EscrowService',
             );
+
 
             return {
                 ok: true,

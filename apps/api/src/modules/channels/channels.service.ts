@@ -26,7 +26,7 @@ export class ChannelsService {
         private readonly auditService: AuditService,
     ) { }
 
-    
+
     private parseTelegramId(value: string): bigint {
         if (!TELEGRAM_CHANNEL_ID_REGEX.test(value)) {
             throw new BadRequestException('Invalid telegramChannelId');
@@ -93,7 +93,7 @@ export class ChannelsService {
         }
     }
 
-   
+
     private async getChannelOr404(channelId: string): Promise<Channel> {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
         if (!channel) throw new NotFoundException('Channel not found');
@@ -109,9 +109,9 @@ export class ChannelsService {
         return user as any;
     }
 
-   
+
     async createChannel(userId: string, dto: CreateChannelDto) {
-        
+
         await this.getUserOr404(userId, { id: true });
 
         const telegramChannelId = this.parseTelegramId(dto.telegramChannelId);
@@ -147,7 +147,7 @@ export class ChannelsService {
         }
     }
 
-   
+
     async createChannelForOwner(actor: Actor, dto: AdminCreateChannelDto) {
         if (actor.role !== UserRole.admin && actor.role !== UserRole.super_admin) {
             throw new ForbiddenException('Only admin or super_admin can create channel for owner');
@@ -176,8 +176,8 @@ export class ChannelsService {
         }
 
         const telegramChannelId = this.parseTelegramId(dto.telegramChannelId);
-        
-   
+
+
 
         try {
             const channel = await this.prisma.channel.create({
@@ -187,7 +187,7 @@ export class ChannelsService {
                     username: dto.username,
                     ownerId: owner.id,
                     status: ChannelStatus.pending,
-                
+
                 },
             });
 
@@ -285,7 +285,7 @@ export class ChannelsService {
                 },
             });
 
-          
+
             throw new BadRequestException('Channel verification failed');
         }
 
@@ -314,7 +314,7 @@ export class ChannelsService {
         return this.mapChannel(updated);
     }
 
-   
+
     async verifyChannelDebug(channelId: string, actor: Actor) {
         this.assertDebugEnabledOr404();
 
@@ -338,7 +338,7 @@ export class ChannelsService {
         });
     }
 
-    
+
     async approveChannel(channelId: string, adminId: string) {
         const channel = await this.getChannelOr404(channelId);
 
@@ -364,7 +364,7 @@ export class ChannelsService {
         return this.mapChannel(updated);
     }
 
-   
+
     async rejectChannel(channelId: string, adminId: string, reason?: string) {
         const channel = await this.getChannelOr404(channelId);
 

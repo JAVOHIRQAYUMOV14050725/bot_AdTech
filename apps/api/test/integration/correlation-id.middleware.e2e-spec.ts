@@ -25,7 +25,7 @@ describe('CorrelationIdMiddleware', () => {
         const incomingCorrelationId = 'test-correlation-id';
         const req = {
             headers: { 'x-correlation-id': incomingCorrelationId },
-        } as Request;
+        } as unknown as Request;
         const res = { setHeader: jest.fn() } as unknown as Response;
         let contextCorrelationId: string | undefined;
 

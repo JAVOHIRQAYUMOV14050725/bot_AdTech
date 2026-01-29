@@ -9,7 +9,7 @@ import { postDlq, redisConnection } from '../queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { KillSwitchKey, PostJobStatus } from '@prisma/client';
 import { RedisService } from '@/modules/redis/redis.service';
-import { runWithCorrelationId } from '@/common/logging/correlation-id.store';
+import { runWithWorkerContext } from '@/common/context/request-context';
 
 export function startPostWorker(
     prisma: PrismaService,
@@ -56,7 +56,7 @@ export function startPostWorker(
     const worker = new Worker(
         'post-queue',
         async (job) =>
-            runWithCorrelationId(job.data?.postJobId, async () => {
+            runWithWorkerContext('post-queue', job.id, async () => {
                 const { postJobId } = job.data;
                 const now = new Date();
                 const maxAttempts = job.opts.attempts ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);

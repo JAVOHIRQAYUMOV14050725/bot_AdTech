@@ -19,6 +19,7 @@ export const envSchema = z.object({
     JWT_AUDIENCE: z.string().min(1).default('bot_AdTech_api'),
     TELEGRAM_BOT_TOKEN: z.string().min(1),
     TELEGRAM_AUTOSTART: booleanString.default('false'),
+    TELEGRAM_STARTUP_TEST: booleanString.default('false'),
     TELEGRAM_SEND_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
     TELEGRAM_SEND_BASE_DELAY_MS: z.coerce.number().int().positive().default(1000),
     TELEGRAM_TIMEOUT_MS: z.coerce.number().int().positive().default(25000),

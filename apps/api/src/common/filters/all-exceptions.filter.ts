@@ -4,15 +4,16 @@ import {
     ExceptionFilter,
     HttpException,
     HttpStatus,
-    Logger,
+    LoggerService,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { Prisma } from '@prisma/client';
+import { RequestContext } from '@/common/context/request-context';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
-    private readonly logger = new Logger(AllExceptionsFilter.name);
+    constructor(private readonly logger: LoggerService) { }
 
     catch(exception: unknown, host: ArgumentsHost): void {
         const ctx = host.switchToHttp();
@@ -80,7 +81,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             statusCode: status,
             timestamp: new Date().toISOString(),
             path: request.originalUrl,
-            correlationId: request.correlationId ?? null,
+            correlationId: request.correlationId ?? RequestContext.getCorrelationId() ?? null,
             error: normalizedError,
         });
 
@@ -89,25 +90,37 @@ export class AllExceptionsFilter implements ExceptionFilter {
             status === HttpStatus.NOT_FOUND
             && request.originalUrl === '/favicon.ico';
         const logPayload = {
-            event: 'http_error',
-            correlationId: request.correlationId ?? null,
-            method: request.method,
-            path: request.originalUrl,
-            statusCode: status,
-            error: normalizedError,
+            event: 'http_exception',
+            data: {
+                method: request.method,
+                path: request.originalUrl,
+                statusCode: status,
+                error: normalizedError,
+                errorType: exception instanceof Error ? exception.name : undefined,
+                message: exception instanceof Error ? exception.message : undefined,
+            },
         };
         if (isFaviconNotFound && process.env.NODE_ENV === 'production') {
-            this.logger.debug({
-                ...logPayload,
-                message: 'Favicon not found',
-            },
-                stack);
+            this.logger.debug(
+                {
+                    ...logPayload,
+                    data: {
+                        ...(logPayload.data as Record<string, unknown>),
+                        stack,
+                    },
+                    message: 'Favicon not found',
+                },
+                'AllExceptionsFilter',
+            );
         } else {
-            this.logger.error({
-                ...logPayload,
-                message: 'HTTP exception occurred',
-            },
-                stack);
+            this.logger.error(
+                {
+                    ...logPayload,
+                    message: 'HTTP exception occurred',
+                },
+                stack,
+                'AllExceptionsFilter',
+            );
         }
 
         response.status(status).json(payload);

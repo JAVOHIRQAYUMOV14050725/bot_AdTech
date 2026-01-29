@@ -1,18 +1,19 @@
-import { AsyncLocalStorage } from 'async_hooks';
+import { randomUUID } from 'crypto';
+import {
+    RequestContext,
+    runWithWorkerContext,
+} from '@/common/context/request-context';
 
-type CorrelationStore = {
-    correlationId?: string;
-};
-
-export const correlationIdStore = new AsyncLocalStorage<CorrelationStore>();
-
-export const getCorrelationId = (): string | undefined => {
-    return correlationIdStore.getStore()?.correlationId;
-};
+export const getCorrelationId = (): string | undefined =>
+    RequestContext.getCorrelationId();
 
 export const runWithCorrelationId = async <T>(
     correlationId: string | undefined,
     fn: () => Promise<T>,
-): Promise<T> => {
-    return correlationIdStore.run({ correlationId }, fn);
-};
+): Promise<T> =>
+    RequestContext.runWithContext(
+        { correlationId: correlationId ?? randomUUID() },
+        fn,
+    );
+
+export { runWithWorkerContext };

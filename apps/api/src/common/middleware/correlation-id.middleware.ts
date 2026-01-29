@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NextFunction, Request, Response } from 'express';
-import { correlationIdStore } from '@/common/logging/correlation-id.store';
+import { RequestContext } from '@/common/context/request-context';
 
 export const correlationIdMiddleware = (
     request: Request,
@@ -16,5 +16,5 @@ export const correlationIdMiddleware = (
     request.correlationId = correlationId;
     response.setHeader('x-correlation-id', correlationId);
 
-    correlationIdStore.run({ correlationId }, () => next());
+    RequestContext.runWithContext({ correlationId }, () => next());
 };

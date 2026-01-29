@@ -1,6 +1,6 @@
 import { LoggerService, LogLevel } from '@nestjs/common';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
-import { getCorrelationId } from './correlation-id.store';
+import { RequestContext } from '@/common/context/request-context';
 
 /**
  * 🔥 BANK-GRADE LOG PAYLOAD
@@ -41,6 +41,15 @@ export type StructuredLogPayload = {
     stack?: string;
 };
 
+const MAX_STRING_LENGTH = 2000;
+const MAX_ARRAY_LENGTH = 100;
+const MAX_OBJECT_KEYS = 100;
+const MAX_DEPTH = 6;
+
+const SENSITIVE_KEY_PATTERN =
+    /(password|passphrase|token|secret|authorization|api[-_]?key|jwt|cookie|session|telegram|database_url|redis_url)/i;
+const JWT_PATTERN = /(?:^|\s)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:$|\s)/;
+
 const normalizeLevel = (level: LogLevel): LogSeverity => {
     switch (level) {
         case 'log':
@@ -50,6 +59,117 @@ const normalizeLevel = (level: LogLevel): LogSeverity => {
         default:
             return level;
     }
+};
+
+const serializeError = (error: Error) => ({
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    cause:
+        error.cause instanceof Error
+            ? serializeError(error.cause)
+            : sanitizeForJson(error.cause),
+});
+
+const truncateValue = (value: unknown, depth = 0): unknown => {
+    if (depth > MAX_DEPTH) {
+        return '[Truncated]';
+    }
+
+    if (typeof value === 'string') {
+        return value.length > MAX_STRING_LENGTH
+            ? `${value.slice(0, MAX_STRING_LENGTH)}…[truncated]`
+            : value;
+    }
+
+    if (Array.isArray(value)) {
+        const trimmed = value.slice(0, MAX_ARRAY_LENGTH);
+        const mapped = trimmed.map((item) => truncateValue(item, depth + 1));
+        if (value.length > MAX_ARRAY_LENGTH) {
+            mapped.push(
+                `[${value.length - MAX_ARRAY_LENGTH} more items truncated]`,
+            );
+        }
+        return mapped;
+    }
+
+    if (value && typeof value === 'object') {
+        const entries = Object.entries(value as Record<string, unknown>);
+        const trimmedEntries = entries.slice(0, MAX_OBJECT_KEYS);
+        const result: Record<string, unknown> = {};
+        for (const [key, val] of trimmedEntries) {
+            result[key] = truncateValue(val, depth + 1);
+        }
+        if (entries.length > MAX_OBJECT_KEYS) {
+            result._truncatedKeys = entries.length - MAX_OBJECT_KEYS;
+        }
+        return result;
+    }
+
+    return value;
+};
+
+const redactValue = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+        if (JWT_PATTERN.test(value)) {
+            return '[REDACTED]';
+        }
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => redactValue(item));
+    }
+
+    if (value && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, val] of Object.entries(
+            value as Record<string, unknown>,
+        )) {
+            if (SENSITIVE_KEY_PATTERN.test(key)) {
+                result[key] = '[REDACTED]';
+                continue;
+            }
+            result[key] = redactValue(val);
+        }
+        return result;
+    }
+
+    return value;
+};
+
+const prepareLogValue = (value: unknown): unknown => {
+    const sanitized = sanitizeForJson(value);
+    const redacted = redactValue(sanitized);
+    return truncateValue(redacted);
+};
+
+export const buildStructuredLogger = (): StructuredLogger => {
+    const isProd = process.env.NODE_ENV === 'production';
+
+    const defaultLevels: LogLevel[] = isProd
+        ? ['log', 'error', 'warn']
+        : ['log', 'error', 'warn', 'debug', 'verbose'];
+
+    const allowedLevels: LogLevel[] = [
+        'log',
+        'error',
+        'warn',
+        'debug',
+        'verbose',
+    ];
+
+    const configuredLevels = process.env.LOG_LEVEL?.split(',')
+        .map((level) => level.trim())
+        .filter((level) => allowedLevels.includes(level as LogLevel)) as
+        | LogLevel[]
+        | undefined;
+
+    return new StructuredLogger(
+        configuredLevels && configuredLevels.length > 0
+            ? configuredLevels
+            : defaultLevels,
+    );
 };
 
 export class StructuredLogger implements LoggerService {
@@ -107,25 +227,54 @@ export class StructuredLogger implements LoggerService {
             );
         }
 
+        const correlationId =
+            message.correlationId ?? RequestContext.getCorrelationId();
+        const actorId = message.actorId ?? RequestContext.getActorId();
+        const messageValue = prepareLogValue(message.message);
+        const dataValue = prepareLogValue(message.data);
+
+        const errorPayload =
+            message.message instanceof Error
+                ? serializeError(message.message)
+                : message.data instanceof Error
+                  ? serializeError(message.data)
+                  : undefined;
+
+        const resolvedStack =
+            stack
+            ?? (message.message instanceof Error
+                ? message.message.stack
+                : message.data instanceof Error
+                  ? message.data.stack
+                  : undefined);
+
+        const baseData =
+            dataValue && typeof dataValue === 'object'
+                ? (dataValue as Record<string, unknown>)
+                : dataValue !== undefined
+                  ? { value: dataValue }
+                  : undefined;
+
         const payload: StructuredLogPayload = {
             timestamp: new Date().toISOString(),
             level: normalizeLevel(level),
             event: message.event,
-            message: sanitizeForJson(message.message),
-            correlationId:
-                message.correlationId ?? getCorrelationId() ?? null,
+            message: messageValue,
+            correlationId: correlationId ?? null,
 
-            actorId: message.actorId,
+            actorId,
             actorRole: message.actorRole,
 
             entityType: message.entityType,
             entityId: message.entityId,
 
             context,
-            data: sanitizeForJson(message.data),
+            data: errorPayload
+                ? { ...(baseData ?? {}), error: errorPayload }
+                : baseData ?? dataValue,
 
             alert: message.alert ?? false,
-            stack,
+            stack: resolvedStack,
         };
 
         process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -137,6 +286,12 @@ export class StructuredLogger implements LoggerService {
     private normalizeMessage(
         message: unknown,
     ): Partial<StructuredLogPayload> {
+        if (message instanceof Error) {
+            return {
+                event: 'log_message',
+                message,
+            };
+        }
         if (typeof message === 'object' && message !== null) {
             return message as Partial<StructuredLogPayload>;
         }

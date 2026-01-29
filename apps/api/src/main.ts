@@ -2,7 +2,6 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import {
     BadRequestException,
-    LogLevel,
     ValidationPipe,
 } from '@nestjs/common';
 import helmet from 'helmet';
@@ -18,28 +17,13 @@ import { RedisService } from '@/modules/redis/redis.service';
 import { JsonSanitizeInterceptor } from '@/common/interceptors/json-sanitize.interceptor';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
-import { StructuredLogger } from '@/common/logging/structured-logger.service';
+import {
+    StructuredLogger,
+    buildStructuredLogger,
+} from '@/common/logging/structured-logger.service';
 import { formatValidationErrors } from './common/validation/validation-errors';
 import { setupSwagger } from './swagger';
-
-function buildLogger(): StructuredLogger {
-    const isProd = process.env.NODE_ENV === 'production';
-
-    const defaultLevels: LogLevel[] = isProd
-        ? ['log', 'error', 'warn']
-        : ['log', 'error', 'warn', 'debug', 'verbose'];
-
-    const allowedLevels: LogLevel[] = ['log', 'error', 'warn', 'debug', 'verbose'];
-
-    const configuredLevels = process.env.LOG_LEVEL?.split(',')
-        .map((l) => l.trim())
-        .filter((l) => allowedLevels.includes(l as LogLevel)) as LogLevel[] | undefined;
-
-    return new StructuredLogger(
-        configuredLevels && configuredLevels.length > 0 ? configuredLevels : defaultLevels,
-    );
-}
-
+import { HttpLoggingInterceptor } from '@/common/interceptors/http-logging.interceptor';
 
 async function startWorker(app: any, logger: StructuredLogger) {
     const prisma = app.get(PrismaService);
@@ -75,14 +59,15 @@ async function startWorker(app: any, logger: StructuredLogger) {
 }
 
 async function bootstrap() {
-    const logger = buildLogger();
+    const logger = buildStructuredLogger();
+    const isProd = process.env.NODE_ENV === 'production';
 
     const workerMode = process.env.WORKER_MODE === 'true';
 
     if (workerMode) {
         // ✅ bufferLogs: true => Nest init logs are captured
         const app = await NestFactory.createApplicationContext(AppModule, {
-            logger,
+            logger: isProd ? false : logger,
             bufferLogs: true,
         });
 
@@ -95,7 +80,7 @@ async function bootstrap() {
 
     // ✅ bufferLogs: true for API mode too
     const app = await NestFactory.create(AppModule, {
-        logger,
+        logger: isProd ? false : logger,
         bufferLogs: true,
     });
 
@@ -122,8 +107,11 @@ async function bootstrap() {
         }),
     );
 
-    app.useGlobalInterceptors(new JsonSanitizeInterceptor());
-    app.useGlobalFilters(new AllExceptionsFilter());
+    app.useGlobalInterceptors(
+        new HttpLoggingInterceptor(logger),
+        new JsonSanitizeInterceptor(),
+    );
+    app.useGlobalFilters(new AllExceptionsFilter(logger));
 
     app.setGlobalPrefix('api');
 

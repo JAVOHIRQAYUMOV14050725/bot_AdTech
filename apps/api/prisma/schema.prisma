@@ -242,7 +242,7 @@ model CampaignTarget {
   campaignId String
   channelId  String
 
-  price       Decimal              @db.Decimal(12, 2)
+  price       Decimal              @db.Decimal(14, 2)
   scheduledAt DateTime
   status      CampaignTargetStatus @default(pending)
   moderatedBy String?
@@ -368,7 +368,7 @@ model Escrow {
   advertiserWalletId String
   publisherWalletId  String
 
-  amount Decimal      @db.Decimal(12, 2)
+  amount Decimal      @db.Decimal(14, 2)
   status EscrowStatus @default(held)
 
   createdAt  DateTime  @default(now())
@@ -387,7 +387,7 @@ model PlatformCommission {
   id String @id @default(uuid())
 
   campaignTargetId String  @unique
-  amount           Decimal @db.Decimal(12, 2)
+  amount           Decimal @db.Decimal(14, 2)
   percentage       Decimal @db.Decimal(5, 2)
 
   createdAt DateTime @default(now())

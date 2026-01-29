@@ -17,6 +17,8 @@ import {
     Prisma,
 } from '@prisma/client';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
+import { ConfigService, ConfigType } from '@nestjs/config';
+import appConfig from '@/config/app.config';
 
 @Injectable()
 export class ModerationService {
@@ -25,6 +27,7 @@ export class ModerationService {
         private readonly paymentsService: PaymentsService,
         private readonly schedulerService: SchedulerService,
         private readonly auditService: AuditService,
+        private readonly configService: ConfigService,
     ) { }
 
     private mapChannel(channel: Channel) {
@@ -216,7 +219,11 @@ export class ModerationService {
                 throw new BadRequestException('Channel must be approved');
             }
 
-            const minLeadMs = Number(process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30_000);
+            const app = this.configService.getOrThrow<ConfigType<typeof appConfig>>(
+                appConfig.KEY,
+                { infer: true },
+            );
+            const minLeadMs = app.campaignTargetMinLeadMs;
             if (fresh.scheduledAt.getTime() < Date.now() + minLeadMs) {
                 throw new BadRequestException('scheduledAt must be in the future');
             }

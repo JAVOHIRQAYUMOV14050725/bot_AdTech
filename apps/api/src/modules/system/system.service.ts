@@ -8,6 +8,8 @@ import {
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { ResolveAction } from './dto/resolve-escrow.dto';
 import Decimal from 'decimal.js';
+import { ConfigService, ConfigType } from '@nestjs/config';
+import appConfig from '@/config/app.config';
 import {
     CampaignTargetStatus,
     EscrowStatus,
@@ -17,7 +19,8 @@ import {
     Prisma,
 } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
-import { postQueue } from '@/modules/scheduler/queues';
+import { getPostQueue } from '@/modules/scheduler/queues';
+import redisConfig from '@/config/redis.config';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
@@ -59,8 +62,9 @@ export class SystemService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly escrowService: EscrowService,
-                @Inject('LOGGER') private readonly logger: LoggerService,
-        
+        private readonly configService: ConfigService,
+        @Inject('LOGGER') private readonly logger: LoggerService,
+
     ) { }
 
     /**
@@ -75,70 +79,145 @@ export class SystemService {
         reason: string,
         actorUserId: string,
     ) {
-        const escrow = await this.prisma.escrow.findUnique({
-            where: { campaignTargetId },
-        });
+        const correlationId = campaignTargetId;
+        let escrowId: string | null = null;
+        let escrowStatus: EscrowStatus | null = null;
 
-        if (!escrow) {
-            throw new BadRequestException('Escrow not found');
-        }
+        try {
+            const { escrow, result } = await this.prisma.$transaction(
+                async (tx) => {
+                    const escrowRow = await tx.escrow.findUnique({
+                        where: { campaignTargetId },
+                    });
 
-        if (escrow.status !== EscrowStatus.held) {
-            throw new BadRequestException(`Escrow already ${escrow.status}`);
-        }
+                    if (!escrowRow) {
+                        throw new BadRequestException('Escrow not found');
+                    }
 
-        // 🧾 AUDIT (BEFORE)
-        await this.prisma.userAuditLog.create({
-            data: {
-                userId: actorUserId,
-                action: `ESCROW_${action.toUpperCase()}`,
-                metadata: {
-                    campaignTargetId,
-                    reason,
-                    escrowStatus: escrow.status,
+                    if (escrowRow.status !== EscrowStatus.held) {
+                        throw new BadRequestException(
+                            `Escrow already ${escrowRow.status}`,
+                        );
+                    }
+
+                    escrowId = escrowRow.id;
+                    escrowStatus = escrowRow.status;
+
+                    await tx.userAuditLog.create({
+                        data: {
+                            userId: actorUserId,
+                            action: `ESCROW_${action.toUpperCase()}_ATTEMPT`,
+                            metadata: {
+                                campaignTargetId,
+                                reason,
+                                escrowStatus: escrowRow.status,
+                            },
+                        },
+                    });
+
+                    try {
+                        let resolutionResult;
+                        if (action === ResolveAction.RELEASE) {
+                            resolutionResult = await this.escrowService.release(
+                                campaignTargetId,
+                                {
+                                    actor: 'admin',
+                                    correlationId,
+                                    transaction: tx,
+                                },
+                            );
+                        } else if (action === ResolveAction.REFUND) {
+                            resolutionResult = await this.escrowService.refund(
+                                campaignTargetId,
+                                {
+                                    actor: 'admin',
+                                    reason,
+                                    correlationId,
+                                    transaction: tx,
+                                },
+                            );
+                        } else {
+                            throw new BadRequestException(
+                                'Invalid resolve action',
+                            );
+                        }
+
+                        await tx.userAuditLog.create({
+                            data: {
+                                userId: actorUserId,
+                                action: `ESCROW_${action.toUpperCase()}_SUCCESS`,
+                                metadata: {
+                                    campaignTargetId,
+                                    reason,
+                                    escrowStatus: escrowRow.status,
+                                },
+                            },
+                        });
+
+                        return { escrow: escrowRow, result: resolutionResult };
+                    } catch (err) {
+                        await tx.userAuditLog.create({
+                            data: {
+                                userId: actorUserId,
+                                action: `ESCROW_${action.toUpperCase()}_FAILED`,
+                                metadata: {
+                                    campaignTargetId,
+                                    reason,
+                                    escrowStatus: escrowRow.status,
+                                    error: err instanceof Error ? err.message : String(err),
+                                },
+                            },
+                        });
+                        throw err;
+                    }
                 },
-            },
-        });
+            );
 
-        let result;
-        if (action === ResolveAction.RELEASE) {
-            result = await this.escrowService.release(campaignTargetId, {
-                actor: 'admin',
-                correlationId: campaignTargetId,
-            });
-        } else if (action === ResolveAction.REFUND) {
-            result = await this.escrowService.refund(campaignTargetId, {
-                actor: 'admin',
-                reason,
-                correlationId: campaignTargetId,
-            });
-        } else {
-            throw new BadRequestException('Invalid resolve action');
-        }
-
-        this.logger.warn(
-            {
-                event: 'escrow_manual_resolve',
-                entityType: 'escrow',
-                entityId: escrow.id,
-                actorId: actorUserId,
-                data: {
-                    campaignTargetId,
-                    action,
-                    reason,
-                    escrowStatus: escrow.status,
+            this.logger.warn(
+                {
+                    event: 'escrow_manual_resolve',
+                    alert: false,
+                    entityType: 'escrow',
+                    entityId: escrow.id,
+                    actorId: actorUserId,
+                    data: {
+                        campaignTargetId,
+                        action,
+                        reason,
+                        escrowStatus: escrow.status,
+                    },
+                    correlationId,
                 },
-                correlationId: campaignTargetId,
-            },
-            'SystemService',
-        );
+                'SystemService',
+            );
 
-
-        return {
-            ok: true,
-            action,
-            result,
-        };
+            return {
+                ok: true,
+                action,
+                result,
+            };
+        } catch (err) {
+            this.logger.error(
+                {
+                    event: 'escrow_manual_resolve_failed',
+                    alert: true,
+                    entityType: 'escrow',
+                    entityId: escrowId,
+                    actorId: actorUserId,
+                    data: {
+                        campaignTargetId,
+                        action,
+                        reason,
+                        escrowStatus,
+                        error: err instanceof Error ? err.message : String(err),
+                    },
+                    correlationId,
+                },
+                err instanceof Error ? err.stack : undefined,
+                'SystemService',
+            );
+            throw err;
+        }
     }
 
     /**
@@ -373,11 +452,13 @@ export class SystemService {
     }
 
     async requeueStalledPostJobs() {
-        const stalledMinutes = Number(
-            process.env.POST_JOB_STALLED_MINUTES ?? 15,
+        const app = this.configService.getOrThrow<ConfigType<typeof appConfig>>(
+            appConfig.KEY,
+            { infer: true },
         );
-        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
-        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
+        const stalledMinutes = app.postJob.stalledMinutes;
+        const maxAttempts = app.postJob.maxAttempts;
+        const backoffMs = app.postJob.retryBackoffMs;
         const cutoff = new Date(Date.now() - stalledMinutes * 60 * 1000);
 
         const stalledJobs = await this.prisma.postJob.findMany({
@@ -468,7 +549,11 @@ export class SystemService {
                 });
 
                 try {
-                    await postQueue.add(
+                    const redis = this.configService.getOrThrow<ConfigType<typeof redisConfig>>(
+                        redisConfig.KEY,
+                        { infer: true },
+                    );
+                    await getPostQueue(redis).add(
                         'execute-post',
                         { postJobId: job.id },
                         {

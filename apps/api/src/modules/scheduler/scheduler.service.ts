@@ -1,10 +1,13 @@
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SystemService } from '@/modules/system/system.service';
-import { postQueue } from './queues';
+import { getPostQueue } from './queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { CronStatusService } from './cron-status.service';
 import { runWithCronContext } from '@/common/context/request-context';
+import { ConfigService, ConfigType } from '@nestjs/config';
+import appConfig from '@/config/app.config';
+import redisConfig from '@/config/redis.config';
 
 @Injectable()
 export class SchedulerService {
@@ -12,6 +15,7 @@ export class SchedulerService {
         private readonly systemService: SystemService,
         private readonly killSwitchService: KillSwitchService,
         private readonly cronStatusService: CronStatusService,
+        private readonly configService: ConfigService,
         @Inject('LOGGER') private readonly logger: LoggerService,
 
     ) { }
@@ -22,9 +26,17 @@ export class SchedulerService {
      * =========================================================
      */
     async enqueuePost(postJobId: string, executeAt: Date) {
-        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
-        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
-        await postQueue.add(
+        const app = this.configService.getOrThrow<ConfigType<typeof appConfig>>(
+            appConfig.KEY,
+            { infer: true },
+        );
+        const redis = this.configService.getOrThrow<ConfigType<typeof redisConfig>>(
+            redisConfig.KEY,
+            { infer: true },
+        );
+        const maxAttempts = app.postJob.maxAttempts;
+        const backoffMs = app.postJob.retryBackoffMs;
+        await getPostQueue(redis).add(
             'execute-post',
             { postJobId },
             {

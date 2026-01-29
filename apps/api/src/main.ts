@@ -13,6 +13,7 @@ import { EscrowService } from '@/modules/payments/escrow.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { RedisService } from '@/modules/redis/redis.service';
+import { ConfigService } from '@nestjs/config';
 
 import { JsonSanitizeInterceptor } from '@/common/interceptors/json-sanitize.interceptor';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
@@ -31,6 +32,7 @@ async function startWorker(app: any, logger: StructuredLogger) {
     const telegramService = app.get(TelegramService);
     const killSwitchService = app.get(KillSwitchService);
     const redisService = app.get(RedisService);
+    const configService = app.get(ConfigService);
 
     // ✅ Worker started event (structured)
     logger.log(
@@ -54,6 +56,7 @@ async function startWorker(app: any, logger: StructuredLogger) {
         telegramService,
         killSwitchService,
         redisService,
+        configService,
         logger,
     );
 }

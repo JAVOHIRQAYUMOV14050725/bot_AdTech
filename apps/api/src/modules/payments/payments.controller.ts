@@ -14,6 +14,8 @@ import { DepositDto } from './dto/deposit.dto';
 import { Prisma, UserRole } from '@prisma/client';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';
 import { DepositResponseDto } from './dto/deposit-response.dto';
+import { AppThrottlerGuard } from '@/common/guards/app-throttler.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,6 +26,8 @@ export class PaymentsController {
     constructor(private readonly paymentsService: PaymentsService) { }
 
     @Post('deposit')
+    @UseGuards(AppThrottlerGuard)
+    @Throttle({ default: { limit: 10, ttl: 3600 } })
     @ApiOperation({
         summary: 'Deposit funds',
         description: 'Create a wallet deposit for the authenticated advertiser.',

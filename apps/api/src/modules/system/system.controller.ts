@@ -25,9 +25,12 @@ import {
     ReconciliationResponseDto,
     ResolveEscrowResponseDto,
 } from './dto/system-response.dto';
+import { AppThrottlerGuard } from '@/common/guards/app-throttler.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('system')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AppThrottlerGuard)
+@Throttle({ default: { limit: 20, ttl: 3600 } })
 @Roles(UserRole.super_admin)
 @ApiTags('System')
 @ApiBearerAuth()

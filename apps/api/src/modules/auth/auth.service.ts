@@ -6,14 +6,16 @@ import { LoginDto } from './dto/login.dto';
 import { UserRole, UserStatus } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
-
-const ms = (val: string) => val; // placeholder; expiresIn jwt format bo'ladi: "15m", "30d"
+import { ConfigService, ConfigType } from '@nestjs/config';
+import jwtConfig from '@/config/jwt.config';
+import appConfig from '@/config/app.config';
 
 @Injectable()
 export class AuthService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
+        private readonly configService: ConfigService,
     ) { }
 
     private parseTelegramId(value: string): bigint {
@@ -25,35 +27,75 @@ export class AuthService {
     }
 
     private async hashToken(token: string) {
-        const rounds = Number(process.env.BCRYPT_SALT_ROUNDS ?? 10);
+        const app = this.configService.getOrThrow<ConfigType<typeof appConfig>>(
+            appConfig.KEY,
+            { infer: true },
+        );
+        const rounds = app.bcryptSaltRounds;
         return bcrypt.hash(token, rounds);
     }
 
     private signAccessToken(user: { id: string; role: UserRole }) {
+        const jwt = this.configService.getOrThrow<ConfigType<typeof jwtConfig>>(
+            jwtConfig.KEY,
+            { infer: true },
+        );
         return this.jwtService.sign(
             { sub: user.id, role: user.role, typ: 'access' },
             {
-                secret: process.env.JWT_ACCESS_SECRET,
-                expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
+                secret: jwt.accessSecret,
+                expiresIn: jwt.accessExpiresIn,
+                issuer: jwt.issuer,
+                audience: jwt.audience,
             },
         );
     }
 
     private signRefreshToken(user: { id: string; role: UserRole }) {
+        const jwt = this.configService.getOrThrow<ConfigType<typeof jwtConfig>>(
+            jwtConfig.KEY,
+            { infer: true },
+        );
         return this.jwtService.sign(
             { sub: user.id, role: user.role, typ: 'refresh' },
             {
-                secret: process.env.JWT_REFRESH_SECRET,
-                expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
+                secret: jwt.refreshSecret,
+                expiresIn: jwt.refreshExpiresIn,
+                issuer: jwt.issuer,
+                audience: jwt.audience,
             },
         );
     }
 
+    private parseDurationMs(value: string): number {
+        const match = /^(\d+)([smhd])$/.exec(value.trim());
+        if (!match) {
+            return 30 * 24 * 60 * 60 * 1000;
+        }
+        const amount = Number(match[1]);
+        const unit = match[2];
+        switch (unit) {
+            case 's':
+                return amount * 1000;
+            case 'm':
+                return amount * 60 * 1000;
+            case 'h':
+                return amount * 60 * 60 * 1000;
+            case 'd':
+                return amount * 24 * 60 * 60 * 1000;
+            default:
+                return 30 * 24 * 60 * 60 * 1000;
+        }
+    }
+
     private computeRefreshExpiryDate(): Date {
         // JWT o'zi expiry bilan keladi, lekin DBga ham qo'yamiz.
-        const days = 30;
+        const jwt = this.configService.getOrThrow<ConfigType<typeof jwtConfig>>(
+            jwtConfig.KEY,
+            { infer: true },
+        );
         const now = new Date();
-        now.setDate(now.getDate() + days);
+        now.setTime(now.getTime() + this.parseDurationMs(jwt.refreshExpiresIn));
         return now;
     }
 
@@ -69,6 +111,10 @@ export class AuthService {
     }
 
     async register(dto: RegisterDto) {
+        const app = this.configService.getOrThrow<ConfigType<typeof appConfig>>(
+            appConfig.KEY,
+            { infer: true },
+        );
         const role = dto.role ?? UserRole.publisher;
         if (!PUBLIC_ROLES.includes(role)) throw new BadRequestException('Invalid role for registration');
 
@@ -77,7 +123,7 @@ export class AuthService {
         const existing = await this.prisma.user.findUnique({ where: { telegramId } });
         if (existing) throw new BadRequestException('User already exists');
 
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const passwordHash = await bcrypt.hash(dto.password, app.bcryptSaltRounds);
 
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
@@ -114,7 +160,11 @@ export class AuthService {
     }
 
     async bootstrapSuperAdmin(dto: BootstrapSuperAdminDto) {
-        const bootstrapSecret = process.env.SUPER_ADMIN_BOOTSTRAP_SECRET;
+        const app = this.configService.getOrThrow<ConfigType<typeof appConfig>>(
+            appConfig.KEY,
+            { infer: true },
+        );
+        const bootstrapSecret = app.superAdminBootstrapSecret;
         if (!bootstrapSecret) {
             throw new BadRequestException('Bootstrap secret not configured');
         }
@@ -141,7 +191,7 @@ export class AuthService {
             throw new BadRequestException('User already exists');
         }
 
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const passwordHash = await bcrypt.hash(dto.password, app.bcryptSaltRounds);
 
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
@@ -210,9 +260,15 @@ export class AuthService {
         if (!refreshToken) throw new UnauthorizedException('Missing refresh token');
 
         let payload: any;
+        const jwt = this.configService.getOrThrow<ConfigType<typeof jwtConfig>>(
+            jwtConfig.KEY,
+            { infer: true },
+        );
         try {
             payload = this.jwtService.verify(refreshToken, {
-                secret: process.env.JWT_REFRESH_SECRET,
+                secret: jwt.refreshSecret,
+                issuer: jwt.issuer,
+                audience: jwt.audience,
             });
         } catch {
             throw new UnauthorizedException('Invalid refresh token');

@@ -5,11 +5,16 @@ import { Worker } from 'bullmq';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
-import { postDlq, redisConnection } from '../queues';
+import { getPostDlq, getRedisConnection } from '../queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { KillSwitchKey, PostJobStatus } from '@prisma/client';
 import { RedisService } from '@/modules/redis/redis.service';
 import { runWithWorkerContext } from '@/common/context/request-context';
+import { ConfigService, ConfigType } from '@nestjs/config';
+import appConfig from '@/config/app.config';
+import redisConfig from '@/config/redis.config';
+import { TelegramCircuitBreakerOpenError, TelegramPermanentError, TelegramTimeoutError, TelegramTransientError } from '@/modules/telegram/telegram.errors';
+
 
 export function startPostWorker(
     prisma: PrismaService,
@@ -17,9 +22,19 @@ export function startPostWorker(
     telegramService: TelegramService,
     killSwitchService: KillSwitchService,
     redisService: RedisService,
+    configService: ConfigService,
     logger: LoggerService, // ✅ endi tashqaridan keladi
 ) {
+    const app = configService.getOrThrow<ConfigType<typeof appConfig>>(
+        appConfig.KEY,
+        { infer: true },
+    );
+    const redis = configService.getOrThrow<ConfigType<typeof redisConfig>>(
+        redisConfig.KEY,
+        { infer: true },
+    );
     const redisClient = redisService.getClient();
+    const postDlq = getPostDlq(redis);
     const heartbeatKey = 'worker:heartbeat';
     const heartbeatIntervalMs = 10000;
     const heartbeatTtlSeconds = 40;
@@ -59,7 +74,7 @@ export function startPostWorker(
             runWithWorkerContext('post-queue', job.id, async () => {
                 const { postJobId } = job.data;
                 const now = new Date();
-                const maxAttempts = job.opts.attempts ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
+                const maxAttempts = job.opts.attempts ?? app.postJob.maxAttempts;
 
                 const reservation = await prisma.postJob.updateMany({
                     where: { id: postJobId, status: PostJobStatus.queued },
@@ -124,7 +139,6 @@ export function startPostWorker(
                     }
 
                     const telegramResult = await telegramService.sendCampaignPost(postJob.id);
-                    if (!telegramResult.ok) throw new Error('Telegram send failed');
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -166,7 +180,17 @@ export function startPostWorker(
                     return { ok: true, telegramMessageId: telegramResult.telegramMessageId };
                 } catch (err) {
                     const attemptsMade = job.attemptsMade + 1;
-                    const shouldRetry = attemptsMade < maxAttempts;
+                    const isTelegramTransient =
+                        err instanceof TelegramTransientError
+                        || err instanceof TelegramTimeoutError
+                        || err instanceof TelegramCircuitBreakerOpenError;
+                    const isTelegramPermanent = err instanceof TelegramPermanentError;
+                    const shouldRetry =
+                        !isTelegramPermanent && attemptsMade < maxAttempts;
+
+                    if (isTelegramPermanent) {
+                        await job.discard();
+                    }
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -207,6 +231,8 @@ export function startPostWorker(
                                 maxAttempts,
                                 shouldRetry,
                                 error: err instanceof Error ? err.message : String(err),
+                                telegramTransient: isTelegramTransient,
+                                telegramPermanent: isTelegramPermanent,
                             },
                         },
                         err instanceof Error ? err.stack : undefined,
@@ -216,7 +242,7 @@ export function startPostWorker(
                     throw err;
                 }
             }),
-        { connection: redisConnection, concurrency: 5 },
+        { connection: getRedisConnection(redis), concurrency: 5 },
     );
 
     worker.on('failed', async (job, err) => {

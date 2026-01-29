@@ -25,6 +25,7 @@
     "@nestjs/platform-express": "^10.4.22",
     "@nestjs/schedule": "^6.1.0",
     "@nestjs/swagger": "^7.4.2",
+    "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^5.22.0",
     "bcrypt": "^5.1.1",
     "bullmq": "^5.66.5",
@@ -35,6 +36,7 @@
     "express": "^5.2.1",
     "helmet": "^8.1.0",
     "ioredis": "^5.9.2",
+    "opossum": "^9.0.0",
     "pg": "^8.17.2",
     "prisma": "^5.22.0",
     "swagger-ui-express": "^5.0.1",
@@ -46,6 +48,7 @@
     "@types/bcrypt": "^5.0.2",
     "@types/compression": "^1.8.1",
     "@types/node": "^25.0.9",
+    "@types/opossum": "^8.1.9",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },

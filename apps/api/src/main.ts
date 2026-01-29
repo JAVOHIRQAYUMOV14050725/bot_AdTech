@@ -121,13 +121,15 @@ async function bootstrap() {
     setupSwagger(app);
 
     const port = process.env.PORT ? Number(process.env.PORT) : 4002;
-    await app.listen(port);
+    const host = process.env.HOST ?? '0.0.0.0';
+    await app.listen(port, host);
 
     // ✅ API started event (structured)
     logger.log(
         {
             event: 'api_started',
             data: {
+                host,
                 port,
                 swagger: true,
                 prefix: 'api',

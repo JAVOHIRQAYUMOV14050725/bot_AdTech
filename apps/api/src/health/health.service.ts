@@ -5,7 +5,10 @@ import { RedisService } from '@/modules/redis/redis.service';
 import { CronStatusService } from '@/modules/scheduler/cron-status.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { JwtService } from '@nestjs/jwt';
-import { postQueue } from '@/modules/scheduler/queues';
+import { SchedulerQueuesService } from '@/modules/scheduler/queues.service';
+import { ConfigService } from '@nestjs/config';
+import { EnvVars } from '@/config/env.schema';
+import { getJwtConfig } from '@/config/jwt.config';
 
 type CheckStatus = 'ok' | 'failed' | 'disabled';
 
@@ -22,6 +25,8 @@ export class HealthService {
         private readonly cronStatusService: CronStatusService,
         private readonly telegramService: TelegramService,
         private readonly jwtService: JwtService,
+        private readonly queues: SchedulerQueuesService,
+        private readonly configService: ConfigService<EnvVars>,
     ) { }
 
     async live() {
@@ -131,7 +136,9 @@ export class HealthService {
         try {
             const client = this.redisService.getClient();
             const pong = await client.ping();
-            const authConfigured = Boolean(process.env.REDIS_PASSWORD);
+            const authConfigured = Boolean(
+                this.configService.get<string>('REDIS_PASSWORD', { infer: true }),
+            );
             const authPresent = Boolean(client.options.password);
             const authOk = !authConfigured || authPresent;
 
@@ -160,8 +167,8 @@ export class HealthService {
 
     private async checkBullmq(): Promise<CheckResult> {
         try {
-            await postQueue.waitUntilReady();
-            const counts = await postQueue.getJobCounts(
+            await this.queues.postQueue.waitUntilReady();
+            const counts = await this.queues.postQueue.getJobCounts(
                 'wait',
                 'delayed',
                 'active',
@@ -214,7 +221,8 @@ export class HealthService {
     }
 
     private async checkTelegram(): Promise<CheckResult> {
-        const autostart = process.env.TELEGRAM_AUTOSTART === 'true';
+        const autostart =
+            this.configService.get<boolean>('TELEGRAM_AUTOSTART', { infer: true }) ?? false;
         if (!autostart) {
             return { status: 'disabled' };
         }
@@ -239,11 +247,11 @@ export class HealthService {
     }
 
     private async checkAuth(): Promise<CheckResult> {
-        const secret = process.env.JWT_SECRET;
-        if (!secret) {
+        const jwtConfig = getJwtConfig(this.configService);
+        if (!jwtConfig.access.secret) {
             return {
                 status: 'failed',
-                details: { error: 'JWT_SECRET missing' },
+                details: { error: 'JWT_ACCESS_SECRET missing' },
             };
         }
 
@@ -252,7 +260,11 @@ export class HealthService {
                 sub: 'health-check',
                 scope: 'ready',
             });
-            await this.jwtService.verifyAsync(token);
+            await this.jwtService.verifyAsync(token, {
+                secret: jwtConfig.access.secret,
+                issuer: jwtConfig.issuer,
+                audience: jwtConfig.audience,
+            });
             return {
                 status: 'ok',
                 details: { signed: true },

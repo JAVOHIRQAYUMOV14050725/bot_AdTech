@@ -7,6 +7,7 @@ import { SystemModule } from '@/modules/system/system.module'; // ✅
 import { OpsModule } from '@/modules/ops/ops.module';
 import { RedisModule } from '@/modules/redis/redis.module';
 import { CronStatusService } from './cron-status.service';
+import { SchedulerQueuesModule } from './queues.module';
 
 @Module({
     imports: [
@@ -16,8 +17,9 @@ import { CronStatusService } from './cron-status.service';
         SystemModule, // ✅ MUHIM
         OpsModule,
         RedisModule,
+        SchedulerQueuesModule,
     ],
     providers: [SchedulerService, CronStatusService],
-    exports: [SchedulerService, CronStatusService],
+    exports: [SchedulerService, CronStatusService, SchedulerQueuesModule],
 })
 export class SchedulerModule { }

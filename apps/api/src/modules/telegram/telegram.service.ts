@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, LoggerService } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Inject, LoggerService } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Telegraf, Context } from 'telegraf';
 import { AdminHandler } from './handlers/admin.handler';
@@ -8,6 +8,17 @@ import {
     TelegramCheckReason,
     TelegramCheckResult,
 } from '@/modules/telegram/telegram.types';
+import { ConfigService } from '@nestjs/config';
+import { EnvVars } from '@/config/env.schema';
+import CircuitBreaker from 'opossum';
+import { withTimeout } from '@/common/utils/timeout';
+import {
+    TelegramCircuitOpenError,
+    TelegramPermanentError,
+    TelegramTimeoutError,
+    TelegramTransientError,
+} from './telegram.errors';
+import { RequestContext } from '@/common/context/request-context';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
     const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
@@ -31,28 +42,83 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly bot: Telegraf<Context>;
     private started = false;
     private botId?: number;
-
-
+    private readonly telegramBreaker: CircuitBreaker<() => Promise<unknown>, unknown>;
+    private readonly requestTimeoutMs: number;
+    private readonly maxAttempts: number;
+    private readonly baseDelayMs: number;
+    private readonly breakerFailureThreshold: number;
+    private readonly breakerResetMs: number;
+    private readonly isProduction: boolean;
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly adminHandler: AdminHandler,
+        private readonly configService: ConfigService<EnvVars>,
           @Inject('LOGGER') private readonly logger: LoggerService,
     ) {
-        const token = process.env.TELEGRAM_BOT_TOKEN;
+        const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN', { infer: true });
         if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
         this.bot = new Telegraf(token);
+
+        this.requestTimeoutMs =
+            this.configService.get<number>('TELEGRAM_REQUEST_TIMEOUT_MS', { infer: true }) ?? 25000;
+        this.maxAttempts =
+            this.configService.get<number>('TELEGRAM_SEND_MAX_ATTEMPTS', { infer: true }) ?? 3;
+        this.baseDelayMs =
+            this.configService.get<number>('TELEGRAM_SEND_BASE_DELAY_MS', { infer: true }) ?? 1000;
+        this.breakerFailureThreshold =
+            this.configService.get<number>('TELEGRAM_BREAKER_FAILURE_THRESHOLD', { infer: true }) ?? 5;
+        this.breakerResetMs =
+            this.configService.get<number>('TELEGRAM_BREAKER_RESET_MS', { infer: true }) ?? 60000;
+        this.isProduction = this.configService.get<string>('NODE_ENV', { infer: true }) === 'production';
+
+        this.telegramBreaker = new CircuitBreaker(
+            async (fn: () => Promise<unknown>) => fn(),
+            {
+                timeout: this.requestTimeoutMs + 1000,
+                errorThresholdPercentage: 100,
+                volumeThreshold: this.breakerFailureThreshold,
+                resetTimeout: this.breakerResetMs,
+            },
+        );
+        this.telegramBreaker.on('open', () => {
+            this.logger.warn(
+                {
+                    event: 'telegram_breaker_open',
+                    alert: true,
+                },
+                'TelegramService',
+            );
+        });
+        this.telegramBreaker.on('halfOpen', () => {
+            this.logger.warn(
+                {
+                    event: 'telegram_breaker_half_open',
+                },
+                'TelegramService',
+            );
+        });
+        this.telegramBreaker.on('close', () => {
+            this.logger.warn(
+                {
+                    event: 'telegram_breaker_close',
+                },
+                'TelegramService',
+            );
+        });
     }
 
     async onModuleInit() {
-        const smokeTestEnabled = process.env.ENABLE_TELEGRAM_SMOKE_TEST === 'true';
-        if (smokeTestEnabled && process.env.NODE_ENV !== 'production') {
+        const smokeTestEnabled =
+            this.configService.get<boolean>('ENABLE_TELEGRAM_SMOKE_TEST', { infer: true }) ?? false;
+        if (smokeTestEnabled && !this.isProduction) {
             void this.sendTestToMyChannel();
         }
 
         this.registerAdminCommands();
 
-        const autostart = process.env.TELEGRAM_AUTOSTART === 'true';
+        const autostart =
+            this.configService.get<boolean>('TELEGRAM_AUTOSTART', { infer: true }) ?? false;
         if (!autostart) {
             this.logger.warn({
                 event: 'telegram_bot_autostart_disabled',
@@ -67,7 +133,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     private async sendTestToMyChannel() {
-        const channel = process.env.TELEGRAM_TEST_CHANNEL;
+        const channel = this.configService.get<string>('TELEGRAM_TEST_CHANNEL', { infer: true });
         if (!channel) {
             this.logger.warn({
                 event: 'telegram_smoke_test_channel_not_set',
@@ -76,7 +142,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             );
             return;
         }
-        await this.bot.telegram.sendMessage(channel, '✅ bot startup test');
+        await this.executeTelegramAction(
+            'sendMessage',
+            () => this.bot.telegram.sendMessage(channel, '✅ bot startup test'),
+        );
     }
 
 
@@ -107,7 +176,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         if (this.started) return;
 
         // ✅ Debug: real channel id ni olish (dev-only)
-        if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG === 'true') {
+        const enableDebug =
+            this.configService.get<boolean>('ENABLE_DEBUG', { infer: true }) ?? false;
+        if (!this.isProduction || enableDebug) {
             this.bot.on('channel_post', (ctx) => {
                 const chat: any = ctx.chat;
                 this.logger.warn({
@@ -189,28 +260,152 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         if (this.botId) {
             return this.botId;
         }
-        const me = await this.bot.telegram.getMe();
+        const me = await this.executeTelegramAction(
+            'getMe',
+            () => this.bot.telegram.getMe(),
+        );
         this.botId = me.id;
         return me.id;
     }
 
     async checkConnection(): Promise<{ id: number; username?: string }> {
-        const me = await this.bot.telegram.getMe();
+        const me = await this.executeTelegramAction(
+            'getMe',
+            () => this.bot.telegram.getMe(),
+        );
         this.botId = me.id;
         return { id: me.id, username: me.username };
     }
 
+    private getCorrelationId(context?: { correlationId?: string }) {
+        return context?.correlationId ?? RequestContext.getCorrelationId();
+    }
+
+    private buildLogContext(context?: {
+        entityType?: string;
+        entityId?: string;
+        correlationId?: string;
+    }) {
+        return {
+            entityType: context?.entityType,
+            entityId: context?.entityId,
+            correlationId: this.getCorrelationId(context),
+        };
+    }
+
+    private isBreakerOpenError(err: unknown): boolean {
+        if (!err || typeof err !== 'object') {
+            return false;
+        }
+        const code = (err as { code?: string }).code;
+        return code === 'EOPENBREAKER' || code === 'EHALFOPEN';
+    }
+
+    private async executeTelegramAction<T>(
+        action: string,
+        fn: () => Promise<T>,
+        context?: { entityType?: string; entityId?: string; correlationId?: string },
+    ): Promise<T> {
+        const logContext = this.buildLogContext(context);
+        this.logger.log(
+            {
+                event: 'telegram_call_start',
+                action,
+                ...logContext,
+            },
+            'TelegramService',
+        );
+
+        try {
+            const result = await this.telegramBreaker.fire(() =>
+                withTimeout(
+                    (_signal) => fn(),
+                    {
+                        timeoutMs: this.requestTimeoutMs,
+                        errorFactory: (timeoutMs) =>
+                            new TelegramTimeoutError(
+                                `${action} timed out`,
+                                timeoutMs,
+                            ),
+                    },
+                ),
+            );
+
+            this.logger.log(
+                {
+                    event: 'telegram_call_success',
+                    action,
+                    ...logContext,
+                },
+                'TelegramService',
+            );
+            return result as T;
+        } catch (err) {
+            if (err instanceof TelegramTimeoutError) {
+                this.logger.warn(
+                    {
+                        event: 'telegram_call_timeout',
+                        action,
+                        alert: true,
+                        ...logContext,
+                    },
+                    'TelegramService',
+                );
+                throw err;
+            }
+
+            if (this.isBreakerOpenError(err)) {
+                const circuitError = new TelegramCircuitOpenError(
+                    'Telegram circuit breaker open',
+                    err,
+                );
+                this.logger.warn(
+                    {
+                        event: 'telegram_breaker_open',
+                        alert: true,
+                        action,
+                        ...logContext,
+                    },
+                    'TelegramService',
+                );
+                throw circuitError;
+            }
+
+            this.logger.warn(
+                {
+                    event: 'telegram_call_failed',
+                    action,
+                    alert: false,
+                    error: this.sanitizeTelegramError(
+                        err instanceof Error ? err.message : String(err),
+                    ),
+                    ...logContext,
+                },
+                'TelegramService',
+            );
+            throw err;
+        }
+    }
+
     private async withTelegramRetry<T>(action: string, fn: () => Promise<T>): Promise<T> {
-        const maxAttempts = Number(process.env.TELEGRAM_SEND_MAX_ATTEMPTS ?? 3);
-        const baseDelayMs = Number(process.env.TELEGRAM_SEND_BASE_DELAY_MS ?? 1000);
+        const maxAttempts = this.maxAttempts;
+        const baseDelayMs = this.baseDelayMs;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
                 return await fn();
             } catch (err) {
+                if (err instanceof TelegramCircuitOpenError) {
+                    throw err;
+                }
+                if (err instanceof TelegramPermanentError) {
+                    throw err;
+                }
                 const retryAfterSeconds =
-                    (err as { response?: { parameters?: { retry_after?: number } } })?.response?.parameters?.retry_after ??
-                    (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after;
+                    err instanceof TelegramTransientError
+                        ? err.retryAfterSeconds ?? undefined
+                        : (err as { response?: { parameters?: { retry_after?: number } } })?.response?.parameters?.retry_after
+                        ?? (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after;
 
                 if (attempt === maxAttempts) {
                     throw err;
@@ -318,6 +513,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             || lowerMessage.includes('bot was blocked')
             || lowerMessage.includes('bot was removed')
             || lowerMessage.includes('bot is not a member')
+            || lowerMessage.includes('forbidden')
         ) {
             return {
                 canAccessChat: false,
@@ -366,11 +562,52 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         };
     }
 
+    private toTelegramError(action: string, err: unknown): Error {
+        if (err instanceof TelegramTimeoutError
+            || err instanceof TelegramCircuitOpenError
+            || err instanceof TelegramPermanentError
+            || err instanceof TelegramTransientError) {
+            return err;
+        }
+
+        const classified = this.classifyTelegramError(err);
+        const message = `${action} failed: ${classified.reason}`;
+
+        if (
+            classified.reason === TelegramCheckReason.CHAT_NOT_FOUND
+            || classified.reason === TelegramCheckReason.BOT_KICKED
+            || classified.reason === TelegramCheckReason.BOT_NOT_ADMIN
+        ) {
+            return new TelegramPermanentError(message, err);
+        }
+
+        if (
+            classified.reason === TelegramCheckReason.RATE_LIMIT
+            || classified.reason === TelegramCheckReason.NETWORK
+        ) {
+            return new TelegramTransientError(
+                message,
+                classified.retryAfterSeconds,
+                err,
+            );
+        }
+
+        return new TelegramTransientError(
+            message,
+            classified.retryAfterSeconds,
+            err,
+        );
+    }
+
     async checkBotAdmin(channelId: string): Promise<TelegramCheckResult> {
         try {
             const admins = await this.withTelegramRetry(
                 'getChatAdministrators',
-                () => this.bot.telegram.getChatAdministrators(channelId),
+                () => this.executeTelegramAction(
+                    'getChatAdministrators',
+                    () => this.bot.telegram.getChatAdministrators(channelId),
+                    { entityType: 'channel', entityId: channelId },
+                ),
             );
             const botId = await this.getBotId();
             const botAdmin = admins.find((admin) => admin.user.id === botId);
@@ -409,6 +646,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
                 reason: TelegramCheckReason.UNKNOWN,
             };
         } catch (err) {
+            if (err instanceof TelegramTimeoutError || err instanceof TelegramCircuitOpenError) {
+                return {
+                    canAccessChat: false,
+                    isAdmin: false,
+                    reason: TelegramCheckReason.NETWORK,
+                    telegramError: this.sanitizeTelegramError(
+                        err instanceof Error ? err.message : String(err),
+                    ),
+                    retryAfterSeconds: null,
+                };
+            }
             return this.classifyTelegramError(err);
         }
     }
@@ -457,70 +705,58 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         const sendPayload = creative.contentPayload as Prisma.JsonObject;
 
-        const maxAttempts = Number(process.env.TELEGRAM_SEND_MAX_ATTEMPTS ?? 3);
-        const baseDelayMs = Number(process.env.TELEGRAM_SEND_BASE_DELAY_MS ?? 1000);
-
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const response = await this.withTelegramRetry('sendCampaignPost', async () => {
             try {
-                let response: { message_id?: number };
-
                 if (creative.contentType === 'text') {
                     const text = String(sendPayload?.text ?? '');
                     if (!text.trim()) throw new Error('Creative text payload missing');
-                    response = await this.bot.telegram.sendMessage(telegramChannelId, text);
-                } else if (creative.contentType === 'image') {
-                    const imageUrl = String(sendPayload?.url ?? '');
-                    if (!imageUrl.trim()) throw new Error('Creative image payload missing');
-                    response = await this.bot.telegram.sendPhoto(telegramChannelId, imageUrl, {
-                        caption: typeof sendPayload?.caption === 'string' ? sendPayload.caption : undefined,
-                    });
-                } else if (creative.contentType === 'video') {
-                    const videoUrl = String(sendPayload?.url ?? '');
-                    if (!videoUrl.trim()) throw new Error('Creative video payload missing');
-                    response = await this.bot.telegram.sendVideo(telegramChannelId, videoUrl, {
-                        caption: typeof sendPayload?.caption === 'string' ? sendPayload.caption : undefined,
-                    });
-                } else {
-                    throw new Error('Unsupported creative type');
+                    return await this.executeTelegramAction(
+                        'sendMessage',
+                        () => this.bot.telegram.sendMessage(telegramChannelId, text),
+                        { entityType: 'post_job', entityId: postJobId, correlationId: postJobId },
+                    );
                 }
 
-                const messageId = response.message_id;
+                if (creative.contentType === 'image') {
+                    const imageUrl = String(sendPayload?.url ?? '');
+                    if (!imageUrl.trim()) throw new Error('Creative image payload missing');
+                    return await this.executeTelegramAction(
+                        'sendPhoto',
+                        () => this.bot.telegram.sendPhoto(telegramChannelId, imageUrl, {
+                            caption: typeof sendPayload?.caption === 'string' ? sendPayload.caption : undefined,
+                        }),
+                        { entityType: 'post_job', entityId: postJobId, correlationId: postJobId },
+                    );
+                }
 
-                await this.prisma.postExecutionLog.create({
-                    data: {
-                        postJobId,
-                        telegramMessageId: messageId ? BigInt(messageId) : null,
-                        responsePayload: sendPayload,
-                    },
-                });
+                if (creative.contentType === 'video') {
+                    const videoUrl = String(sendPayload?.url ?? '');
+                    if (!videoUrl.trim()) throw new Error('Creative video payload missing');
+                    return await this.executeTelegramAction(
+                        'sendVideo',
+                        () => this.bot.telegram.sendVideo(telegramChannelId, videoUrl, {
+                            caption: typeof sendPayload?.caption === 'string' ? sendPayload.caption : undefined,
+                        }),
+                        { entityType: 'post_job', entityId: postJobId, correlationId: postJobId },
+                    );
+                }
 
-                return { ok: true, telegramMessageId: messageId };
+                throw new Error('Unsupported creative type');
             } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                this.logger.warn({
-                    event: 'telegram_send_post_retry',
-                    postJobId,
-                    attempt,
-                    maxAttempts,
-                    error: this.sanitizeTelegramError(msg),
-                },
-                    'TelegramService'
-                );
-
-                if (attempt === maxAttempts) return { ok: false };
-
-                const retryAfterSeconds =
-                    (err as { response?: { parameters?: { retry_after?: number } } })?.response?.parameters?.retry_after ??
-                    (err as { parameters?: { retry_after?: number } })?.parameters?.retry_after;
-
-                const backoffMs =
-                    typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
-                        ? retryAfterSeconds * 1000
-                        : baseDelayMs * 2 ** (attempt - 1);
-                await new Promise((r) => setTimeout(r, backoffMs));
+                throw this.toTelegramError('sendCampaignPost', err);
             }
-        }
+        });
 
-        return { ok: false };
+        const messageId = response?.message_id;
+
+        await this.prisma.postExecutionLog.create({
+            data: {
+                postJobId,
+                telegramMessageId: messageId ? BigInt(messageId) : null,
+                responsePayload: sendPayload,
+            },
+        });
+
+        return { ok: true, telegramMessageId: messageId };
     }
 }

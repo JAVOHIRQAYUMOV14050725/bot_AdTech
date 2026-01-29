@@ -5,11 +5,17 @@ import { Worker } from 'bullmq';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
-import { postDlq, redisConnection } from '../queues';
+import { SchedulerQueuesService } from '../queues.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { KillSwitchKey, PostJobStatus } from '@prisma/client';
 import { RedisService } from '@/modules/redis/redis.service';
 import { runWithWorkerContext } from '@/common/context/request-context';
+import { ConfigService } from '@nestjs/config';
+import { EnvVars } from '@/config/env.schema';
+import {
+    isTelegramPermanentError,
+    isTelegramRetryableError,
+} from '@/modules/telegram/telegram.errors';
 
 export function startPostWorker(
     prisma: PrismaService,
@@ -17,9 +23,13 @@ export function startPostWorker(
     telegramService: TelegramService,
     killSwitchService: KillSwitchService,
     redisService: RedisService,
+    queuesService: SchedulerQueuesService,
+    configService: ConfigService<EnvVars>,
     logger: LoggerService, // ✅ endi tashqaridan keladi
 ) {
     const redisClient = redisService.getClient();
+    const redisConnection = queuesService.getConnection();
+    const postDlq = queuesService.postDlq;
     const heartbeatKey = 'worker:heartbeat';
     const heartbeatIntervalMs = 10000;
     const heartbeatTtlSeconds = 40;
@@ -59,7 +69,10 @@ export function startPostWorker(
             runWithWorkerContext('post-queue', job.id, async () => {
                 const { postJobId } = job.data;
                 const now = new Date();
-                const maxAttempts = job.opts.attempts ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
+                const maxAttempts =
+                    job.opts.attempts
+                    ?? configService.get<number>('POST_JOB_MAX_ATTEMPTS', { infer: true })
+                    ?? 3;
 
                 const reservation = await prisma.postJob.updateMany({
                     where: { id: postJobId, status: PostJobStatus.queued },
@@ -124,7 +137,6 @@ export function startPostWorker(
                     }
 
                     const telegramResult = await telegramService.sendCampaignPost(postJob.id);
-                    if (!telegramResult.ok) throw new Error('Telegram send failed');
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -166,7 +178,9 @@ export function startPostWorker(
                     return { ok: true, telegramMessageId: telegramResult.telegramMessageId };
                 } catch (err) {
                     const attemptsMade = job.attemptsMade + 1;
-                    const shouldRetry = attemptsMade < maxAttempts;
+                    const isPermanent = isTelegramPermanentError(err);
+                    const isRetryable = isTelegramRetryableError(err);
+                    const shouldRetry = !isPermanent && attemptsMade < maxAttempts;
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -196,6 +210,10 @@ export function startPostWorker(
                         }
                     });
 
+                    if (!shouldRetry) {
+                        await job.discard();
+                    }
+
                     logger.error(
                         {
                             event: 'post_job_failed',
@@ -206,6 +224,8 @@ export function startPostWorker(
                                 attemptsMade,
                                 maxAttempts,
                                 shouldRetry,
+                                isPermanent,
+                                isRetryable,
                                 error: err instanceof Error ? err.message : String(err),
                             },
                         },

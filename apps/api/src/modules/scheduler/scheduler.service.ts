@@ -1,10 +1,12 @@
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SystemService } from '@/modules/system/system.service';
-import { postQueue } from './queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { CronStatusService } from './cron-status.service';
 import { runWithCronContext } from '@/common/context/request-context';
+import { SchedulerQueuesService } from './queues.service';
+import { ConfigService } from '@nestjs/config';
+import { EnvVars } from '@/config/env.schema';
 
 @Injectable()
 export class SchedulerService {
@@ -12,6 +14,8 @@ export class SchedulerService {
         private readonly systemService: SystemService,
         private readonly killSwitchService: KillSwitchService,
         private readonly cronStatusService: CronStatusService,
+        private readonly queues: SchedulerQueuesService,
+        private readonly configService: ConfigService<EnvVars>,
         @Inject('LOGGER') private readonly logger: LoggerService,
 
     ) { }
@@ -22,9 +26,9 @@ export class SchedulerService {
      * =========================================================
      */
     async enqueuePost(postJobId: string, executeAt: Date) {
-        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
-        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
-        await postQueue.add(
+        const maxAttempts = this.configService.get<number>('POST_JOB_MAX_ATTEMPTS', { infer: true }) ?? 3;
+        const backoffMs = this.configService.get<number>('POST_JOB_RETRY_BACKOFF_MS', { infer: true }) ?? 5000;
+        await this.queues.postQueue.add(
             'execute-post',
             { postJobId },
             {

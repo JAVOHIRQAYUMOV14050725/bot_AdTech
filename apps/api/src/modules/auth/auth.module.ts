@@ -5,7 +5,8 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PrismaModule } from '@/prisma/prisma.module';
-import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
+import { getJwtConfig } from '@/config/jwt.config';
+import { EnvVars } from '@/config/env.schema';
 
 @Module({
     imports: [
@@ -14,18 +15,21 @@ import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
         JwtModule.registerAsync({
             imports: [ConfigModule],
             inject: [ConfigService],
-            useFactory: (configService: ConfigService) => ({
-                secret: configService.get<string>('JWT_SECRET', { infer: true }),
-                signOptions: {
-                    expiresIn: configService.get<string>('JWT_EXPIRES_IN', {
-                        infer: true,
-                    }),
-                },
-            }),
+            useFactory: (configService: ConfigService<EnvVars>) => {
+                const jwtConfig = getJwtConfig(configService);
+                return {
+                    secret: jwtConfig.access.secret,
+                    signOptions: {
+                        expiresIn: jwtConfig.access.expiresIn,
+                        issuer: jwtConfig.issuer,
+                        audience: jwtConfig.audience,
+                    },
+                };
+            },
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtAuthGuard, AuthRateLimitGuard],
+    providers: [AuthService, JwtAuthGuard],
     exports: [AuthService, JwtModule, JwtAuthGuard],
 })
 export class AuthModule { }

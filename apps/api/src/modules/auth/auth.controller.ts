@@ -5,7 +5,6 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { Actor } from './decorators/actor.decorator';
-import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';
 import { AuthResponseDto, MeResponseDto } from './dto/auth-response.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
@@ -15,6 +14,8 @@ import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
+import { ThrottlerLoggerGuard } from '@/common/guards/throttler-logger.guard';
 
 @Controller('auth')
 @ApiTags('Auth')
@@ -22,7 +23,6 @@ export class AuthController {
     constructor(private readonly authService: AuthService) { }
 
     @Post('register')
-    @UseGuards(AuthRateLimitGuard)
     @ApiOperation({ summary: 'Register new user' })
     @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
@@ -31,7 +31,6 @@ export class AuthController {
     }
 
     @Post('bootstrap-super-admin')
-    @UseGuards(AuthRateLimitGuard)
     @ApiOperation({ summary: 'Bootstrap initial super admin (one-time)' })
     @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
@@ -40,7 +39,8 @@ export class AuthController {
     }
 
     @Post('login')
-    @UseGuards(AuthRateLimitGuard)
+    @UseGuards(ThrottlerLoggerGuard)
+    @Throttle(3, 300)
     @ApiOperation({ summary: 'Login' })
     @ApiOkResponse({ type: AuthResponseDto })
     @ApiStandardErrorResponses()
@@ -49,7 +49,6 @@ export class AuthController {
     }
 
     @Post('refresh')
-    @UseGuards(AuthRateLimitGuard)
     @ApiOperation({ summary: 'Refresh tokens' })
     refresh(@Body() dto: RefreshDto) {
         return this.authService.refresh(dto.refreshToken);

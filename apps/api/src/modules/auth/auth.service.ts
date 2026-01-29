@@ -6,15 +6,21 @@ import { LoginDto } from './dto/login.dto';
 import { UserRole, UserStatus } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
-
-const ms = (val: string) => val; // placeholder; expiresIn jwt format bo'ladi: "15m", "30d"
+import { ConfigService } from '@nestjs/config';
+import { EnvVars } from '@/config/env.schema';
+import { getJwtConfig, JwtRuntimeConfig } from '@/config/jwt.config';
 
 @Injectable()
 export class AuthService {
+    private readonly jwtConfig: JwtRuntimeConfig;
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
-    ) { }
+        private readonly configService: ConfigService<EnvVars>,
+    ) {
+        this.jwtConfig = getJwtConfig(this.configService);
+    }
 
     private parseTelegramId(value: string): bigint {
         try {
@@ -25,26 +31,35 @@ export class AuthService {
     }
 
     private async hashToken(token: string) {
-        const rounds = Number(process.env.BCRYPT_SALT_ROUNDS ?? 10);
-        return bcrypt.hash(token, rounds);
+        return bcrypt.hash(token, this.getBcryptRounds());
+    }
+
+    private getBcryptRounds() {
+        return this.configService.get<number>('BCRYPT_SALT_ROUNDS', { infer: true }) ?? 10;
     }
 
     private signAccessToken(user: { id: string; role: UserRole }) {
+        const { access, issuer, audience } = this.jwtConfig;
         return this.jwtService.sign(
             { sub: user.id, role: user.role, typ: 'access' },
             {
-                secret: process.env.JWT_ACCESS_SECRET,
-                expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
+                secret: access.secret,
+                expiresIn: access.expiresIn,
+                issuer,
+                audience,
             },
         );
     }
 
     private signRefreshToken(user: { id: string; role: UserRole }) {
+        const { refresh, issuer, audience } = this.jwtConfig;
         return this.jwtService.sign(
             { sub: user.id, role: user.role, typ: 'refresh' },
             {
-                secret: process.env.JWT_REFRESH_SECRET,
-                expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
+                secret: refresh.secret,
+                expiresIn: refresh.expiresIn,
+                issuer,
+                audience,
             },
         );
     }
@@ -77,7 +92,7 @@ export class AuthService {
         const existing = await this.prisma.user.findUnique({ where: { telegramId } });
         if (existing) throw new BadRequestException('User already exists');
 
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const passwordHash = await bcrypt.hash(dto.password, this.getBcryptRounds());
 
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
@@ -114,7 +129,7 @@ export class AuthService {
     }
 
     async bootstrapSuperAdmin(dto: BootstrapSuperAdminDto) {
-        const bootstrapSecret = process.env.SUPER_ADMIN_BOOTSTRAP_SECRET;
+        const bootstrapSecret = this.configService.get<string>('SUPER_ADMIN_BOOTSTRAP_SECRET', { infer: true });
         if (!bootstrapSecret) {
             throw new BadRequestException('Bootstrap secret not configured');
         }
@@ -141,7 +156,7 @@ export class AuthService {
             throw new BadRequestException('User already exists');
         }
 
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const passwordHash = await bcrypt.hash(dto.password, this.getBcryptRounds());
 
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
@@ -211,8 +226,11 @@ export class AuthService {
 
         let payload: any;
         try {
+            const { refresh, issuer, audience } = this.jwtConfig;
             payload = this.jwtService.verify(refreshToken, {
-                secret: process.env.JWT_REFRESH_SECRET,
+                secret: refresh.secret,
+                issuer,
+                audience,
             });
         } catch {
             throw new UnauthorizedException('Invalid refresh token');
@@ -284,7 +302,7 @@ export class AuthService {
         const user = await this.prisma.user.findUnique({ where: { telegramId } });
         if (!user) throw new BadRequestException('User not found');
 
-        const passwordHash = await bcrypt.hash(newPassword, 10);
+        const passwordHash = await bcrypt.hash(newPassword, this.getBcryptRounds());
 
         await this.prisma.user.update({
             where: { id: user.id },

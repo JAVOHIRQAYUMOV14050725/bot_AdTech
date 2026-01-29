@@ -17,8 +17,10 @@ import {
     Prisma,
 } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
-import { postQueue } from '@/modules/scheduler/queues';
+import { SchedulerQueuesService } from '@/modules/scheduler/queues.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
+import { ConfigService } from '@nestjs/config';
+import { EnvVars } from '@/config/env.schema';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
     if (value === null) {
@@ -59,6 +61,8 @@ export class SystemService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly escrowService: EscrowService,
+        private readonly queues: SchedulerQueuesService,
+        private readonly configService: ConfigService<EnvVars>,
                 @Inject('LOGGER') private readonly logger: LoggerService,
         
     ) { }
@@ -87,58 +91,130 @@ export class SystemService {
             throw new BadRequestException(`Escrow already ${escrow.status}`);
         }
 
-        // 🧾 AUDIT (BEFORE)
-        await this.prisma.userAuditLog.create({
-            data: {
-                userId: actorUserId,
-                action: `ESCROW_${action.toUpperCase()}`,
-                metadata: {
-                    campaignTargetId,
-                    reason,
-                    escrowStatus: escrow.status,
-                },
-            },
-        });
+        const correlationId = campaignTargetId;
+        const actionLabel = `ESCROW_${action.toUpperCase()}`;
 
-        let result;
-        if (action === ResolveAction.RELEASE) {
-            result = await this.escrowService.release(campaignTargetId, {
-                actor: 'admin',
-                correlationId: campaignTargetId,
+        try {
+            const result = await this.prisma.$transaction(async (tx) => {
+                await tx.userAuditLog.create({
+                    data: {
+                        userId: actorUserId,
+                        action: `${actionLabel}_ATTEMPT`,
+                        metadata: {
+                            campaignTargetId,
+                            reason,
+                            escrowStatus: escrow.status,
+                        },
+                    },
+                });
+
+                try {
+                    if (action === ResolveAction.RELEASE) {
+                        const releaseResult = await this.escrowService.release(campaignTargetId, {
+                            actor: 'admin',
+                            correlationId,
+                            transaction: tx,
+                        });
+                        await tx.userAuditLog.create({
+                            data: {
+                                userId: actorUserId,
+                                action: `${actionLabel}_SUCCESS`,
+                                metadata: {
+                                    campaignTargetId,
+                                    reason,
+                                    escrowStatus: escrow.status,
+                                    result: releaseResult,
+                                },
+                            },
+                        });
+                        return releaseResult;
+                    }
+
+                    if (action === ResolveAction.REFUND) {
+                        const refundResult = await this.escrowService.refund(campaignTargetId, {
+                            actor: 'admin',
+                            reason,
+                            correlationId,
+                            transaction: tx,
+                        });
+                        await tx.userAuditLog.create({
+                            data: {
+                                userId: actorUserId,
+                                action: `${actionLabel}_SUCCESS`,
+                                metadata: {
+                                    campaignTargetId,
+                                    reason,
+                                    escrowStatus: escrow.status,
+                                    result: refundResult,
+                                },
+                            },
+                        });
+                        return refundResult;
+                    }
+
+                    throw new BadRequestException('Invalid resolve action');
+                } catch (err) {
+                    const errorMessage = err instanceof Error ? err.message : String(err);
+                    await tx.userAuditLog.create({
+                        data: {
+                            userId: actorUserId,
+                            action: `${actionLabel}_FAILED`,
+                            metadata: {
+                                campaignTargetId,
+                                reason,
+                                escrowStatus: escrow.status,
+                                error: errorMessage,
+                            },
+                        },
+                    });
+                    throw err;
+                }
             });
-        } else if (action === ResolveAction.REFUND) {
-            result = await this.escrowService.refund(campaignTargetId, {
-                actor: 'admin',
-                reason,
-                correlationId: campaignTargetId,
-            });
-        } else {
-            throw new BadRequestException('Invalid resolve action');
+
+            this.logger.warn(
+                {
+                    event: 'escrow_manual_resolve_success',
+                    entityType: 'escrow',
+                    entityId: escrow.id,
+                    actorId: actorUserId,
+                    correlationId,
+                    data: {
+                        campaignTargetId,
+                        action,
+                        reason,
+                        escrowStatus: escrow.status,
+                    },
+                },
+                'SystemService',
+            );
+
+            return {
+                ok: true,
+                action,
+                result,
+            };
+        } catch (err) {
+            this.logger.error(
+                {
+                    event: 'escrow_manual_resolve_failed',
+                    alert: true,
+                    entityType: 'escrow',
+                    entityId: escrow.id,
+                    actorId: actorUserId,
+                    correlationId,
+                    data: {
+                        campaignTargetId,
+                        action,
+                        reason,
+                        escrowStatus: escrow.status,
+                        error: err instanceof Error ? err.message : String(err),
+                    },
+                },
+                err instanceof Error ? err.stack : undefined,
+                'SystemService',
+            );
+            throw err;
         }
-
-        this.logger.warn(
-            {
-                event: 'escrow_manual_resolve',
-                entityType: 'escrow',
-                entityId: escrow.id,
-                actorId: actorUserId,
-                data: {
-                    campaignTargetId,
-                    action,
-                    reason,
-                    escrowStatus: escrow.status,
-                },
-                correlationId: campaignTargetId,
-            },
-            'SystemService',
-        );
-
-
-        return {
-            ok: true,
-            action,
-            result,
-        };
     }
 
     /**
@@ -373,11 +449,12 @@ export class SystemService {
     }
 
     async requeueStalledPostJobs() {
-        const stalledMinutes = Number(
-            process.env.POST_JOB_STALLED_MINUTES ?? 15,
-        );
-        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
-        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
+        const stalledMinutes =
+            this.configService.get<number>('POST_JOB_STALLED_MINUTES', { infer: true }) ?? 15;
+        const maxAttempts =
+            this.configService.get<number>('POST_JOB_MAX_ATTEMPTS', { infer: true }) ?? 3;
+        const backoffMs =
+            this.configService.get<number>('POST_JOB_RETRY_BACKOFF_MS', { infer: true }) ?? 5000;
         const cutoff = new Date(Date.now() - stalledMinutes * 60 * 1000);
 
         const stalledJobs = await this.prisma.postJob.findMany({
@@ -468,7 +545,7 @@ export class SystemService {
                 });
 
                 try {
-                    await postQueue.add(
+                    await this.queues.postQueue.add(
                         'execute-post',
                         { postJobId: job.id },
                         {

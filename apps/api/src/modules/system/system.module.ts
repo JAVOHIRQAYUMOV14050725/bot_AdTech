@@ -5,6 +5,7 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { OpsModule } from '@/modules/ops/ops.module';
 import { AuthModule } from '@/modules/auth/auth.module';
+import { SchedulerQueuesModule } from '@/modules/scheduler/queues.module';
 
 @Module({
     imports: [
@@ -12,6 +13,7 @@ import { AuthModule } from '@/modules/auth/auth.module';
         PaymentsModule,
         OpsModule,
         AuthModule,
+        SchedulerQueuesModule,
     ],
     controllers: [SystemController],
     providers: [SystemService],

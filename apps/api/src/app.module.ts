@@ -2,7 +2,7 @@ import { AuthModule } from '@/modules/auth/auth.module';
 import { PrismaModule } from '@/prisma/prisma.module';
 
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 
 import { UsersModule } from '@/modules/users/users.module';
@@ -23,6 +23,11 @@ import { RedisModule } from '@/modules/redis/redis.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { LoggingModule } from './common/logging/logging.module';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from 'throttler-storage-redis';
+import { buildRedisConnection } from './config/redis.config';
+import { EnvVars } from './config/env.schema';
+import { ThrottlerLoggerGuard } from './common/guards/throttler-logger.guard';
 
 
 @Module({
@@ -35,6 +40,17 @@ import { LoggingModule } from './common/logging/logging.module';
         }),
 
         ScheduleModule.forRoot(),
+        ThrottlerModule.forRootAsync({
+            imports: [ConfigModule],
+            inject: [ConfigService],
+            useFactory: (configService: ConfigService<EnvVars>) => ({
+                ttl: 60,
+                limit: 100,
+                storage: new ThrottlerStorageRedisService(
+                    buildRedisConnection(configService),
+                ),
+            }),
+        }),
         LoggingModule,
         PrismaModule,
         AuthModule,
@@ -50,7 +66,7 @@ import { LoggingModule } from './common/logging/logging.module';
         HealthModule,
         JwtModule
     ],
-    providers: [JwtAuthGuard],
+    providers: [JwtAuthGuard, ThrottlerLoggerGuard],
     exports: [JwtModule,JwtAuthGuard],
 })
 export class AppModule { }

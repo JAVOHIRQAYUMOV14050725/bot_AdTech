@@ -7,12 +7,16 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '@/prisma/prisma.service';
 import { UserStatus } from '@prisma/client';
+import { Inject } from '@nestjs/common';
+import { JwtConfig, jwtConfig } from '@/config/jwt.config';
+import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
     constructor(
         private readonly jwtService: JwtService,
         private readonly prisma: PrismaService,
+        @Inject(jwtConfig.KEY) private readonly jwtConfig: JwtConfig,
     ) { }
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -29,13 +33,10 @@ export class JwtAuthGuard implements CanActivate {
         }
 
         try {
-            const secret = process.env.JWT_ACCESS_SECRET;
-            if (!secret) {
-                throw new UnauthorizedException('JWT access secret not configured');
-            }
-
             const payload = await this.jwtService.verifyAsync(token, {
-                secret,
+                secret: this.jwtConfig.access.secret,
+                issuer: this.jwtConfig.issuer,
+                audience: this.jwtConfig.audience,
             });
             const userId = payload?.sub as string | undefined;
 

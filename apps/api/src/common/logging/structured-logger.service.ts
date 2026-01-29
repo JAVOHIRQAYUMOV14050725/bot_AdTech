@@ -1,6 +1,7 @@
 import { LoggerService, LogLevel } from '@nestjs/common';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { RequestContext } from '@/common/context/request-context';
+import { loadEnv } from '@/config/env';
 
 /**
  * 🔥 BANK-GRADE LOG PAYLOAD
@@ -161,7 +162,8 @@ const prepareLogValue = (value: unknown): unknown => {
 };
 
 export const buildStructuredLogger = (): StructuredLogger => {
-    const isProd = process.env.NODE_ENV === 'production';
+    const env = loadEnv();
+    const isProd = env.NODE_ENV === 'production';
 
     const defaultLevels: LogLevel[] = isProd
         ? ['log', 'error', 'warn']
@@ -175,7 +177,7 @@ export const buildStructuredLogger = (): StructuredLogger => {
         'verbose',
     ];
 
-    const configuredLevels = process.env.LOG_LEVEL?.split(',')
+    const configuredLevels = env.LOG_LEVEL?.split(',')
         .map((level) => level.trim())
         .filter((level) => allowedLevels.includes(level as LogLevel)) as
         | LogLevel[]

@@ -1,9 +1,12 @@
 import { Queue } from 'bullmq';
+import { loadEnv } from '@/config/env';
+
+const env = loadEnv();
 
 export const redisConnection = {
-    host: process.env.REDIS_HOST,
-    port: Number(process.env.REDIS_PORT),
-    password: process.env.REDIS_PASSWORD,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
+    password: env.REDIS_PASSWORD ?? undefined,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     retryStrategy: (times: number) => Math.min(1000 * 2 ** times, 30000),

@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule, ConfigType } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PrismaModule } from '@/prisma/prisma.module';
-import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
+import { jwtConfig } from '@/config/jwt.config';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 
 @Module({
     imports: [
@@ -13,19 +14,19 @@ import { AuthRateLimitGuard } from './guards/auth-rate-limit.guard';
         ConfigModule,
         JwtModule.registerAsync({
             imports: [ConfigModule],
-            inject: [ConfigService],
-            useFactory: (configService: ConfigService) => ({
-                secret: configService.get<string>('JWT_SECRET', { infer: true }),
+            inject: [jwtConfig.KEY],
+            useFactory: (config: ConfigType<typeof jwtConfig>) => ({
+                secret: config.access.secret,
                 signOptions: {
-                    expiresIn: configService.get<string>('JWT_EXPIRES_IN', {
-                        infer: true,
-                    }),
+                    expiresIn: config.access.expiresIn,
+                    issuer: config.issuer,
+                    audience: config.audience,
                 },
             }),
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtAuthGuard, AuthRateLimitGuard],
+    providers: [AuthService, JwtAuthGuard, RateLimitGuard],
     exports: [AuthService, JwtModule, JwtAuthGuard],
 })
 export class AuthModule { }

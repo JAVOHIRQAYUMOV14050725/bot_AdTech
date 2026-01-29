@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { CreateCreativeDto } from './dto/create-creative.dto';
@@ -16,12 +16,16 @@ import {
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition, assertCampaignTransition } from '@/modules/lifecycle/lifecycle';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
+import { CampaignConfig, campaignConfig } from '@/config/campaign.config';
+import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class CampaignsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly auditService: AuditService,
+        @Inject(campaignConfig.KEY)
+        private readonly campaignConfig: CampaignConfig
     ) { }
 
     private toDecimal(value: string) {
@@ -279,7 +283,7 @@ export class CampaignsService {
             throw new BadRequestException('Campaign has no creatives');
         }
 
-        const minLeadMs = Number(process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30000);
+        const minLeadMs = this.campaignConfig.minLeadMs;
         if (target.scheduledAt.getTime() < Date.now() + minLeadMs) {
             throw new BadRequestException('scheduledAt must be in the future');
         }

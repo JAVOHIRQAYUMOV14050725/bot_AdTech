@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, ConflictException, Logger, Inject, LoggerService } from '@nestjs/common';
+import { BadRequestException, Injectable, ConflictException, Inject, LoggerService } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 
 import {
@@ -32,6 +32,39 @@ export class EscrowService {
         private readonly killSwitchService: KillSwitchService,
         @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
+
+    private static readonly MAX_ESCROW_AMOUNT = new Prisma.Decimal('999999999999.99');
+
+    private assertEscrowAmountSafe(
+        amount: Prisma.Decimal,
+        escrow: Escrow,
+        campaignTargetId: string,
+        actor: TransitionActor,
+    ) {
+        const normalized = new Prisma.Decimal(amount);
+        const decimals = normalized.decimalPlaces();
+
+        if (decimals > 2 || normalized.abs().gt(EscrowService.MAX_ESCROW_AMOUNT)) {
+            this.logger.error({
+                event: 'escrow_amount_invalid_precision',
+                alert: true,
+                entityType: 'escrow',
+                entityId: escrow.id,
+                actorId: actor,
+                data: {
+                    campaignTargetId,
+                    amount: normalized.toFixed(2),
+                    decimals,
+                    max: EscrowService.MAX_ESCROW_AMOUNT.toFixed(2),
+                },
+                correlationId: campaignTargetId,
+            },
+                'EscrowService',
+            );
+
+            throw new ConflictException('Escrow amount precision invalid');
+        }
+    }
 
     private async lockEscrow(
         tx: Prisma.TransactionClient,
@@ -120,6 +153,7 @@ export class EscrowService {
             });
 
             const total = new Prisma.Decimal(escrow.amount);
+            this.assertEscrowAmountSafe(total, escrow, campaignTargetId, actor);
 
             const commission = await tx.platformCommission.findUnique({
                 where: { campaignTargetId },
@@ -131,18 +165,18 @@ export class EscrowService {
             const expectedTotal = payoutAmount.add(commissionAmount);
             if (!expectedTotal.equals(total)) {
                 this.logger.error({
-                        event: 'escrow_amount_mismatch',
-                        alert: true,
-                        entityType: 'campaign_target',
-                        entityId: campaignTargetId,
-                        actorId: actor,
-                        data: {
-                            escrowId: escrow.id,
-                            escrowAmount: total.toFixed(2),
-                            expectedAmount: expectedTotal.toFixed(2),
-                        },
-                        correlationId,
+                    event: 'escrow_amount_mismatch',
+                    alert: true,
+                    entityType: 'campaign_target',
+                    entityId: campaignTargetId,
+                    actorId: actor,
+                    data: {
+                        escrowId: escrow.id,
+                        escrowAmount: total.toFixed(2),
+                        expectedAmount: expectedTotal.toFixed(2),
                     },
+                    correlationId,
+                },
                     'EscrowService',
                 );
 
@@ -164,20 +198,20 @@ export class EscrowService {
                 !new Prisma.Decimal(holdLedger.amount).abs().equals(total)
             ) {
                 this.logger.error({
-                        event: 'escrow_hold_ledger_mismatch',
-                        alert: true,
-                        entityType: 'campaign_target',
-                        entityId: campaignTargetId,
-                        actorId: actor,
-                        data: {
-                            escrowId: escrow.id,
-                            escrowAmount: total.toFixed(2),
-                            ledgerAmount: holdLedger
-                                ? new Prisma.Decimal(holdLedger.amount).toFixed(2)
-                                : null,
-                        },
-                        correlationId,
+                    event: 'escrow_hold_ledger_mismatch',
+                    alert: true,
+                    entityType: 'campaign_target',
+                    entityId: campaignTargetId,
+                    actorId: actor,
+                    data: {
+                        escrowId: escrow.id,
+                        escrowAmount: total.toFixed(2),
+                        ledgerAmount: holdLedger
+                            ? new Prisma.Decimal(holdLedger.amount).toFixed(2)
+                            : null,
                     },
+                    correlationId,
+                },
                     undefined,
                     'EscrowService',
                 );
@@ -264,18 +298,18 @@ export class EscrowService {
                 );
             }
             this.logger.log({
-                    event: 'escrow_released',
-                    entityType: 'escrow',
-                    entityId: escrow.id,
-                    actorId: actor,
-                    data: {
-                        campaignTargetId,
-                        payout: payoutAmount.toFixed(2),
-                        commission: commissionAmount.toFixed(2),
-                        platformWalletId,
-                    },
-                    correlationId,
+                event: 'escrow_released',
+                entityType: 'escrow',
+                entityId: escrow.id,
+                actorId: actor,
+                data: {
+                    campaignTargetId,
+                    payout: payoutAmount.toFixed(2),
+                    commission: commissionAmount.toFixed(2),
+                    platformWalletId,
                 },
+                correlationId,
+            },
                 'EscrowService',
             );
 
@@ -364,6 +398,7 @@ export class EscrowService {
             });
 
             const amount = new Prisma.Decimal(escrow.amount);
+            this.assertEscrowAmountSafe(amount, escrow, campaignTargetId, actor);
 
             // 1️⃣ RETURN FUNDS → ADVERTISER
             await this.paymentsService.recordWalletMovement({
@@ -403,17 +438,17 @@ export class EscrowService {
             );
 
             this.logger.log({
-                    event: 'escrow_refunded',
-                    entityType: 'escrow',
-                    entityId: escrow.id,
-                    actorId: actor,
-                    data: {
-                        campaignTargetId,
-                        refunded: amount.toFixed(2),
-                        reason,
-                    },
-                    correlationId,
+                event: 'escrow_refunded',
+                entityType: 'escrow',
+                entityId: escrow.id,
+                actorId: actor,
+                data: {
+                    campaignTargetId,
+                    refunded: amount.toFixed(2),
+                    reason,
                 },
+                correlationId,
+            },
                 'EscrowService',
             );
 

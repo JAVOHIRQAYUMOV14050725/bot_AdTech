@@ -7,10 +7,7 @@ export class RedisService implements OnModuleDestroy {
     private readonly client: Redis;
 
     constructor() {
-        this.client = new Redis({
-            ...redisConnection,
-            password: process.env.REDIS_PASSWORD,
-        });
+        this.client = new Redis(redisConnection);
     }
 
     getClient(): Redis {

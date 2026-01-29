@@ -1,11 +1,13 @@
 import { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Request, Response } from 'express';
+import { loadEnv } from '@/config/env';
 
 export function setupSwagger(app: INestApplication): void {
+    const env = loadEnv();
     const enableSwagger =
-        process.env.NODE_ENV !== 'production' ||
-        process.env.ENABLE_SWAGGER === 'true';
+        env.NODE_ENV !== 'production' ||
+        env.ENABLE_SWAGGER === true;
 
     if (!enableSwagger) return;
 

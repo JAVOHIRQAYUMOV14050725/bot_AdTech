@@ -25,10 +25,13 @@ import {
     ReconciliationResponseDto,
     ResolveEscrowResponseDto,
 } from './dto/system-response.dto';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('system')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, RateLimitGuard)
 @Roles(UserRole.super_admin)
+@Throttle({ default: { limit: 3, ttl: 300_000 } })
 @ApiTags('System')
 @ApiBearerAuth()
 export class SystemController {

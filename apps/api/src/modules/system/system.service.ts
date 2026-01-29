@@ -19,6 +19,8 @@ import {
 import { ReconciliationMode } from './dto/reconciliation.dto';
 import { postQueue } from '@/modules/scheduler/queues';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
+import { WorkerConfig, workerConfig } from '@/config/worker.config';
+import { ConfigType } from '@nestjs/config';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
     if (value === null) {
@@ -59,8 +61,10 @@ export class SystemService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly escrowService: EscrowService,
-                @Inject('LOGGER') private readonly logger: LoggerService,
-        
+        @Inject('LOGGER') private readonly logger: LoggerService,
+        @Inject(workerConfig.KEY)
+        private readonly workerConfig: WorkerConfig,
+
     ) { }
 
     /**
@@ -75,69 +79,109 @@ export class SystemService {
         reason: string,
         actorUserId: string,
     ) {
-        const escrow = await this.prisma.escrow.findUnique({
-            where: { campaignTargetId },
-        });
+        const resolved = await this.prisma.$transaction(async (tx) => {
+            const escrow = await tx.escrow.findUnique({
+                where: { campaignTargetId },
+            });
 
-        if (!escrow) {
-            throw new BadRequestException('Escrow not found');
-        }
+            if (!escrow) {
+                throw new BadRequestException('Escrow not found');
+            }
 
-        if (escrow.status !== EscrowStatus.held) {
-            throw new BadRequestException(`Escrow already ${escrow.status}`);
-        }
+            if (escrow.status !== EscrowStatus.held) {
+                throw new BadRequestException(`Escrow already ${escrow.status}`);
+            }
 
-        // 🧾 AUDIT (BEFORE)
-        await this.prisma.userAuditLog.create({
-            data: {
-                userId: actorUserId,
-                action: `ESCROW_${action.toUpperCase()}`,
-                metadata: {
-                    campaignTargetId,
-                    reason,
-                    escrowStatus: escrow.status,
+            await tx.userAuditLog.create({
+                data: {
+                    userId: actorUserId,
+                    action: `ESCROW_${action.toUpperCase()}_ATTEMPT`,
+                    metadata: {
+                        campaignTargetId,
+                        reason,
+                        escrowStatus: escrow.status,
+                    },
                 },
-            },
-        });
+            });
 
-        let result;
-        if (action === ResolveAction.RELEASE) {
-            result = await this.escrowService.release(campaignTargetId, {
-                actor: 'admin',
-                correlationId: campaignTargetId,
-            });
-        } else if (action === ResolveAction.REFUND) {
-            result = await this.escrowService.refund(campaignTargetId, {
-                actor: 'admin',
-                reason,
-                correlationId: campaignTargetId,
-            });
-        } else {
-            throw new BadRequestException('Invalid resolve action');
-        }
+            try {
+                let result;
+                if (action === ResolveAction.RELEASE) {
+                    result = await this.escrowService.release(campaignTargetId, {
+                        actor: 'admin',
+                        correlationId: campaignTargetId,
+                        transaction: tx,
+                    });
+                } else if (action === ResolveAction.REFUND) {
+                    result = await this.escrowService.refund(campaignTargetId, {
+                        actor: 'admin',
+                        reason,
+                        correlationId: campaignTargetId,
+                        transaction: tx,
+                    });
+                } else {
+                    throw new BadRequestException('Invalid resolve action');
+                }
+
+                await tx.userAuditLog.create({
+                    data: {
+                        userId: actorUserId,
+                        action: `ESCROW_${action.toUpperCase()}_RESULT`,
+                        metadata: {
+                            campaignTargetId,
+                            reason,
+                            escrowStatus: escrow.status,
+                            result: toJsonValue(result),
+                        },
+                    },
+                });
+
+                return {
+                    escrowId: escrow.id,
+                    escrowStatus: escrow.status,
+                    result,
+                };
+            } catch (err) {
+                await tx.userAuditLog.create({
+                    data: {
+                        userId: actorUserId,
+                        action: `ESCROW_${action.toUpperCase()}_FAILED`,
+                        metadata: {
+                            campaignTargetId,
+                            reason,
+                            escrowStatus: escrow.status,
+                            error: toJsonValue({
+                                message: err instanceof Error ? err.message : String(err),
+                                name: err instanceof Error ? err.name : 'UnknownError',
+                            }),
+                        },
+                    },
+                });
+                throw err;
+            }
+        });
 
         this.logger.warn(
             {
                 event: 'escrow_manual_resolve',
                 entityType: 'escrow',
-                entityId: escrow.id,
+                entityId: resolved.escrowId,
                 actorId: actorUserId,
                 data: {
                     campaignTargetId,
                     action,
                     reason,
-                    escrowStatus: escrow.status,
+                    escrowStatus: resolved.escrowStatus,
                 },
                 correlationId: campaignTargetId,
             },
             'SystemService',
         );
 
-
         return {
             ok: true,
             action,
-            result,
+            result: resolved.result,
         };
     }
 
@@ -256,7 +300,7 @@ export class SystemService {
                     data: {
                         walletBalance: balance.toString(),
                         ledgerSum: ledgerSum.toString(),
-                         }
+                    }
                 },
                     'SystemService',
                 )
@@ -373,11 +417,9 @@ export class SystemService {
     }
 
     async requeueStalledPostJobs() {
-        const stalledMinutes = Number(
-            process.env.POST_JOB_STALLED_MINUTES ?? 15,
-        );
-        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
-        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
+        const stalledMinutes = this.workerConfig.postJobStalledMinutes;
+        const maxAttempts = this.workerConfig.postJobMaxAttempts;
+        const backoffMs = this.workerConfig.postJobRetryBackoffMs;
         const cutoff = new Date(Date.now() - stalledMinutes * 60 * 1000);
 
         const stalledJobs = await this.prisma.postJob.findMany({
@@ -483,7 +525,7 @@ export class SystemService {
                             removeOnFail: false,
                         },
                     );
-                } catch(enqueueError) {
+                } catch (enqueueError) {
                     this.logger.warn(
                         {
                             event: 'post_job_requeue_enqueue_failed',
@@ -670,7 +712,7 @@ export class SystemService {
                 targets: postedWithoutRelease,
                 correlationId,
             },
-                );
+            );
             discrepancies.push(payload);
         }
 

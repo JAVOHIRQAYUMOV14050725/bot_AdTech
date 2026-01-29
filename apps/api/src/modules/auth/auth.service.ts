@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException, ForbiddenException, Inject } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { PUBLIC_ROLES, RegisterDto } from './dto/register.dto';
@@ -6,14 +6,17 @@ import { LoginDto } from './dto/login.dto';
 import { UserRole, UserStatus } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
-
-const ms = (val: string) => val; // placeholder; expiresIn jwt format bo'ladi: "15m", "30d"
+import { authConfig } from '@/config/auth.config';
+import { jwtConfig } from '@/config/jwt.config';
+import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class AuthService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
+        @Inject(authConfig.KEY) private readonly authConfig: ConfigType<typeof authConfig>,
+        @Inject(jwtConfig.KEY) private readonly jwtConfig: ConfigType<typeof jwtConfig>,
     ) { }
 
     private parseTelegramId(value: string): bigint {
@@ -25,7 +28,7 @@ export class AuthService {
     }
 
     private async hashToken(token: string) {
-        const rounds = Number(process.env.BCRYPT_SALT_ROUNDS ?? 10);
+        const rounds = this.authConfig.bcryptSaltRounds;
         return bcrypt.hash(token, rounds);
     }
 
@@ -33,8 +36,10 @@ export class AuthService {
         return this.jwtService.sign(
             { sub: user.id, role: user.role, typ: 'access' },
             {
-                secret: process.env.JWT_ACCESS_SECRET,
-                expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
+                secret: this.jwtConfig.access.secret,
+                expiresIn: this.jwtConfig.access.expiresIn,
+                issuer: this.jwtConfig.issuer,
+                audience: this.jwtConfig.audience,
             },
         );
     }
@@ -43,18 +48,22 @@ export class AuthService {
         return this.jwtService.sign(
             { sub: user.id, role: user.role, typ: 'refresh' },
             {
-                secret: process.env.JWT_REFRESH_SECRET,
-                expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
+                secret: this.jwtConfig.refresh.secret,
+                expiresIn: this.jwtConfig.refresh.expiresIn,
+                issuer: this.jwtConfig.issuer,
+                audience: this.jwtConfig.audience,
             },
         );
     }
 
-    private computeRefreshExpiryDate(): Date {
-        // JWT o'zi expiry bilan keladi, lekin DBga ham qo'yamiz.
-        const days = 30;
-        const now = new Date();
-        now.setDate(now.getDate() + days);
-        return now;
+    private computeRefreshExpiryDate(refreshToken: string): Date {
+        const decoded = this.jwtService.decode(refreshToken) as
+            | { exp?: number }
+            | null;
+        if (!decoded?.exp) {
+            throw new BadRequestException('Invalid refresh token expiry');
+        }
+        return new Date(decoded.exp * 1000);
     }
 
     private async persistRefreshToken(userId: string, refreshToken: string) {
@@ -63,7 +72,7 @@ export class AuthService {
             where: { id: userId },
             data: {
                 refreshTokenHash: hash,
-                refreshTokenExpiresAt: this.computeRefreshExpiryDate(),
+                refreshTokenExpiresAt: this.computeRefreshExpiryDate(refreshToken),
             },
         });
     }
@@ -114,7 +123,7 @@ export class AuthService {
     }
 
     async bootstrapSuperAdmin(dto: BootstrapSuperAdminDto) {
-        const bootstrapSecret = process.env.SUPER_ADMIN_BOOTSTRAP_SECRET;
+        const bootstrapSecret = this.authConfig.bootstrapSecret;
         if (!bootstrapSecret) {
             throw new BadRequestException('Bootstrap secret not configured');
         }
@@ -212,7 +221,9 @@ export class AuthService {
         let payload: any;
         try {
             payload = this.jwtService.verify(refreshToken, {
-                secret: process.env.JWT_REFRESH_SECRET,
+                secret: this.jwtConfig.refresh.secret,
+                issuer: this.jwtConfig.issuer,
+                audience: this.jwtConfig.audience,
             });
         } catch {
             throw new UnauthorizedException('Invalid refresh token');

@@ -23,6 +23,16 @@ import { RedisModule } from '@/modules/redis/redis.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { LoggingModule } from './common/logging/logging.module';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nestjs/throttler-storage-redis';
+import { appConfig } from '@/config/app.config';
+import { redisConfig } from '@/config/redis.config';
+import { telegramConfig } from '@/config/telegram.config';
+import { jwtConfig } from '@/config/jwt.config';
+import { authConfig } from '@/config/auth.config';
+import { workerConfig } from '@/config/worker.config';
+import { campaignConfig } from '@/config/campaign.config';
+import { ConfigType } from '@nestjs/config';
 
 
 @Module({
@@ -32,6 +42,25 @@ import { LoggingModule } from './common/logging/logging.module';
             isGlobal: true,
             envFilePath: ['.env'],
             validate: (config) => envSchema.parse(config),
+            load: [
+                appConfig,
+                redisConfig,
+                telegramConfig,
+                jwtConfig,
+                authConfig,
+                workerConfig,
+                campaignConfig,
+            ],
+        }),
+        ThrottlerModule.forRootAsync({
+            inject: [redisConfig.KEY],
+            useFactory: (redis: ConfigType<typeof redisConfig>) => ({
+                storage: new ThrottlerStorageRedisService({
+                    host: redis.host,
+                    port: redis.port,
+                    password: redis.password,
+                }),
+            }),
         }),
 
         ScheduleModule.forRoot(),

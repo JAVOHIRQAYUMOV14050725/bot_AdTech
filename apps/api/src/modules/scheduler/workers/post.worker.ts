@@ -1,6 +1,8 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { LoggerService } from '@nestjs/common'; // ✅
 import { Worker } from 'bullmq';
+import { ConfigType } from '@nestjs/config';
+import { workerConfig } from '@/config/worker.config';
 
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
@@ -18,6 +20,7 @@ export function startPostWorker(
     killSwitchService: KillSwitchService,
     redisService: RedisService,
     logger: LoggerService, // ✅ endi tashqaridan keladi
+    config: ConfigType<typeof workerConfig>,
 ) {
     const redisClient = redisService.getClient();
     const heartbeatKey = 'worker:heartbeat';
@@ -59,7 +62,7 @@ export function startPostWorker(
             runWithWorkerContext('post-queue', job.id, async () => {
                 const { postJobId } = job.data;
                 const now = new Date();
-                const maxAttempts = job.opts.attempts ?? Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
+                const maxAttempts = job.opts.attempts ?? config.postJobMaxAttempts;
 
                 const reservation = await prisma.postJob.updateMany({
                     where: { id: postJobId, status: PostJobStatus.queued },
@@ -124,7 +127,13 @@ export function startPostWorker(
                     }
 
                     const telegramResult = await telegramService.sendCampaignPost(postJob.id);
-                    if (!telegramResult.ok) throw new Error('Telegram send failed');
+                    if (!telegramResult.ok) {
+                        const failureError = new Error(
+                            `Telegram send failed: ${telegramResult.reason}`,
+                        );
+                        (failureError as { telegramFailure?: typeof telegramResult }).telegramFailure = telegramResult;
+                        throw failureError;
+                    }
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -165,8 +174,11 @@ export function startPostWorker(
 
                     return { ok: true, telegramMessageId: telegramResult.telegramMessageId };
                 } catch (err) {
+                    const failure = (err as { telegramFailure?: { ok: false; permanent: boolean; reason: string; retryAfterSeconds?: number | null } })
+                        .telegramFailure;
+                    const isPermanent = failure?.permanent ?? false;
                     const attemptsMade = job.attemptsMade + 1;
-                    const shouldRetry = attemptsMade < maxAttempts;
+                    const shouldRetry = !isPermanent && attemptsMade < maxAttempts;
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -196,6 +208,10 @@ export function startPostWorker(
                         }
                     });
 
+                    if (isPermanent) {
+                        await job.discard();
+                    }
+
                     logger.error(
                         {
                             event: 'post_job_failed',
@@ -206,6 +222,9 @@ export function startPostWorker(
                                 attemptsMade,
                                 maxAttempts,
                                 shouldRetry,
+                                permanent: isPermanent,
+                                telegramReason: failure?.reason ?? null,
+                                retryAfterSeconds: failure?.retryAfterSeconds ?? null,
                                 error: err instanceof Error ? err.message : String(err),
                             },
                         },

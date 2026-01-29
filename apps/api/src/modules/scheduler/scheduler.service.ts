@@ -5,6 +5,8 @@ import { postQueue } from './queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { CronStatusService } from './cron-status.service';
 import { runWithCronContext } from '@/common/context/request-context';
+import { workerConfig } from '@/config/worker.config';
+import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class SchedulerService {
@@ -12,6 +14,8 @@ export class SchedulerService {
         private readonly systemService: SystemService,
         private readonly killSwitchService: KillSwitchService,
         private readonly cronStatusService: CronStatusService,
+        @Inject(workerConfig.KEY)
+        private readonly workerConfig: ConfigType<typeof workerConfig>,
         @Inject('LOGGER') private readonly logger: LoggerService,
 
     ) { }
@@ -22,8 +26,8 @@ export class SchedulerService {
      * =========================================================
      */
     async enqueuePost(postJobId: string, executeAt: Date) {
-        const maxAttempts = Number(process.env.POST_JOB_MAX_ATTEMPTS ?? 3);
-        const backoffMs = Number(process.env.POST_JOB_RETRY_BACKOFF_MS ?? 5000);
+        const maxAttempts = this.workerConfig.postJobMaxAttempts;
+        const backoffMs = this.workerConfig.postJobRetryBackoffMs;
         await postQueue.add(
             'execute-post',
             { postJobId },

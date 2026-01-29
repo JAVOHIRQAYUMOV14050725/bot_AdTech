@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { RedisService } from '@/modules/redis/redis.service';
@@ -6,6 +6,10 @@ import { CronStatusService } from '@/modules/scheduler/cron-status.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { JwtService } from '@nestjs/jwt';
 import { postQueue } from '@/modules/scheduler/queues';
+import { redisConfig } from '@/config/redis.config';
+import { telegramConfig } from '@/config/telegram.config';
+import { jwtConfig } from '@/config/jwt.config';
+import { ConfigType } from '@nestjs/config';
 
 type CheckStatus = 'ok' | 'failed' | 'disabled';
 
@@ -22,6 +26,12 @@ export class HealthService {
         private readonly cronStatusService: CronStatusService,
         private readonly telegramService: TelegramService,
         private readonly jwtService: JwtService,
+        @Inject(redisConfig.KEY)
+        private readonly redisConfig: ConfigType<typeof redisConfig>,
+        @Inject(telegramConfig.KEY)
+        private readonly telegramConfig: ConfigType<typeof telegramConfig>,
+        @Inject(jwtConfig.KEY)
+        private readonly jwtConfig: ConfigType<typeof jwtConfig>,
     ) { }
 
     async live() {
@@ -131,7 +141,7 @@ export class HealthService {
         try {
             const client = this.redisService.getClient();
             const pong = await client.ping();
-            const authConfigured = Boolean(process.env.REDIS_PASSWORD);
+            const authConfigured = Boolean(this.redisConfig.password);
             const authPresent = Boolean(client.options.password);
             const authOk = !authConfigured || authPresent;
 
@@ -214,7 +224,7 @@ export class HealthService {
     }
 
     private async checkTelegram(): Promise<CheckResult> {
-        const autostart = process.env.TELEGRAM_AUTOSTART === 'true';
+        const autostart = this.telegramConfig.autostart;
         if (!autostart) {
             return { status: 'disabled' };
         }
@@ -239,20 +249,20 @@ export class HealthService {
     }
 
     private async checkAuth(): Promise<CheckResult> {
-        const secret = process.env.JWT_SECRET;
-        if (!secret) {
-            return {
-                status: 'failed',
-                details: { error: 'JWT_SECRET missing' },
-            };
-        }
-
         try {
             const token = await this.jwtService.signAsync({
                 sub: 'health-check',
                 scope: 'ready',
+            }, {
+                secret: this.jwtConfig.access.secret,
+                issuer: this.jwtConfig.issuer,
+                audience: this.jwtConfig.audience,
             });
-            await this.jwtService.verifyAsync(token);
+            await this.jwtService.verifyAsync(token, {
+                secret: this.jwtConfig.access.secret,
+                issuer: this.jwtConfig.issuer,
+                audience: this.jwtConfig.audience,
+            });
             return {
                 status: 'ok',
                 details: { signed: true },

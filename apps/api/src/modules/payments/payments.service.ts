@@ -14,7 +14,6 @@ import {
     ConflictException,
     Inject,
     Injectable,
-    Logger,
     LoggerService,
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
@@ -30,8 +29,32 @@ export class PaymentsService {
         @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
 
+    private static readonly MAX_ESCROW_AMOUNT = new Prisma.Decimal('999999999999.99');
+
     private normalizeDecimal(value: Prisma.Decimal) {
         return new Prisma.Decimal(value);
+    }
+
+    private assertEscrowAmountSafe(amount: Prisma.Decimal, campaignTargetId: string) {
+        const normalized = this.normalizeDecimal(amount);
+        const decimals = normalized.decimalPlaces();
+
+        if (decimals > 2 || normalized.abs().gt(PaymentsService.MAX_ESCROW_AMOUNT)) {
+            this.logger.error({
+                event: 'escrow_amount_invalid_precision',
+                alert: true,
+                entityType: 'campaign_target',
+                entityId: campaignTargetId,
+                data: {
+                    amount: normalized.toFixed(2),
+                    decimals,
+                    max: PaymentsService.MAX_ESCROW_AMOUNT.toFixed(2),
+                },
+            },
+                'PaymentsService',
+            );
+            throw new ConflictException('Escrow amount precision invalid');
+        }
     }
 
     private async assertLedgerMatchesWallet(
@@ -333,6 +356,7 @@ export class PaymentsService {
             }
 
             const amount = this.normalizeDecimal(target.price);
+            this.assertEscrowAmountSafe(amount, campaignTargetId);
             const totalBudget = this.normalizeDecimal(target.campaign.totalBudget);
             const spentBudget = this.normalizeDecimal(target.campaign.spentBudget ?? new Prisma.Decimal(0));
             const remainingBudget = totalBudget.sub(spentBudget);

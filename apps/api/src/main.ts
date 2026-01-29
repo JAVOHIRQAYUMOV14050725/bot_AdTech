@@ -24,6 +24,9 @@ import {
 import { formatValidationErrors } from './common/validation/validation-errors';
 import { setupSwagger } from './swagger';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
+import { loadEnv } from '@/config/env';
+import { ConfigService, ConfigType } from '@nestjs/config';
+import { workerConfig } from '@/config/worker.config';
 
 async function startWorker(app: any, logger: StructuredLogger) {
     const prisma = app.get(PrismaService);
@@ -31,6 +34,15 @@ async function startWorker(app: any, logger: StructuredLogger) {
     const telegramService = app.get(TelegramService);
     const killSwitchService = app.get(KillSwitchService);
     const redisService = app.get(RedisService);
+    const configService = app.get(ConfigService);
+    const workerSettings = configService.get<ConfigType<typeof workerConfig>>(
+        workerConfig.KEY,
+        { infer: true },
+    );
+
+    if (!workerSettings) {
+        throw new Error('Worker config missing');
+    }
 
     // ✅ Worker started event (structured)
     logger.log(
@@ -41,7 +53,7 @@ async function startWorker(app: any, logger: StructuredLogger) {
             data: {
                 workerMode: true,
                 pid: process.pid,
-                nodeEnv: process.env.NODE_ENV,
+                nodeEnv: loadEnv().NODE_ENV ?? null,
             },
         },
         'Bootstrap',
@@ -55,14 +67,16 @@ async function startWorker(app: any, logger: StructuredLogger) {
         killSwitchService,
         redisService,
         logger,
+        workerSettings,
     );
 }
 
 async function bootstrap() {
+    const env = loadEnv();
     const logger = buildStructuredLogger();
-    const isProd = process.env.NODE_ENV === 'production';
+    const isProd = env.NODE_ENV === 'production';
 
-    const workerMode = process.env.WORKER_MODE === 'true';
+    const workerMode = env.WORKER_MODE;
 
     if (workerMode) {
         // ✅ bufferLogs: true => Nest init logs are captured
@@ -117,7 +131,7 @@ async function bootstrap() {
 
     setupSwagger(app);
 
-    const port = Number(process.env.PORT ?? 4002);
+    const port = env.PORT;
     await app.listen(port);
 
     // ✅ API started event (structured)
@@ -134,7 +148,7 @@ async function bootstrap() {
     );
 
     // Optional: worker autostart inside API process (OK for dev, risky for prod)
-    if (process.env.WORKER_AUTOSTART === 'true') {
+    if (env.WORKER_AUTOSTART) {
         setImmediate(async () => {
             logger.warn(
                 {

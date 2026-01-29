@@ -14,16 +14,21 @@ import { DepositDto } from './dto/deposit.dto';
 import { Prisma, UserRole } from '@prisma/client';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';
 import { DepositResponseDto } from './dto/deposit-response.dto';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.advertiser)
+@Throttle(5, 3600)
 @ApiTags('Payments')
 @ApiBearerAuth()
 export class PaymentsController {
     constructor(private readonly paymentsService: PaymentsService) { }
 
     @Post('deposit')
+    @UseGuards(RateLimitGuard)
+    @Throttle(10, 3600)
     @ApiOperation({
         summary: 'Deposit funds',
         description: 'Create a wallet deposit for the authenticated advertiser.',

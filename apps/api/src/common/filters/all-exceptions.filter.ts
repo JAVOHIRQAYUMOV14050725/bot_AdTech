@@ -10,6 +10,9 @@ import { Request, Response } from 'express';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { Prisma } from '@prisma/client';
 import { RequestContext } from '@/common/context/request-context';
+import { loadEnv } from '@/config/env';
+
+const env = loadEnv();
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -101,7 +104,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             },
         };
 
-        if (isFaviconNotFound && process.env.NODE_ENV === 'production') {
+        if (isFaviconNotFound && env.NODE_ENV === 'production') {
             this.logger.debug?.(
                 {
                     ...logPayload,

@@ -5,6 +5,7 @@ import {
     Injectable,
     NotFoundException,
     ServiceUnavailableException,
+    Inject,
 } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
@@ -15,6 +16,8 @@ import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { TELEGRAM_CHANNEL_ID_REGEX } from '@/common/validators/telegram-channel-id-string.decorator';
 import { TelegramCheckReason, TelegramCheckResult } from '@/modules/telegram/telegram.types';
+import { appConfig } from '@/config/app.config';
+import { ConfigType } from '@nestjs/config';
 
 type Actor = { id: string; role: UserRole };
 
@@ -24,6 +27,8 @@ export class ChannelsService {
         private readonly prisma: PrismaService,
         private readonly verificationService: VerificationService,
         private readonly auditService: AuditService,
+        @Inject(appConfig.KEY)
+        private readonly appConfig: ConfigType<typeof appConfig>,
     ) { }
 
 
@@ -88,7 +93,7 @@ export class ChannelsService {
     }
 
     private assertDebugEnabledOr404() {
-        if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEBUG !== 'true') {
+        if (this.appConfig.nodeEnv === 'production' && !this.appConfig.enableDebug) {
             throw new NotFoundException('Not Found');
         }
     }

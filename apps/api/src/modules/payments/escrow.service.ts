@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, ConflictException, Logger, Inject, LoggerService } from '@nestjs/common';
+import { BadRequestException, Injectable, ConflictException, Inject, LoggerService } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 
 import {
@@ -32,6 +32,39 @@ export class EscrowService {
         private readonly killSwitchService: KillSwitchService,
         @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
+
+    private static readonly MAX_ESCROW_AMOUNT = new Prisma.Decimal('999999999999.99');
+
+    private assertEscrowAmountSafe(
+        amount: Prisma.Decimal,
+        escrow: Escrow,
+        campaignTargetId: string,
+        actor: TransitionActor,
+    ) {
+        const normalized = new Prisma.Decimal(amount);
+        const decimals = normalized.decimalPlaces();
+
+        if (decimals > 2 || normalized.abs().gt(EscrowService.MAX_ESCROW_AMOUNT)) {
+            this.logger.error({
+                event: 'escrow_amount_invalid_precision',
+                alert: true,
+                entityType: 'escrow',
+                entityId: escrow.id,
+                actorId: actor,
+                data: {
+                    campaignTargetId,
+                    amount: normalized.toFixed(2),
+                    decimals,
+                    max: EscrowService.MAX_ESCROW_AMOUNT.toFixed(2),
+                },
+                correlationId: campaignTargetId,
+            },
+                'EscrowService',
+            );
+
+            throw new ConflictException('Escrow amount precision invalid');
+        }
+    }
 
     private async lockEscrow(
         tx: Prisma.TransactionClient,
@@ -120,6 +153,7 @@ export class EscrowService {
             });
 
             const total = new Prisma.Decimal(escrow.amount);
+            this.assertEscrowAmountSafe(total, escrow, campaignTargetId, actor);
 
             const commission = await tx.platformCommission.findUnique({
                 where: { campaignTargetId },
@@ -364,6 +398,7 @@ export class EscrowService {
             });
 
             const amount = new Prisma.Decimal(escrow.amount);
+            this.assertEscrowAmountSafe(amount, escrow, campaignTargetId, actor);
 
             // 1️⃣ RETURN FUNDS → ADVERTISER
             await this.paymentsService.recordWalletMovement({

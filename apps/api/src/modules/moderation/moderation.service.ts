@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { SchedulerService } from '@/modules/scheduler/scheduler.service';
@@ -17,6 +17,8 @@ import {
     Prisma,
 } from '@prisma/client';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
+import { campaignConfig } from '@/config/campaign.config';
+import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class ModerationService {
@@ -25,6 +27,8 @@ export class ModerationService {
         private readonly paymentsService: PaymentsService,
         private readonly schedulerService: SchedulerService,
         private readonly auditService: AuditService,
+        @Inject(campaignConfig.KEY)
+        private readonly campaignConfig: ConfigType<typeof campaignConfig>,
     ) { }
 
     private mapChannel(channel: Channel) {
@@ -216,7 +220,7 @@ export class ModerationService {
                 throw new BadRequestException('Channel must be approved');
             }
 
-            const minLeadMs = Number(process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30_000);
+            const minLeadMs = this.campaignConfig.minLeadMs;
             if (fresh.scheduledAt.getTime() < Date.now() + minLeadMs) {
                 throw new BadRequestException('scheduledAt must be in the future');
             }

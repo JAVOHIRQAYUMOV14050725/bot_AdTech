@@ -14,6 +14,9 @@ import { IsTelegramUsername, USERNAME_EXAMPLE } from '@/common/validators/telegr
 import { IsTelegramIdString, TELEGRAM_ID_EXAMPLE } from '@/common/validators/telegram-id-string.decorator';
 
 export class AdminCreateChannelDto {
+    cpm(cpm: any) {
+        throw new Error('Method not implemented.');
+    }
     @ApiProperty({
         example: TELEGRAM_CHANNEL_ID_EXAMPLE,
         description: 'This must be the REAL Telegram channel id (not @username or invite link), starting with -100.',

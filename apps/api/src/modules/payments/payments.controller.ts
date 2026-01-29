@@ -17,7 +17,7 @@ import { DepositResponseDto } from './dto/deposit-response.dto';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.advertiser, UserRole.admin, UserRole.super_admin)
+@Roles(UserRole.advertiser)
 @ApiTags('Payments')
 @ApiBearerAuth()
 export class PaymentsController {

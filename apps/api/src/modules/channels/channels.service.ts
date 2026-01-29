@@ -14,7 +14,10 @@ import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { TELEGRAM_CHANNEL_ID_REGEX } from '@/common/validators/telegram-channel-id-string.decorator';
-import { TelegramAdminPermission, TelegramCheckReason } from '@/modules/telegram/telegram.types';
+import { TelegramCheckReason, TelegramCheckResult } from '@/modules/telegram/telegram.types';
+
+type Actor = { id: string; role: UserRole };
+
 @Injectable()
 export class ChannelsService {
     constructor(
@@ -23,11 +26,11 @@ export class ChannelsService {
         private readonly auditService: AuditService,
     ) { }
 
+    
     private parseTelegramId(value: string): bigint {
         if (!TELEGRAM_CHANNEL_ID_REGEX.test(value)) {
             throw new BadRequestException('Invalid telegramChannelId');
         }
-
         try {
             return BigInt(value);
         } catch {
@@ -39,7 +42,6 @@ export class ChannelsService {
         if (!/^\d+$/.test(value)) {
             throw new BadRequestException('Invalid ownerTelegramId');
         }
-
         try {
             return BigInt(value);
         } catch {
@@ -48,16 +50,18 @@ export class ChannelsService {
     }
 
     private parseCpm(value?: string): Prisma.Decimal | undefined {
-        if (value === undefined) {
-            return undefined;
+        if (value == null) return undefined;
+
+        let d: Prisma.Decimal;
+        try {
+            d = new Prisma.Decimal(value);
+        } catch {
+            throw new BadRequestException('Invalid cpm');
         }
 
-        const decimal = new Prisma.Decimal(value);
-        if (decimal.isNeg()) {
-            throw new BadRequestException('cpm must be positive');
-        }
+        if (d.lte(0)) throw new BadRequestException('cpm must be positive');
 
-        return decimal;
+        return d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
     }
 
     private mapChannel(channel: Channel) {
@@ -77,15 +81,38 @@ export class ChannelsService {
         });
     }
 
-    async createChannel(userId: string, dto: CreateChannelDto) {
-        const owner = await this.prisma.user.findUnique({
-            where: { id: userId },
-            select: { id: true, role: true },
-        });
-
-        if (!owner || owner.role !== UserRole.publisher) {
-            throw new BadRequestException('Only publishers can create channels');
+    private assertOwner(channel: Channel, actorId: string) {
+        if (channel.ownerId !== actorId) {
+            throw new ForbiddenException('Not channel owner');
         }
+    }
+
+    private assertDebugEnabledOr404() {
+        if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEBUG !== 'true') {
+            throw new NotFoundException('Not Found');
+        }
+    }
+
+   
+    private async getChannelOr404(channelId: string): Promise<Channel> {
+        const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
+        if (!channel) throw new NotFoundException('Channel not found');
+        return channel;
+    }
+
+    private async getUserOr404(userId: string, select?: Prisma.UserSelect) {
+        const user = await this.prisma.user.findUnique({
+            where: { id: userId },
+            select: (select ?? { id: true, role: true }) as any,
+        });
+        if (!user) throw new NotFoundException('User not found');
+        return user as any;
+    }
+
+   
+    async createChannel(userId: string, dto: CreateChannelDto) {
+        
+        await this.getUserOr404(userId, { id: true });
 
         const telegramChannelId = this.parseTelegramId(dto.telegramChannelId);
         const cpm = this.parseCpm(dto.cpm);
@@ -114,18 +141,21 @@ export class ChannelsService {
             return this.mapChannel(channel);
         } catch (e) {
             if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-                // unique violation
                 throw new ConflictException('Channel already exists with this telegramChannelId');
             }
             throw e;
         }
     }
 
-    async createChannelForOwner(adminId: string, dto: AdminCreateChannelDto) {
+   
+    async createChannelForOwner(actor: Actor, dto: AdminCreateChannelDto) {
+        if (actor.role !== UserRole.admin && actor.role !== UserRole.super_admin) {
+            throw new ForbiddenException('Only admin or super_admin can create channel for owner');
+        }
+
         if (dto.ownerId && dto.ownerTelegramId) {
             throw new BadRequestException('Provide either ownerId or ownerTelegramId');
         }
-
         if (!dto.ownerId && !dto.ownerTelegramId) {
             throw new BadRequestException('Owner is required');
         }
@@ -140,15 +170,14 @@ export class ChannelsService {
                 select: { id: true, role: true },
             });
 
-        if (!owner) {
-            throw new NotFoundException('Owner not found');
-        }
-
+        if (!owner) throw new NotFoundException('Owner not found');
         if (owner.role !== UserRole.publisher) {
             throw new BadRequestException('Owner must be a publisher');
         }
 
         const telegramChannelId = this.parseTelegramId(dto.telegramChannelId);
+        
+   
 
         try {
             const channel = await this.prisma.channel.create({
@@ -158,11 +187,12 @@ export class ChannelsService {
                     username: dto.username,
                     ownerId: owner.id,
                     status: ChannelStatus.pending,
+                
                 },
             });
 
             await this.auditService.log({
-                userId: adminId,
+                userId: actor.id,
                 action: 'admin_channel_created',
                 metadata: {
                     channelId: channel.id,
@@ -180,38 +210,43 @@ export class ChannelsService {
         }
     }
 
-
     async listMyChannels(userId: string) {
+        await this.getUserOr404(userId, { id: true });
+
         const channels = await this.prisma.channel.findMany({
             where: { ownerId: userId },
             orderBy: { createdAt: 'desc' },
         });
 
-        return channels.map((channel) => this.mapChannel(channel));
+        return channels.map((c) => this.mapChannel(c));
     }
 
+
     async requestVerification(channelId: string, userId: string) {
-        const channel = await this.prisma.channel.findUnique({
-            where: { id: channelId },
-        });
+        const channel = await this.getChannelOr404(channelId);
 
-        if (!channel) throw new NotFoundException('Channel not found');
-        if (channel.ownerId !== userId) throw new BadRequestException('Not channel owner');
-        if (channel.status !== ChannelStatus.pending)
+        this.assertOwner(channel, userId);
+
+        if (channel.status !== ChannelStatus.pending) {
             throw new BadRequestException('Channel not in pending state');
+        }
 
-        let checkResult;
+        let checkResult: TelegramCheckResult;
+
         try {
             checkResult = await this.verificationService.verifyChannel(channel);
         } catch (err) {
-            // 🔴 Telegram / network error — LEKIN DBga YOZAMIZ
+            const payload = {
+                reason: 'NETWORK',
+                message: err instanceof Error ? err.message : String(err),
+                name: err instanceof Error ? err.name : null,
+            };
+
+            // store last error for ops
             await this.prisma.channelVerification.upsert({
                 where: { channelId },
                 update: {
-                    lastError: JSON.stringify({
-                        reason: 'NETWORK',
-                        error: String(err),
-                    }),
+                    lastError: JSON.stringify(payload),
                     checkedAt: new Date(),
                     notes: 'telegram_network_error',
                 },
@@ -219,28 +254,25 @@ export class ChannelsService {
                     channelId,
                     fraudScore: 0,
                     notes: 'telegram_network_error',
-                    lastError: JSON.stringify({
-                        reason: 'NETWORK',
-                        error: String(err),
-                    }),
+                    lastError: JSON.stringify(payload),
                     checkedAt: new Date(),
                 },
             });
 
-            throw new ServiceUnavailableException(
-                'Telegram unavailable. Retry later.',
-            );
+            throw new ServiceUnavailableException('Telegram unavailable. Retry later.');
         }
 
         if (!checkResult.isAdmin) {
-            // ❌ Verification failed — BOT admin emas / chat topilmadi
+            const payload = {
+                reason: checkResult.reason,
+                telegramError: checkResult.telegramError ?? null,
+                canAccessChat: checkResult.canAccessChat,
+            };
+
             await this.prisma.channelVerification.upsert({
                 where: { channelId },
                 update: {
-                    lastError: JSON.stringify({
-                        reason: checkResult.reason,
-                        telegramError: checkResult.telegramError ?? null,
-                    }),
+                    lastError: JSON.stringify(payload),
                     checkedAt: new Date(),
                     notes: 'verification_failed',
                 },
@@ -248,18 +280,15 @@ export class ChannelsService {
                     channelId,
                     fraudScore: 0,
                     notes: 'verification_failed',
-                    lastError: JSON.stringify({
-                        reason: checkResult.reason,
-                        telegramError: checkResult.telegramError ?? null,
-                    }),
+                    lastError: JSON.stringify(payload),
                     checkedAt: new Date(),
                 },
             });
 
+          
             throw new BadRequestException('Channel verification failed');
         }
 
-        // ✅ SUCCESS — auto verified
         const updated = await this.prisma.$transaction(async (tx) => {
             await tx.channelVerification.upsert({
                 where: { channelId },
@@ -285,28 +314,16 @@ export class ChannelsService {
         return this.mapChannel(updated);
     }
 
+   
+    async verifyChannelDebug(channelId: string, actor: Actor) {
+        this.assertDebugEnabledOr404();
 
-
-
-    async verifyChannelDebug(channelId: string, actor: { id: string; role: UserRole }) {
-        if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DEBUG !== 'true') {
+        // Optional: double-defense (controller should enforce)
+        if (actor.role !== UserRole.super_admin) {
             throw new NotFoundException('Not Found');
         }
 
-        const channel = await this.prisma.channel.findUnique({
-            where: { id: channelId },
-        });
-
-        if (!channel) {
-            throw new NotFoundException('Channel not found');
-        }
-
-        if (
-            actor.role === UserRole.publisher
-            && channel.ownerId !== actor.id
-        ) {
-            throw new ForbiddenException('Not channel owner');
-        }
+        const channel = await this.getChannelOr404(channelId);
 
         const checkResult = await this.verificationService.verifyChannel(channel);
 
@@ -321,14 +338,10 @@ export class ChannelsService {
         });
     }
 
+    
     async approveChannel(channelId: string, adminId: string) {
-        const channel = await this.prisma.channel.findUnique({
-            where: { id: channelId },
-        });
+        const channel = await this.getChannelOr404(channelId);
 
-        if (!channel) {
-            throw new NotFoundException('Channel not found');
-        }
         if (channel.status === ChannelStatus.approved) {
             return this.mapChannel(channel);
         }
@@ -351,20 +364,13 @@ export class ChannelsService {
         return this.mapChannel(updated);
     }
 
+   
     async rejectChannel(channelId: string, adminId: string, reason?: string) {
-        const channel = await this.prisma.channel.findUnique({
-            where: { id: channelId },
-        });
+        const channel = await this.getChannelOr404(channelId);
 
-        if (!channel) {
-            throw new NotFoundException('Channel not found');
-        }
+        const rejectable: ChannelStatus[] = [ChannelStatus.pending, ChannelStatus.verified];
 
-        const rejectableStatuses: ChannelStatus[] = [
-            ChannelStatus.pending,
-            ChannelStatus.verified,
-        ];
-        if (!rejectableStatuses.includes(channel.status)) {
+        if (!rejectable.includes(channel.status)) {
             throw new BadRequestException('Channel cannot be rejected');
         }
 

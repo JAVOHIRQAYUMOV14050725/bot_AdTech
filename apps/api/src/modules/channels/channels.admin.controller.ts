@@ -34,10 +34,10 @@ export class ChannelsAdminController {
     @ApiCreatedResponse({ type: ChannelResponseDto })
     @ApiStandardErrorResponses()
     createForPublisher(
-        @Actor() actor: { id: string },
+        @Actor() actor: { id: string, role: UserRole },
         @Body() dto: AdminCreateChannelDto,
     ) {
-        return this.channelsService.createChannelForOwner(actor.id, dto);
+        return this.channelsService.createChannelForOwner(actor, dto);
     }
 
     @Post(':id/approve')

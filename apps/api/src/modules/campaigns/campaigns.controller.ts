@@ -25,13 +25,13 @@ import {
 
 @Controller('campaigns')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.advertiser)
 @ApiTags('Campaigns')
 @ApiBearerAuth()
 export class CampaignsController {
     constructor(private readonly campaignsService: CampaignsService) { }
 
     @Post()
+    @Roles(UserRole.advertiser)
     @ApiOperation({
         summary: 'Create campaign',
         description: 'Create a new campaign for the authenticated advertiser.',
@@ -43,6 +43,7 @@ export class CampaignsController {
     }
 
     @Post(':id/creatives')
+    @Roles(UserRole.advertiser)
     @ApiOperation({
         summary: 'Add creative',
         description: 'Attach a creative to a campaign.',
@@ -63,6 +64,7 @@ export class CampaignsController {
     }
 
     @Post(':id/targets')
+    @Roles(UserRole.advertiser)
     @ApiOperation({
         summary: 'Add target',
         description: 'Add a channel target to a campaign.',
@@ -83,6 +85,7 @@ export class CampaignsController {
     }
 
     @Post(':id/activate')
+    @Roles(UserRole.advertiser)
     @ApiOperation({
         summary: 'Activate campaign',
         description: 'Transition campaign from draft to active status. Required before submitting targets.',
@@ -102,6 +105,7 @@ export class CampaignsController {
     }
 
     @Post(':campaignId/targets/:targetId/submit')
+    @Roles(UserRole.advertiser)
     @ApiOperation({
         summary: 'Submit target',
         description: 'Submit a campaign target for moderation. Campaign must be active.',

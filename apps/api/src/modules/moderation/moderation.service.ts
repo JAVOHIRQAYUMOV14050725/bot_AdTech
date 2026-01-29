@@ -124,22 +124,16 @@ export class ModerationService {
 
         return targets.map((target) => this.mapTarget(target));
     }
-
     async approve(targetId: string, adminId: string) {
-        // ✅ Fast idempotency shortcut (outside tx)
+        // ✅ Fast-path idempotency (outside tx) — optional but useful
         const initial = await this.prisma.campaignTarget.findUnique({
             where: { id: targetId },
             include: { postJob: true },
         });
 
-        if (!initial) {
-            throw new NotFoundException('Campaign target not found');
-        }
+        if (!initial) throw new NotFoundException('Campaign target not found');
 
-        if (
-            initial.status === CampaignTargetStatus.approved &&
-            initial.postJob
-        ) {
+        if (initial.status === CampaignTargetStatus.approved && initial.postJob) {
             return {
                 ok: true,
                 targetId,
@@ -149,57 +143,21 @@ export class ModerationService {
         }
 
         const result = await this.prisma.$transaction(async (tx) => {
-            /**
-             * =========================================================
-             * 🔒 HARD LOCK / RESERVE (anti double-approve)
-             * =========================================================
-             * We only allow ONE transaction to "reserve" the submitted row.
-             * If it fails, we return idempotently if already approved,
-             * otherwise we reject with correct status.
-             */
-            const reserved = await tx.campaignTarget.updateMany({
-                where: {
-                    id: targetId,
-                    status: CampaignTargetStatus.submitted,
-                },
-                data: {
-                    // any harmless write to acquire row-level lock (Postgres)
-                    moderatedAt: null,
-                },
-            });
+            // =========================================================
+            // 0) HARD ROW LOCK (the real fix vs updateMany(no-op))
+            // =========================================================
+            // Locks the campaignTarget row so approve/reject cannot race.
+            // If id doesn't exist, lock returns empty result; we still re-fetch below.
+            await tx.$queryRaw`
+      SELECT id
+      FROM "CampaignTarget"
+      WHERE id = ${targetId}
+      FOR UPDATE
+    `;
 
-            if (reserved.count === 0) {
-                const current = await tx.campaignTarget.findUnique({
-                    where: { id: targetId },
-                    include: { postJob: true },
-                });
-
-                if (!current) {
-                    throw new NotFoundException('Campaign target not found');
-                }
-
-                if (
-                    current.status === CampaignTargetStatus.approved &&
-                    current.postJob
-                ) {
-                    return {
-                        target: current,
-                        postJob: current.postJob,
-                        created: false,
-                        alreadyApproved: true,
-                    };
-                }
-
-                throw new BadRequestException(
-                    `Target cannot be approved from status ${current.status}`,
-                );
-            }
-
-            /**
-             * =========================================================
-             * 1) Re-fetch fresh state after reserve
-             * =========================================================
-             */
+            // =========================================================
+            // 1) Fetch fresh state (single source of truth)
+            // =========================================================
             const fresh = await tx.campaignTarget.findUnique({
                 where: { id: targetId },
                 include: {
@@ -209,37 +167,38 @@ export class ModerationService {
                 },
             });
 
-            if (!fresh) {
-                throw new NotFoundException('Campaign target not found');
-            }
+            if (!fresh) throw new NotFoundException('Campaign target not found');
 
-            // Another tx could have created postJob earlier (edge), return idempotently
+            // =========================================================
+            // 2) Idempotency: if postJob exists -> return without changes
+            // =========================================================
+            // If another tx already created job, we’re done.
             if (fresh.postJob) {
                 return {
-                    target: fresh,
                     postJob: fresh.postJob,
                     created: false,
-                    alreadyApproved:
-                        fresh.status === CampaignTargetStatus.approved,
+                    alreadyApproved: fresh.status === CampaignTargetStatus.approved,
                 };
             }
 
-            /**
-             * =========================================================
-             * 2) Validate preconditions
-             * =========================================================
-             */
+            // =========================================================
+            // 3) Validate status / preconditions (AFTER lock)
+            // =========================================================
             if (fresh.status !== CampaignTargetStatus.submitted) {
-                // after reserve, this should almost never happen,
-                // but keep as safety in case of inconsistent states
+                // If it’s approved but postJob missing => inconsistent state; refuse loudly
+                // (or you can repair here by creating postJob + enqueue).
+                if (fresh.status === CampaignTargetStatus.approved) {
+                    throw new BadRequestException(
+                        'Target is approved but has no postJob (inconsistent state)',
+                    );
+                }
+
                 throw new BadRequestException(
                     `Target cannot be approved from status ${fresh.status}`,
                 );
             }
 
-            if (!fresh.campaign) {
-                throw new NotFoundException('Campaign not found');
-            }
+            if (!fresh.campaign) throw new NotFoundException('Campaign not found');
 
             if (fresh.campaign.status !== CampaignStatus.active) {
                 throw new BadRequestException(
@@ -247,25 +206,22 @@ export class ModerationService {
                 );
             }
 
-            if (!fresh.campaign.creatives || fresh.campaign.creatives.length === 0) {
+            if (!fresh.campaign.creatives?.length) {
                 throw new BadRequestException('Campaign has no creatives');
             }
 
-            if (!fresh.channel) {
-                throw new NotFoundException('Channel not found');
-            }
+            if (!fresh.channel) throw new NotFoundException('Channel not found');
 
             if (fresh.channel.status !== ChannelStatus.approved) {
                 throw new BadRequestException('Channel must be approved');
             }
 
-            const minLeadMs = Number(
-                process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30_000,
-            );
+            const minLeadMs = Number(process.env.CAMPAIGN_TARGET_MIN_LEAD_MS ?? 30_000);
             if (fresh.scheduledAt.getTime() < Date.now() + minLeadMs) {
                 throw new BadRequestException('scheduledAt must be in the future');
             }
 
+            // FSM validation
             assertCampaignTargetTransition({
                 campaignTargetId: targetId,
                 from: fresh.status,
@@ -274,13 +230,9 @@ export class ModerationService {
                 correlationId: targetId,
             });
 
-            /**
-             * =========================================================
-             * 3) APPROVAL WRITE FIRST (so holdEscrow sees status=approved)
-             * =========================================================
-             * Your PaymentsService.holdEscrow requires target.status === approved.
-             * So we MUST update target -> approved before calling holdEscrow.
-             */
+            // =========================================================
+            // 4) APPROVE write first (PaymentsService depends on status)
+            // =========================================================
             const approvedTarget = await tx.campaignTarget.update({
                 where: { id: targetId },
                 data: {
@@ -291,22 +243,18 @@ export class ModerationService {
                 },
             });
 
-            /**
-             * =========================================================
-             * 4) Hold escrow ATOMIC (same tx)
-             * =========================================================
-             */
+            // =========================================================
+            // 5) Hold escrow ATOMIC (same tx) — MUST BE IDEMPOTENT
+            // =========================================================
             await this.paymentsService.holdEscrow(targetId, {
                 transaction: tx,
                 actor: 'admin',
                 correlationId: targetId,
             });
 
-            /**
-             * =========================================================
-             * 5) Create PostJob idempotently
-             * =========================================================
-             */
+            // =========================================================
+            // 6) Create PostJob idempotently (unique on campaignTargetId)
+            // =========================================================
             let postJob: PostJob;
             let created = true;
 
@@ -319,10 +267,8 @@ export class ModerationService {
                     },
                 });
             } catch (err) {
-                if (
-                    err instanceof Prisma.PrismaClientKnownRequestError &&
-                    err.code === 'P2002'
-                ) {
+                if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+                    // Another tx created it first — read and return
                     const existing = await tx.postJob.findUnique({
                         where: { campaignTargetId: targetId },
                     });
@@ -335,11 +281,9 @@ export class ModerationService {
                 }
             }
 
-            /**
-             * =========================================================
-             * 6) Audit (only when truly created)
-             * =========================================================
-             */
+            // =========================================================
+            // 7) Audit (only when we actually created the job)
+            // =========================================================
             if (created) {
                 await this.auditService.log({
                     userId: adminId,
@@ -348,62 +292,128 @@ export class ModerationService {
                 });
             }
 
-            return { target: approvedTarget, postJob, created };
+            return { target: approvedTarget, postJob, created, alreadyApproved: false };
         });
 
-        // ✅ enqueue AFTER tx (don’t enqueue if we didn't create)
         if (result.created) {
-            await this.schedulerService.enqueuePost(
-                result.postJob.id,
-                result.postJob.executeAt,
-            );
+            await this.schedulerService.enqueuePost(result.postJob.id, result.postJob.executeAt);
         }
 
         return {
             ok: true,
             targetId,
             postJobId: result.postJob.id,
-            alreadyApproved: (result as any).alreadyApproved ?? false,
+            alreadyApproved: result.alreadyApproved ?? false,
         };
     }
+
     async reject(targetId: string, adminId: string, reason?: string) {
-        const target = await this.prisma.campaignTarget.findUnique({
+        // ✅ Optional fast-path read (good UX). Real safety is inside tx.
+        const initial = await this.prisma.campaignTarget.findUnique({
             where: { id: targetId },
+            select: { id: true, status: true },
         });
 
-        if (!target) {
-            throw new NotFoundException('Campaign target not found');
+        if (!initial) throw new NotFoundException('Campaign target not found');
+
+        // If already rejected, return idempotently (outside tx)
+        if (initial.status === CampaignTargetStatus.rejected) {
+            return {
+                ok: true,
+                targetId,
+                alreadyRejected: true,
+            };
         }
 
-        if (target.status !== CampaignTargetStatus.submitted) {
-            throw new BadRequestException('Target not submitted');
+        const result = await this.prisma.$transaction(async (tx) => {
+            // =========================================================
+            // 0) HARD ROW LOCK (approve/reject race killer)
+            // =========================================================
+            await tx.$queryRaw`
+      SELECT id
+      FROM "CampaignTarget"
+      WHERE id = ${targetId}
+      FOR UPDATE
+    `;
+
+            // =========================================================
+            // 1) Fetch fresh state (include postJob for safety)
+            // =========================================================
+            const fresh = await tx.campaignTarget.findUnique({
+                where: { id: targetId },
+                include: { postJob: true },
+            });
+
+            if (!fresh) throw new NotFoundException('Campaign target not found');
+
+            // =========================================================
+            // 2) Idempotency / conflict rules
+            // =========================================================
+            if (fresh.status === CampaignTargetStatus.rejected) {
+                return { target: fresh, alreadyRejected: true, changed: false };
+            }
+
+            // If approved (or has postJob), rejecting must be forbidden
+            // because escrow may already be held and job scheduled.
+            if (
+                fresh.status === CampaignTargetStatus.approved ||
+                fresh.postJob
+            ) {
+                throw new BadRequestException(
+                    `Target cannot be rejected from status ${fresh.status}`,
+                );
+            }
+
+            if (fresh.status !== CampaignTargetStatus.submitted) {
+                throw new BadRequestException(
+                    `Target cannot be rejected from status ${fresh.status}`,
+                );
+            }
+
+            // FSM validation
+            assertCampaignTargetTransition({
+                campaignTargetId: targetId,
+                from: fresh.status,
+                to: CampaignTargetStatus.rejected,
+                actor: 'admin',
+                correlationId: targetId,
+            });
+
+            // =========================================================
+            // 3) Write reject
+            // =========================================================
+            const updated = await tx.campaignTarget.update({
+                where: { id: targetId },
+                data: {
+                    status: CampaignTargetStatus.rejected,
+                    moderatedBy: adminId,
+                    moderatedAt: new Date(),
+                    moderationReason: reason?.trim() ? reason.trim() : null,
+                },
+            });
+
+            // =========================================================
+            // 4) Audit (only if we actually changed state)
+            // =========================================================
+            await this.auditService.log({
+                userId: adminId,
+                action: 'moderation_rejected',
+                metadata: { targetId, reason: reason?.trim() ? reason.trim() : null },
+            });
+
+            return { target: updated, alreadyRejected: false, changed: true };
+        });
+
+        // Keep response consistent with your other handlers
+        if (result.alreadyRejected) {
+            return {
+                ok: true,
+                targetId,
+                alreadyRejected: true,
+            };
         }
 
-        assertCampaignTargetTransition({
-            campaignTargetId: targetId,
-            from: target.status,
-            to: CampaignTargetStatus.rejected,
-            actor: 'admin',
-            correlationId: targetId,
-        });
-
-        const updated = await this.prisma.campaignTarget.update({
-            where: { id: targetId },
-            data: {
-                status: CampaignTargetStatus.rejected,
-                moderatedBy: adminId,
-                moderatedAt: new Date(),
-                moderationReason: reason ?? null,
-            },
-        });
-
-        await this.auditService.log({
-            userId: adminId,
-            action: 'moderation_rejected',
-            metadata: { targetId, reason: reason ?? null },
-        });
-
-        return this.mapTarget(updated);
+        return this.mapTarget(result.target);
     }
 
 }

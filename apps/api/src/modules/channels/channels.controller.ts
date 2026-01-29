@@ -24,13 +24,13 @@ import { ChannelVerifyDebugResponseDto } from './dto/channel-verify-debug-respon
 
 @Controller('channels')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.publisher)
 @ApiTags('Channels (publisher)')
 @ApiBearerAuth()
 export class ChannelsController {
     constructor(private readonly channelsService: ChannelsService) { }
 
     @Post()
+    @Roles(UserRole.publisher)
     @ApiOperation({
         summary: 'Publisher-only: create a channel for the authenticated publisher',
         description: 'Publisher-only endpoint. Admins should use /api/admin/channels for ops.',
@@ -45,6 +45,7 @@ export class ChannelsController {
     }
 
     @Get('my')
+    @Roles(UserRole.publisher)
     @ApiOperation({
         summary: 'List my channels',
         description: 'List channels owned by the authenticated publisher.',
@@ -56,6 +57,7 @@ export class ChannelsController {
     }
 
     @Post(':id/request-verification')
+    @Roles(UserRole.publisher)
     @ApiOperation({
         summary: 'Request verification',
         description: 'Request verification for a pending channel.',
@@ -171,6 +173,7 @@ export class ChannelsController {
     }
 
     @Get(':id/verify-debug')
+    @Roles(UserRole.super_admin)
     @ApiOperation({
         summary: 'Debug Telegram verification (dev-only)',
         description:
@@ -187,7 +190,6 @@ export class ChannelsController {
         type: ApiErrorResponseDto,
     })
     @ApiStandardErrorResponses()
-    @Roles(UserRole.publisher, UserRole.admin, UserRole.super_admin)
     verifyDebug(
         @Param('id', new ParseUUIDPipe()) channelId: string,
         @Actor() actor: { id: string; role: UserRole },

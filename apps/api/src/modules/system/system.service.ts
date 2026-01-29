@@ -83,6 +83,10 @@ export class SystemService {
             throw new BadRequestException('Escrow not found');
         }
 
+        if (escrow.status !== EscrowStatus.held) {
+            throw new BadRequestException(`Escrow already ${escrow.status}`);
+        }
+
         // 🧾 AUDIT (BEFORE)
         await this.prisma.userAuditLog.create({
             data: {

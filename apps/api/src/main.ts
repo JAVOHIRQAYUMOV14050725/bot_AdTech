@@ -28,6 +28,18 @@ import { loadEnv } from '@/config/env';
 import { ConfigService, ConfigType } from '@nestjs/config';
 import { workerConfig } from '@/config/worker.config';
 
+const registerProcessHandlers = () => {
+    process.on('unhandledRejection', (reason) => {
+        console.error('[process] unhandled rejection', reason);
+        process.exitCode = 1;
+    });
+
+    process.on('uncaughtException', (error) => {
+        console.error('[process] uncaught exception', error);
+        process.exit(1);
+    });
+};
+
 async function startWorker(app: any, logger: StructuredLogger) {
     const prisma = app.get(PrismaService);
     const escrowService = app.get(EscrowService);
@@ -70,6 +82,7 @@ async function startWorker(app: any, logger: StructuredLogger) {
 }
 
 async function bootstrap() {
+    registerProcessHandlers();
     const env = loadEnv();
     const logger = buildStructuredLogger();
     const isProd = env.NODE_ENV === 'production';
@@ -161,4 +174,7 @@ async function bootstrap() {
     }
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+    console.error('[bootstrap] failed to start application', error);
+    process.exit(1);
+});

@@ -1,10 +1,23 @@
+import { ZodError } from 'zod';
 import { envSchema, EnvVars } from './env.schema';
 
 let cachedEnv: EnvVars | null = null;
 
 export const loadEnv = (): EnvVars => {
     if (!cachedEnv) {
-        cachedEnv = envSchema.parse(process.env);
+        try {
+            cachedEnv = envSchema.parse(process.env);
+        } catch (error) {
+            if (error instanceof ZodError) {
+                console.error(
+                    '[env] validation failed',
+                    JSON.stringify(error.flatten(), null, 2),
+                );
+            } else {
+                console.error('[env] validation failed', error);
+            }
+            throw error;
+        }
     }
     return cachedEnv;
 };

@@ -29,18 +29,18 @@ const REQUIRED_BOT_PERMISSIONS: TelegramAdminPermission[] = [
     'can_post_messages',
     'can_edit_messages',
     'can_delete_messages',
-    ];
+];
 
-    type TelegramSendResult =
-        | { ok: true; telegramMessageId?: number }
-        | {
-            ok: false;
-            permanent: boolean;
-            reason: TelegramCheckReason;
-            error?: string;
-            retryAfterSeconds?: number | null;
+type TelegramSendResult =
+    | { ok: true; telegramMessageId?: number }
+    | {
+        ok: false;
+        permanent: boolean;
+        reason: TelegramCheckReason;
+        error?: string;
+        retryAfterSeconds?: number | null;
     };
-        
+
 function isTelegramFailure(
     r: TelegramSendResult,
 ): r is Extract<TelegramSendResult, { ok: false }> {
@@ -165,7 +165,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             this.logger.warn({
                 event: 'telegram_bot_stop_failed',
                 error: e instanceof Error ? e.message : String(e),
-                id: this.botId ?? null,      
+                id: this.botId ?? null,
             },
                 'TelegramService'
             );
@@ -587,6 +587,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         if (postJob.status === PostJobStatus.success) return { ok: true };
 
+        const deliveryIdempotencyKey = `post_delivery:${postJobId}`;
+        const existingDelivery = await this.prisma.postExecutionLog.findUnique({
+            where: { idempotencyKey: deliveryIdempotencyKey },
+        });
+
+        if (existingDelivery?.telegramMessageId) {
+            if (!postJob.telegramMessageId) {
+                await this.prisma.postJob.update({
+                    where: { id: postJobId },
+                    data: { telegramMessageId: existingDelivery.telegramMessageId },
+                });
+            }
+            return {
+                ok: true,
+                telegramMessageId: bigintToSafeNumber(existingDelivery.telegramMessageId, 'telegramMessageId'),
+            };
+        }
+
         const channelId = postJob.campaignTarget.channel.telegramChannelId;
         const telegramChannelId = channelId.toString();
         const creative = postJob.campaignTarget.campaign.creatives[0];
@@ -632,9 +650,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
                 const messageId = response.message_id;
 
-                await this.prisma.postExecutionLog.create({
-                    data: {
+                await this.prisma.postExecutionLog.upsert({
+                    where: { idempotencyKey: deliveryIdempotencyKey },
+                    update: {
+                        ...(messageId ? { telegramMessageId: BigInt(messageId) } : {}),
+                        responsePayload: sendPayload,
+                    },
+                    create: {
                         postJobId,
+                        idempotencyKey: deliveryIdempotencyKey,
                         telegramMessageId: messageId ? BigInt(messageId) : null,
                         responsePayload: sendPayload,
                     },

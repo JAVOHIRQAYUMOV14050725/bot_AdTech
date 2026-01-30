@@ -94,6 +94,12 @@ enum KillSwitchKey {
   worker_watchdogs
 }
 
+enum OutboxStatus {
+  pending
+  processing
+  completed
+}
+
 //////////////////////
 // USERS & AUDIT
 //////////////////////
@@ -306,6 +312,7 @@ model PostJob {
 model PostExecutionLog {
   id                String   @id @default(uuid())
   postJobId         String
+  idempotencyKey    String   @unique
   telegramMessageId BigInt?
   executedAt        DateTime @default(now())
   responsePayload   Json?
@@ -313,6 +320,22 @@ model PostExecutionLog {
   postJob PostJob @relation(fields: [postJobId], references: [id])
 
   @@map("post_execution_logs")
+}
+
+model OutboxEvent {
+  id        String       @id @default(uuid())
+  eventType String
+  dedupeKey String       @unique
+  payload   Json
+  status    OutboxStatus @default(pending)
+  attempts  Int          @default(0)
+  lockedAt  DateTime?
+  processedAt DateTime?
+  lastError String?
+  createdAt DateTime     @default(now())
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
 }
 
 //////////////////////
@@ -345,7 +368,7 @@ model LedgerEntry {
   type   LedgerType
   amount Decimal      @db.Decimal(14, 2)
   reason LedgerReason
-  idempotencyKey String? @unique
+  idempotencyKey String @unique
 
   referenceId String?
   createdAt   DateTime @default(now())
@@ -400,6 +423,7 @@ model PlatformCommission {
 model FinancialAuditEvent {
   id               String   @id @default(uuid())
   walletId         String
+  idempotencyKey   String   @unique
   ledgerEntryId    String?
   campaignId       String?
   campaignTargetId String?

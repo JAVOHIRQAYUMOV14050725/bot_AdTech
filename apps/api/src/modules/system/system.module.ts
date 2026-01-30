@@ -5,6 +5,7 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { OpsModule } from '@/modules/ops/ops.module';
 import { AuthModule } from '@/modules/auth/auth.module';
+import { OutboxModule } from '@/modules/outbox/outbox.module';
 
 @Module({
     imports: [
@@ -12,9 +13,10 @@ import { AuthModule } from '@/modules/auth/auth.module';
         PaymentsModule,
         OpsModule,
         AuthModule,
+        OutboxModule,
     ],
     controllers: [SystemController],
     providers: [SystemService],
-    exports: [SystemService], // ✅ MUHIM
+    exports: [SystemService], 
 })
 export class SystemModule { }

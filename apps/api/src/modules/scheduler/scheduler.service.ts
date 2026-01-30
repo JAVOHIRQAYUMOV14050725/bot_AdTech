@@ -1,12 +1,10 @@
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SystemService } from '@/modules/system/system.service';
-import { postQueue } from './queues';
+import { OutboxService } from '@/modules/outbox/outbox.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { CronStatusService } from './cron-status.service';
 import { runWithCronContext } from '@/common/context/request-context';
-import { WorkerConfig, workerConfig } from '@/config/worker.config';
-import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class SchedulerService {
@@ -14,35 +12,42 @@ export class SchedulerService {
         private readonly systemService: SystemService,
         private readonly killSwitchService: KillSwitchService,
         private readonly cronStatusService: CronStatusService,
-        @Inject(workerConfig.KEY)
-        private readonly workerConfig: WorkerConfig,
+        private readonly outboxService: OutboxService,
         @Inject('LOGGER') private readonly logger: LoggerService,
 
     ) { }
 
-    /** 
+    /**
      * =========================================================
-     * 📬 POST EXECUTION QUEUE (EVENT-DRIVEN)
+     * 📤 OUTBOX DISPATCHER
      * =========================================================
      */
-    async enqueuePost(postJobId: string, executeAt: Date) {
-        const maxAttempts = this.workerConfig.postJobMaxAttempts;
-        const backoffMs = this.workerConfig.postJobRetryBackoffMs;
-        await postQueue.add(
-            'execute-post',
-            { postJobId },
-            {
-                jobId: postJobId,
-                delay: Math.max(executeAt.getTime() - Date.now(), 0),
-                attempts: maxAttempts,
-                backoff: {
-                    type: 'exponential',
-                    delay: backoffMs,
-                },
-                removeOnComplete: true,
-                removeOnFail: false,
-            },
-        );
+    @Cron(CronExpression.EVERY_MINUTE)
+    async outboxDispatcher() {
+        return runWithCronContext('outbox_dispatch', async () => {
+            try {
+                await this.outboxService.processPending();
+                await this.cronStatusService.recordRun({
+                    name: 'outbox_dispatch',
+                    result: 'success',
+                });
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                await this.cronStatusService.recordRun({
+                    name: 'outbox_dispatch',
+                    result: 'failed',
+                    error: message,
+                });
+                this.logger.error(
+                    {
+                        event: 'outbox_dispatch_failed',
+                        error: message,
+                    },
+                    'SchedulerService',
+                );
+                throw err;
+            }
+        });
     }
 
     /**

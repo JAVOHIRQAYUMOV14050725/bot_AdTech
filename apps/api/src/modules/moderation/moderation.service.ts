@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
-import { SchedulerService } from '@/modules/scheduler/scheduler.service';
+import { OutboxService } from '@/modules/outbox/outbox.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition } from '@/modules/lifecycle/lifecycle';
 import {
@@ -18,17 +18,16 @@ import {
 } from '@prisma/client';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { CampaignConfig, campaignConfig } from '@/config/campaign.config';
-import { ConfigType } from '@nestjs/config';
 
 @Injectable()
 export class ModerationService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentsService: PaymentsService,
-        private readonly schedulerService: SchedulerService,
+        private readonly outboxService: OutboxService,
         private readonly auditService: AuditService,
         @Inject(campaignConfig.KEY)
-        private readonly campaignConfig:CampaignConfig,
+        private readonly campaignConfig: CampaignConfig,
     ) { }
 
     private mapChannel(channel: Channel) {
@@ -296,12 +295,14 @@ export class ModerationService {
                 });
             }
 
+            await this.outboxService.enqueuePostJob(
+                tx,
+                postJob.id,
+                postJob.executeAt,
+            );
+
             return { target: approvedTarget, postJob, created, alreadyApproved: false };
         });
-
-        if (result.created) {
-            await this.schedulerService.enqueuePost(result.postJob.id, result.postJob.executeAt);
-        }
 
         return {
             ok: true,

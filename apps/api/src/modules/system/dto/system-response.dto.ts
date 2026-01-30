@@ -50,3 +50,16 @@ export class ReconciliationResponseDto {
     @ApiProperty({ example: true })
     readOnly!: boolean;
 }
+
+export class DbConnectionsResponseDto {
+    @ApiProperty({ example: 12 })
+    total!: number;
+
+    @ApiProperty({
+        example: [{ state: 'active', count: 2 }, { state: 'idle', count: 10 }],
+    })
+    byState!: Array<{ state: string; count: number }>;
+
+    @ApiProperty({ example: '2024-01-02T00:00:00.000Z' })
+    generatedAt!: string;
+}

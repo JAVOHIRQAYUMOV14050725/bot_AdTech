@@ -7,15 +7,17 @@ import { SystemModule } from '@/modules/system/system.module'; // ✅
 import { OpsModule } from '@/modules/ops/ops.module';
 import { RedisModule } from '@/modules/redis/redis.module';
 import { CronStatusService } from './cron-status.service';
+import { OutboxModule } from '@/modules/outbox/outbox.module';
 
 @Module({
     imports: [
         PrismaModule,
         PaymentsModule,
         TelegramModule,
-        SystemModule, // ✅ MUHIM
+        SystemModule, 
         OpsModule,
         RedisModule,
+        OutboxModule,
     ],
     providers: [SchedulerService, CronStatusService],
     exports: [SchedulerService, CronStatusService],

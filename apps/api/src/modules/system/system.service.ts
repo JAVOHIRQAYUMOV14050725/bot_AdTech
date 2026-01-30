@@ -17,10 +17,9 @@ import {
     Prisma,
 } from '@prisma/client';
 import { ReconciliationMode } from './dto/reconciliation.dto';
-import { postQueue } from '@/modules/scheduler/queues';
+import { OutboxService } from '@/modules/outbox/outbox.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 import { WorkerConfig, workerConfig } from '@/config/worker.config';
-import { ConfigType } from '@nestjs/config';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
     if (value === null) {
@@ -61,6 +60,7 @@ export class SystemService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly escrowService: EscrowService,
+        private readonly outboxService: OutboxService,
         @Inject('LOGGER') private readonly logger: LoggerService,
         @Inject(workerConfig.KEY)
         private readonly workerConfig: WorkerConfig,
@@ -323,6 +323,28 @@ export class SystemService {
         );
     }
 
+    async getDbConnections() {
+        const rows = await this.prisma.$queryRaw<
+            { state: string | null; count: number }[]
+        >(Prisma.sql`
+            SELECT state, COUNT(*)::int AS count
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+            GROUP BY state
+        `);
+
+        const total = rows.reduce((sum, row) => sum + row.count, 0);
+
+        return {
+            total,
+            byState: rows.map((row) => ({
+                state: row.state ?? 'unknown',
+                count: row.count,
+            })),
+            generatedAt: new Date().toISOString(),
+        };
+    }
+
     async updateKillSwitch(params: {
         key: KillSwitchKey;
         enabled: boolean;
@@ -499,42 +521,24 @@ export class SystemService {
                     continue;
                 }
 
-                await this.prisma.postJob.update({
-                    where: { id: job.id },
-                    data: {
-                        status: PostJobStatus.queued,
-                        sendingAt: null,
-                        executeAt: new Date(Date.now() + backoffMs),
-                        lastError: 'stalled_requeued',
-                    },
-                });
+                const nextExecuteAt = new Date(Date.now() + backoffMs);
+                await this.prisma.$transaction(async (tx) => {
+                    await tx.postJob.update({
+                        where: { id: job.id },
+                        data: {
+                            status: PostJobStatus.queued,
+                            sendingAt: null,
+                            executeAt: nextExecuteAt,
+                            lastError: 'stalled_requeued',
+                        },
+                    });
 
-                try {
-                    await postQueue.add(
-                        'execute-post',
-                        { postJobId: job.id },
-                        {
-                            jobId: job.id,
-                            delay: backoffMs,
-                            attempts: maxAttempts,
-                            backoff: {
-                                type: 'exponential',
-                                delay: backoffMs,
-                            },
-                            removeOnComplete: true,
-                            removeOnFail: false,
-                        },
+                    await this.outboxService.enqueuePostJob(
+                        tx,
+                        job.id,
+                        nextExecuteAt,
                     );
-                } catch (enqueueError) {
-                    this.logger.warn(
-                        {
-                            event: 'post_job_requeue_enqueue_failed',
-                            postJobId: job.id,
-                            error: enqueueError instanceof Error ? enqueueError.message : String(enqueueError),
-                        },
-                        'SystemService',
-                    );
-                }
+                });
             } catch (err) {
                 this.logger.error({
                     event: 'post_job_requeue_failed',

@@ -587,6 +587,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         if (postJob.status === PostJobStatus.success) return { ok: true };
 
+        const deliveryIdempotencyKey = `post_delivery:${postJobId}`;
+        const existingDelivery = await this.prisma.postExecutionLog.findUnique({
+            where: { idempotencyKey: deliveryIdempotencyKey },
+        });
+
+        if (existingDelivery?.telegramMessageId) {
+            if (!postJob.telegramMessageId) {
+                await this.prisma.postJob.update({
+                    where: { id: postJobId },
+                    data: { telegramMessageId: existingDelivery.telegramMessageId },
+                });
+            }
+            return {
+                ok: true,
+                telegramMessageId: bigintToSafeNumber(existingDelivery.telegramMessageId, 'telegramMessageId'),
+            };
+        }
+
         const channelId = postJob.campaignTarget.channel.telegramChannelId;
         const telegramChannelId = channelId.toString();
         const creative = postJob.campaignTarget.campaign.creatives[0];
@@ -632,9 +650,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
                 const messageId = response.message_id;
 
-                await this.prisma.postExecutionLog.create({
-                    data: {
+                await this.prisma.postExecutionLog.upsert({
+                    where: { idempotencyKey: deliveryIdempotencyKey },
+                    update: {
+                        ...(messageId ? { telegramMessageId: BigInt(messageId) } : {}),
+                        responsePayload: sendPayload,
+                    },
+                    create: {
                         postJobId,
+                        idempotencyKey: deliveryIdempotencyKey,
                         telegramMessageId: messageId ? BigInt(messageId) : null,
                         responsePayload: sendPayload,
                     },

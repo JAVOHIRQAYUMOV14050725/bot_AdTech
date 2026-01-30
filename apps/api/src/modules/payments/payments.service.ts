@@ -106,7 +106,7 @@ export class PaymentsService {
         type: LedgerType;
         reason: LedgerReason;
         referenceId?: string;
-        idempotencyKey?: string;
+        idempotencyKey: string;
         campaignId?: string;
         campaignTargetId?: string;
         escrowId?: string;
@@ -130,20 +130,13 @@ export class PaymentsService {
 
         const normalizedAmount = this.normalizeDecimal(amount);
 
-        if (idempotencyKey) {
-            const existing = await tx.ledgerEntry.findUnique({
-                where: { idempotencyKey },
-            });
-            if (existing) {
-                return existing;
-            }
-        }
-
         if (normalizedAmount.lte(0)) {
             throw new BadRequestException('Amount must be positive');
         }
 
-        let ledgerEntry;
+        const auditIdempotencyKey = `audit:${idempotencyKey}`;
+        let ledgerEntry: { id: string; amount: Prisma.Decimal } | null = null;
+        let created = false;
         try {
             ledgerEntry = await tx.ledgerEntry.create({
                 data: {
@@ -158,44 +151,48 @@ export class PaymentsService {
                     idempotencyKey,
                 },
             });
+            created = true;
         } catch (err) {
-            if (idempotencyKey) {
-                const existing = await tx.ledgerEntry.findUnique({
-                    where: { idempotencyKey },
+            const existing = await tx.ledgerEntry.findUnique({
+                where: { idempotencyKey },
+            });
+            if (!existing) {
+                throw err;
+            }
+            ledgerEntry = existing;
+        }
+
+        if (created) {
+            if (type === LedgerType.debit) {
+                const debitResult = await tx.wallet.updateMany({
+                    where: {
+                        id: walletId,
+                        balance: { gte: normalizedAmount },
+                    },
+                    data: {
+                        balance: { decrement: normalizedAmount },
+                    },
                 });
-                if (existing) {
-                    return existing;
+
+                if (debitResult.count === 0) {
+                    throw new BadRequestException('Insufficient balance');
                 }
+            } else {
+                await tx.wallet.update({
+                    where: { id: walletId },
+                    data: {
+                        balance: { increment: normalizedAmount },
+                    },
+                });
             }
-            throw err;
         }
 
-        if (type === LedgerType.debit) {
-            const debitResult = await tx.wallet.updateMany({
-                where: {
-                    id: walletId,
-                    balance: { gte: normalizedAmount },
-                },
-                data: {
-                    balance: { decrement: normalizedAmount },
-                },
-            });
-
-            if (debitResult.count === 0) {
-                throw new BadRequestException('Insufficient balance');
-            }
-        } else {
-            await tx.wallet.update({
-                where: { id: walletId },
-                data: {
-                    balance: { increment: normalizedAmount },
-                },
-            });
-        }
-
-        await tx.financialAuditEvent.create({
-            data: {
+        await tx.financialAuditEvent.upsert({
+            where: { idempotencyKey: auditIdempotencyKey },
+            update: {},
+            create: {
                 walletId,
+                idempotencyKey: auditIdempotencyKey,
                 ledgerEntryId: ledgerEntry.id,
                 campaignId,
                 campaignTargetId,

@@ -1,6 +1,7 @@
 import {
     Body,
     Controller,
+    Get,
     Post,
     UseGuards,
 } from '@nestjs/common';
@@ -24,6 +25,7 @@ import {
     KillSwitchResponseDto,
     ReconciliationResponseDto,
     ResolveEscrowResponseDto,
+    DbConnectionsResponseDto,
 } from './dto/system-response.dto';
 import { Throttle } from '@nestjs/throttler';
 
@@ -103,5 +105,20 @@ export class SystemController {
             actorUserId: actor.id,
             correlationId: dto.correlationId,
         });
+    }
+
+    /**
+     * 🧵 DB CONNECTION SNAPSHOT
+     * GET /system/db-connections
+     */
+    @Get('db-connections')
+    @ApiOperation({
+        summary: 'Get database connections',
+        description: 'Report current pg_stat_activity connection counts.',
+    })
+    @ApiOkResponse({ type: DbConnectionsResponseDto })
+    @ApiStandardErrorResponses()
+    async getDbConnections() {
+        return this.systemService.getDbConnections();
     }
 }

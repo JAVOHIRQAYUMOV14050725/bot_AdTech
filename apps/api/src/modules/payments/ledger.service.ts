@@ -9,16 +9,20 @@ export class LedgerService {
         walletId: string,
         amount: Prisma.Decimal,
         reason: LedgerReason,
+        idempotencyKey: string,
         ref?: string,
     ) {
         const normalized = new Prisma.Decimal(amount);
-        return this.prisma.ledgerEntry.create({
-            data: {
+        return this.prisma.ledgerEntry.upsert({
+            where: { idempotencyKey },
+            update: {},
+            create: {
                 walletId,
                 type: LedgerType.credit,
                 amount: normalized,
                 reason,
                 referenceId: ref,
+                idempotencyKey,
             },
         });
     }
@@ -27,16 +31,20 @@ export class LedgerService {
         walletId: string,
         amount: Prisma.Decimal,
         reason: LedgerReason,
+        idempotencyKey: string,
         ref?: string,
     ) {
         const normalized = new Prisma.Decimal(amount).negated();
-        return this.prisma.ledgerEntry.create({
-            data: {
+        return this.prisma.ledgerEntry.upsert({
+            where: { idempotencyKey },
+            update: {},
+            create: {
                 walletId,
                 type: LedgerType.debit,
                 amount: normalized,
                 reason,
                 referenceId: ref,
+                idempotencyKey,
             },
         });
     }

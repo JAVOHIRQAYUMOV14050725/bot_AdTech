@@ -75,12 +75,14 @@ export async function createUserWithWallet(params: {
                 amount: balance,
                 reason: 'deposit',
                 referenceId: `seed:${user.id}`,
+                idempotencyKey: `seed:ledger:${user.id}`,
             },
         });
 
         await prisma.financialAuditEvent.create({
             data: {
                 walletId: wallet.id,
+                idempotencyKey: `seed:audit:${user.id}`,
                 ledgerEntryId: ledgerEntry.id,
                 type: 'credit',
                 amount: balance,

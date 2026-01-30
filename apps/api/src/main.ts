@@ -97,6 +97,8 @@ async function bootstrap() {
         });
 
         app.useLogger(logger);
+        const prisma = app.get(PrismaService);
+        await prisma.enableShutdownHooks(app);
 
         await startWorker(app, logger);
         return;
@@ -109,6 +111,8 @@ async function bootstrap() {
     });
 
     app.useLogger(logger);
+    const prisma = app.get(PrismaService);
+    await prisma.enableShutdownHooks(app);
 
     app.use(helmet());
     app.use(compression());

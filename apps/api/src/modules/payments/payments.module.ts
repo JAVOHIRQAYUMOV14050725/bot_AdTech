@@ -6,7 +6,6 @@ import { PaymentsService } from './payments.service';
 import { OpsModule } from '@/modules/ops/ops.module';
 import { PaymentsController } from './payments.controller';
 import { AuthModule } from '../auth/auth.module';
-import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 
 
 @Module({
@@ -17,7 +16,6 @@ import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
         LedgerService,
         WalletService,
         PaymentsService,
-        RateLimitGuard,
     ],
     exports: [
         EscrowService,

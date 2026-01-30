@@ -1,5 +1,11 @@
-import { Inject, Injectable, LoggerService } from '@nestjs/common';
-import { ThrottlerException, ThrottlerGuard, ThrottlerLimitDetail, ThrottlerModuleOptions, ThrottlerStorage } from '@nestjs/throttler';
+import { Injectable, LoggerService } from '@nestjs/common';
+import {
+    ThrottlerException,
+    ThrottlerGuard,
+    ThrottlerLimitDetail,
+    ThrottlerModuleOptions,
+    ThrottlerStorage,
+} from '@nestjs/throttler';
 import { ExecutionContext } from '@nestjs/common';
 import { Request } from 'express';
 import { RequestContext } from '@/common/context/request-context';
@@ -7,7 +13,8 @@ import { Reflector } from '@nestjs/core';
 
 @Injectable()
 export class RateLimitGuard extends ThrottlerGuard {
-    constructor(@Inject('LOGGER') private readonly logger: LoggerService,
+    constructor(
+        private readonly logger: LoggerService,
         options: ThrottlerModuleOptions,
         storageService: ThrottlerStorage,
         reflector: Reflector,
@@ -17,9 +24,7 @@ export class RateLimitGuard extends ThrottlerGuard {
 
     protected async getTracker(req: Record<string, any>): Promise<string> {
         const actorId = (req as { user?: { id?: string } }).user?.id;
-        if (actorId) {
-            return `actor:${actorId}`;
-        }
+        if (actorId) return `actor:${actorId}`;
 
         const forwarded = req.headers['x-forwarded-for'];
         const forwardedIp = Array.isArray(forwarded) ? forwarded[0] : forwarded;
@@ -32,7 +37,8 @@ export class RateLimitGuard extends ThrottlerGuard {
     ): Promise<void> {
         const request = context.switchToHttp().getRequest<Request>();
         const actorId = (request as { user?: { id?: string } }).user?.id;
-        const correlationId = request.correlationId ?? RequestContext.getCorrelationId() ?? null;
+        const correlationId =
+            (request as any).correlationId ?? RequestContext.getCorrelationId() ?? null;
 
         this.logger.warn(
             {

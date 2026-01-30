@@ -23,7 +23,7 @@
     import { JwtModule } from '@nestjs/jwt';
     import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     import { LoggingModule } from './common/logging/logging.module';
-    import { ThrottlerModule } from '@nestjs/throttler';
+    import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
     import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
     import { appConfig } from '@/config/app.config';
     import { redisConfig } from '@/config/redis.config';
@@ -33,6 +33,7 @@
     import { workerConfig } from '@/config/worker.config';
     import { campaignConfig } from '@/config/campaign.config';
     import { ConfigType } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 
 
     @Module({
@@ -83,7 +84,13 @@
             HealthModule,
             JwtModule
         ],
-        providers: [JwtAuthGuard],
-        exports: [JwtModule, JwtAuthGuard],
+        providers: [
+            {
+                provide: APP_GUARD,
+                useClass: ThrottlerGuard,
+            },
+            JwtAuthGuard,
+        ],
+        exports: [JwtModule, JwtAuthGuard,],
     })
     export class AppModule { }

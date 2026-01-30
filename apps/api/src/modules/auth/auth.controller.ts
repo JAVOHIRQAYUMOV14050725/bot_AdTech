@@ -5,7 +5,6 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { Actor } from './decorators/actor.decorator';
-import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 import { Throttle } from '@nestjs/throttler';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';
 import { AuthResponseDto, MeResponseDto } from './dto/auth-response.dto';
@@ -39,7 +38,6 @@ export class AuthController {
     }
 
     @Post('login')
-    @UseGuards(RateLimitGuard)
     @Throttle({ default: { limit: 3, ttl: 300_000 } })
     @ApiOperation({ summary: 'Login' })
     @ApiOkResponse({ type: AuthResponseDto })

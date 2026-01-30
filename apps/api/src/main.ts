@@ -1,9 +1,8 @@
+import 'dotenv/config';
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import {
-    BadRequestException,
-    ValidationPipe,
-} from '@nestjs/common';
+import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import compression from 'compression';
 
@@ -25,8 +24,20 @@ import { formatValidationErrors } from './common/validation/validation-errors';
 import { setupSwagger } from './swagger';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { loadEnv } from '@/config/env';
-import { ConfigService, ConfigType } from '@nestjs/config';
+import { ConfigService } from '@nestjs/config';
 import { workerConfig } from '@/config/worker.config';
+
+const registerProcessHandlers = () => {
+    process.on('unhandledRejection', (reason) => {
+        console.error('[process] unhandled rejection', reason);
+        process.exitCode = 1;
+    });
+
+    process.on('uncaughtException', (error) => {
+        console.error('[process] uncaught exception', error);
+        process.exit(1);
+    });
+};
 
 async function startWorker(app: any, logger: StructuredLogger) {
     const prisma = app.get(PrismaService);
@@ -37,12 +48,10 @@ async function startWorker(app: any, logger: StructuredLogger) {
     const configService = app.get(ConfigService);
     const workerSettings = configService.get(workerConfig.KEY, { infer: true });
 
-
     if (!workerSettings) {
         throw new Error('Worker config missing');
     }
 
-    // ✅ Worker started event (structured)
     logger.log(
         {
             event: 'worker_started',
@@ -57,7 +66,6 @@ async function startWorker(app: any, logger: StructuredLogger) {
         'Bootstrap',
     );
 
-
     startPostWorker(
         prisma,
         escrowService,
@@ -70,6 +78,11 @@ async function startWorker(app: any, logger: StructuredLogger) {
 }
 
 async function bootstrap() {
+    registerProcessHandlers();
+
+    // 🔥 PROOF: .env now loaded BEFORE loadEnv()
+    // console.log('[debug] PORT=', process.env.PORT, 'DATABASE_URL=', !!process.env.DATABASE_URL);
+
     const env = loadEnv();
     const logger = buildStructuredLogger();
     const isProd = env.NODE_ENV === 'production';
@@ -77,32 +90,28 @@ async function bootstrap() {
     const workerMode = env.WORKER_MODE;
 
     if (workerMode) {
-        // ✅ bufferLogs: true => Nest init logs are captured
         const app = await NestFactory.createApplicationContext(AppModule, {
+            abortOnError: false,            // ✅ IMPORTANT
             logger: isProd ? false : logger,
             bufferLogs: true,
         });
 
-        // ✅ App-level logger as well (deterministic)
         app.useLogger(logger);
 
         await startWorker(app, logger);
         return;
     }
 
-    // ✅ bufferLogs: true for API mode too
     const app = await NestFactory.create(AppModule, {
+        abortOnError: false,             // ✅ IMPORTANT
         logger: isProd ? false : logger,
         bufferLogs: true,
     });
 
-    // ✅ deterministic logger
     app.useLogger(logger);
 
     app.use(helmet());
     app.use(compression());
-
-    // ✅ correlationId for every request
     app.use(correlationIdMiddleware);
 
     app.useGlobalPipes(
@@ -132,33 +141,26 @@ async function bootstrap() {
     const port = env.PORT;
     await app.listen(port);
 
-    // ✅ API started event (structured)
     logger.log(
         {
             event: 'api_started',
-            data: {
-                port,
-                swagger: true,
-                prefix: 'api',
-            },
+            data: { port, swagger: true, prefix: 'api' },
         },
         'Bootstrap',
     );
 
-    // Optional: worker autostart inside API process (OK for dev, risky for prod)
     if (env.WORKER_AUTOSTART) {
         setImmediate(async () => {
             logger.warn(
-                {
-                    event: 'worker_autostart_enabled',
-                    data: { WORKER_AUTOSTART: true },
-                },
+                { event: 'worker_autostart_enabled', data: { WORKER_AUTOSTART: true } },
                 'Bootstrap',
             );
-
             await startWorker(app, logger);
         });
     }
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+    console.error('[bootstrap] failed to start application', error);
+    process.exit(1);
+});

@@ -5,7 +5,6 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { OpsModule } from '@/modules/ops/ops.module';
 import { AuthModule } from '@/modules/auth/auth.module';
-import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 
 @Module({
     imports: [
@@ -15,7 +14,7 @@ import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
         AuthModule,
     ],
     controllers: [SystemController],
-    providers: [SystemService, RateLimitGuard],
+    providers: [SystemService],
     exports: [SystemService], // ✅ MUHIM
 })
 export class SystemModule { }

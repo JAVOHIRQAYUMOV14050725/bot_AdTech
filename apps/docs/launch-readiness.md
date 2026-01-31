@@ -270,7 +270,34 @@ describe('Ledger/Escrow Integration', () => {
 
 - Use PgBouncer in transaction mode.
 - `DATABASE_URL=postgresql://...` routed through PgBouncer.
-- Pool size: 20 connections per app instance.
+- **Hard cap Prisma pool per process** via URL params:
+  - `connection_limit=5`
+  - `pool_timeout=10`
+  - Example: `DATABASE_URL="postgresql://user:pass@pgbouncer:6432/db?connection_limit=5&pool_timeout=10"`
+- Pool size: 20 connections per app instance (via PgBouncer, not Prisma).
+
+#### PgBouncer Production Config (transaction pooling)
+
+```
+[databases]
+bot_adtech = host=127.0.0.1 port=5432 dbname=bot_adtech pool_size=20 reserve_pool=5
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 6432
+auth_type = scram-sha-256
+auth_file = /etc/pgbouncer/userlist.txt
+pool_mode = transaction
+max_client_conn = 200
+default_pool_size = 20
+reserve_pool_size = 5
+reserve_pool_timeout = 5
+server_reset_query = DISCARD ALL
+idle_transaction_timeout = 30
+log_connections = 1
+log_disconnections = 1
+log_pooler_errors = 1
+```
 
 ### Redis Configuration (BullMQ)
 

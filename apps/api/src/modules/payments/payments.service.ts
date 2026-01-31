@@ -80,7 +80,7 @@ export class PaymentsService {
 
         if (!ledgerSum.equals(balance)) {
             this.logger.error({
-                event: 'ledger_wallet_invariant_violation',
+                event: 'ledger_invariant_failed',
                 alert: true,
                 entityType: 'wallet',
                 entityId: walletId,
@@ -206,6 +206,28 @@ export class PaymentsService {
         });
 
         await this.assertLedgerMatchesWallet(tx, walletId);
+
+        this.logger.log(
+            {
+                event: 'ledger_tx_committed',
+                entityType: 'ledger_entry',
+                entityId: ledgerEntry.id,
+                data: {
+                    walletId,
+                    amount: ledgerEntry.amount.toString(),
+                    type,
+                    reason,
+                    referenceId: referenceId ?? null,
+                    idempotencyKey,
+                    campaignId: campaignId ?? null,
+                    campaignTargetId: campaignTargetId ?? null,
+                    escrowId: escrowId ?? null,
+                    actor: actor ?? null,
+                },
+                correlationId: correlationId ?? undefined,
+            },
+            'PaymentsService',
+        );
 
         return ledgerEntry;
     }
@@ -377,7 +399,7 @@ export class PaymentsService {
                 correlationId: options?.correlationId ?? campaignTargetId,
             });
 
-            await tx.escrow.create({
+            const escrow = await tx.escrow.create({
                 data: {
                     campaignTargetId,
                     advertiserWalletId: advertiserWallet.id,
@@ -386,6 +408,22 @@ export class PaymentsService {
                     status: EscrowStatus.held,
                 },
             });
+
+            this.logger.log(
+                {
+                    event: 'escrow_hold_created',
+                    entityType: 'escrow',
+                    entityId: escrow.id,
+                    data: {
+                        campaignTargetId,
+                        amount: amount.toFixed(2),
+                        advertiserWalletId: advertiserWallet.id,
+                        publisherWalletId: publisherWallet.id,
+                    },
+                    correlationId: options?.correlationId ?? campaignTargetId,
+                },
+                'PaymentsService',
+            );
 
             return { ok: true };
         };

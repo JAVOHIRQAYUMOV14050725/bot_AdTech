@@ -12,7 +12,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed",
     "prisma:validate": "prisma validate",
-    "db:connections": "ts-node scripts/db-connections.ts"
+    "db:connections": "ts-node scripts/db-connections.ts",
+    "test:unit": "ts-node test/unit/run-tests.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, LoggerService } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { RedisService } from '@/modules/redis/redis.service';
@@ -25,6 +25,7 @@ export class HealthService {
         private readonly cronStatusService: CronStatusService,
         private readonly telegramService: TelegramService,
         private readonly jwtService: JwtService,
+        @Inject('LOGGER') private readonly logger: LoggerService,
 
         @Inject(redisConfig.KEY)
         private readonly redisConfig: RedisConfig,
@@ -179,6 +180,16 @@ export class HealthService {
                 'delayed',
                 'active',
                 'failed',
+            );
+            this.logger.log(
+                {
+                    event: 'queue_backlog_snapshot',
+                    data: {
+                        queue: postQueue.name,
+                        counts,
+                    },
+                },
+                'HealthService',
             );
             return {
                 status: 'ok',

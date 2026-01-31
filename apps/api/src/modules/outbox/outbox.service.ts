@@ -28,7 +28,7 @@ export class OutboxService {
         executeAt: Date,
     ) {
         const dedupeKey = `post_enqueue:${postJobId}`;
-        return tx.outboxEvent.upsert({
+        const event = await tx.outboxEvent.upsert({
             where: { dedupeKey },
             update: {},
             create: {
@@ -40,6 +40,23 @@ export class OutboxService {
                 },
             },
         });
+
+        this.logger.log(
+            {
+                event: 'outbox_event_created',
+                entityType: 'outbox_event',
+                entityId: event.id,
+                data: {
+                    eventType: event.eventType,
+                    dedupeKey: event.dedupeKey,
+                    postJobId,
+                    executeAt: executeAt.toISOString(),
+                },
+            },
+            'OutboxService',
+        );
+
+        return event;
     }
 
     async processPending() {
@@ -85,9 +102,12 @@ export class OutboxService {
                 const payload = event.payload as Prisma.JsonObject as PostEnqueuePayload;
                 const executeAt = new Date(payload.executeAt);
                 const delay = Math.max(executeAt.getTime() - Date.now(), 0);
+                const queueName = postQueue.name;
+                const jobName = 'execute-post';
+                const correlationId = `job:${queueName}:${payload.postJobId}`;
 
                 await postQueue.add(
-                    'execute-post',
+                    jobName,
                     { postJobId: payload.postJobId },
                     {
                         jobId: payload.postJobId,
@@ -100,6 +120,25 @@ export class OutboxService {
                         removeOnComplete: true,
                         removeOnFail: false,
                     },
+                );
+
+                this.logger.log(
+                    {
+                        event: 'post_job_enqueued',
+                        correlationId,
+                        entityType: 'post_job',
+                        entityId: payload.postJobId,
+                        data: {
+                            queue: queueName,
+                            jobName,
+                            jobId: payload.postJobId,
+                            attempt: 0,
+                            delay,
+                            durationMs: 0,
+                            maxAttempts: this.workerSettings.postJobMaxAttempts,
+                        },
+                    },
+                    'OutboxService',
                 );
             } else {
                 this.logger.warn(
@@ -121,6 +160,19 @@ export class OutboxService {
                     lastError: null,
                 },
             });
+
+            this.logger.log(
+                {
+                    event: 'outbox_dispatched',
+                    entityType: 'outbox_event',
+                    entityId: event.id,
+                    data: {
+                        eventType: event.eventType,
+                        status: 'completed',
+                    },
+                },
+                'OutboxService',
+            );
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             await this.prisma.outboxEvent.update({

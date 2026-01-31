@@ -80,11 +80,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
             return { message: 'Request failed' };
         })();
 
+        const correlationId =
+            request.correlationId ?? RequestContext.getCorrelationId() ?? null;
         const payload = sanitizeForJson({
             statusCode: status,
             timestamp: new Date().toISOString(),
             path: request.originalUrl,
-            correlationId: request.correlationId ?? RequestContext.getCorrelationId() ?? null,
+            correlationId,
             error: normalizedError,
         });
 
@@ -94,6 +96,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             && request.originalUrl === '/favicon.ico';
         const logPayload = {
             event: 'http_exception',
+            correlationId,
             data: {
                 method: request.method,
                 path: request.originalUrl,

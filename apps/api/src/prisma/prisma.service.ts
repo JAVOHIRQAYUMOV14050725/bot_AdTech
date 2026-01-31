@@ -1,12 +1,21 @@
-import { INestApplication, INestApplicationContext, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+    INestApplication,
+    INestApplicationContext,
+    Injectable,
+    LoggerService,
+    OnModuleDestroy,
+    OnModuleInit,
+    Inject,
+} from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { RequestContext } from '@/common/context/request-context';
 
 @Injectable()
 export class PrismaService
     extends PrismaClient
     implements OnModuleInit, OnModuleDestroy {
 
-    constructor() {
+    constructor(@Inject('LOGGER') private readonly logger: LoggerService) {
         const databaseUrl = process.env.DATABASE_URL ?? '';
         const url = new URL(databaseUrl);
         if (!url.searchParams.has('connection_limit')) {
@@ -23,10 +32,70 @@ export class PrismaService
                 },
             },
         });
+
+        this.$on('error', (event) => {
+            const message = event.message ?? '';
+            const correlationId = RequestContext.getCorrelationId();
+            if (/too many clients/i.test(message)) {
+                this.logger.error(
+                    {
+                        event: 'too_many_clients',
+                        alert: true,
+                        correlationId: correlationId ?? undefined,
+                        data: { message },
+                    },
+                    undefined,
+                    'PrismaService',
+                );
+                return;
+            }
+
+            if (/timeout|timed out|ETIMEDOUT/i.test(message)) {
+                this.logger.error(
+                    {
+                        event: 'pg_timeout',
+                        alert: true,
+                        correlationId: correlationId ?? undefined,
+                        data: { message },
+                    },
+                    undefined,
+                    'PrismaService',
+                );
+            }
+        });
     }
 
     async onModuleInit() {
-        await this.$connect();
+        try {
+            await this.$connect();
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const correlationId = RequestContext.getCorrelationId();
+            if (/too many clients/i.test(message)) {
+                this.logger.error(
+                    {
+                        event: 'too_many_clients',
+                        alert: true,
+                        correlationId: correlationId ?? undefined,
+                        data: { message },
+                    },
+                    err instanceof Error ? err.stack : undefined,
+                    'PrismaService',
+                );
+            } else if (/timeout|timed out|ETIMEDOUT/i.test(message)) {
+                this.logger.error(
+                    {
+                        event: 'pg_timeout',
+                        alert: true,
+                        correlationId: correlationId ?? undefined,
+                        data: { message },
+                    },
+                    err instanceof Error ? err.stack : undefined,
+                    'PrismaService',
+                );
+            }
+            throw err;
+        }
     }
 
     async onModuleDestroy() {

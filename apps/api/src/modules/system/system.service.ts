@@ -334,13 +334,25 @@ export class SystemService {
         `);
 
         const total = rows.reduce((sum, row) => sum + row.count, 0);
+        const byState = rows.map((row) => ({
+            state: row.state ?? 'unknown',
+            count: row.count,
+        }));
+
+        this.logger.log(
+            {
+                event: 'db_connections_snapshot',
+                data: {
+                    total,
+                    byState,
+                },
+            },
+            'SystemService',
+        );
 
         return {
             total,
-            byState: rows.map((row) => ({
-                state: row.state ?? 'unknown',
-                count: row.count,
-            })),
+            byState,
             generatedAt: new Date().toISOString(),
         };
     }

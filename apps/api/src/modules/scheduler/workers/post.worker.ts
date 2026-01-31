@@ -63,6 +63,12 @@ export function startPostWorker(
                 const { postJobId } = job.data;
                 const now = new Date();
                 const maxAttempts = job.opts.attempts ?? config.postJobMaxAttempts;
+                const attempt = job.attemptsMade + 1;
+                const queueName = job.queueName;
+                const jobName = job.name;
+                const jobId = job.id;
+                const delay = job.opts.delay ?? 0;
+                const startTime = process.hrtime.bigint();
 
                 const reservation = await prisma.postJob.updateMany({
                     where: { id: postJobId, status: PostJobStatus.queued },
@@ -75,10 +81,23 @@ export function startPostWorker(
                 });
 
                 if (reservation.count === 0) {
+                    const durationMs =
+                        Number(process.hrtime.bigint() - startTime) / 1_000_000;
                     logger.warn(
                         {
                             event: 'post_job_reservation_failed',
                             entityType: 'post_job',
+                            entityId: postJobId,
+                            data: {
+                                queue: queueName,
+                                jobName,
+                                jobId,
+                                attempt,
+                                maxAttempts,
+                                delay,
+                                durationMs,
+                                postJobId,
+                            },
                         },
                         'PostWorker',
                     );
@@ -93,16 +112,51 @@ export function startPostWorker(
                     throw new Error('PostJob not found');
                 }
 
+                logger.log(
+                    {
+                        event: 'post_attempt_started',
+                        entityType: 'post_job',
+                        entityId: postJob.id,
+                        data: {
+                            queue: queueName,
+                            jobName,
+                            jobId,
+                            attempt,
+                            maxAttempts,
+                            delay,
+                            durationMs: 0,
+                            postJobId: postJob.id,
+                            campaignTargetId: postJob.campaignTargetId,
+                            targetId: postJob.campaignTargetId,
+                            campaignId: postJob.campaignTarget?.campaignId ?? null,
+                        },
+                    },
+                    'PostWorker',
+                );
+
                 try {
                     const workerEnabled = await killSwitchService.isEnabled(KillSwitchKey.worker_post);
                     if (!workerEnabled) {
                         const delayMs = 5 * 60 * 1000;
+                        const durationMs =
+                            Number(process.hrtime.bigint() - startTime) / 1_000_000;
                         logger.warn(
                             {
                                 event: 'kill_switch_blocked',
                                 entityType: 'post_job',
                                 entityId: postJob.id,
-                                data: { key: 'worker_post', delayMs },
+                                data: {
+                                    key: 'worker_post',
+                                    delayMs,
+                                    queue: queueName,
+                                    jobName,
+                                    jobId,
+                                    attempt,
+                                    maxAttempts,
+                                    delay,
+                                    durationMs,
+                                    postJobId: postJob.id,
+                                },
                             },
                             'PostWorker',
                         );
@@ -113,12 +167,25 @@ export function startPostWorker(
                     const telegramEnabled = await killSwitchService.isEnabled(KillSwitchKey.telegram_posting);
                     if (!telegramEnabled) {
                         const delayMs = 5 * 60 * 1000;
+                        const durationMs =
+                            Number(process.hrtime.bigint() - startTime) / 1_000_000;
                         logger.warn(
                             {
                                 event: 'kill_switch_blocked',
                                 entityType: 'post_job',
                                 entityId: postJob.id,
-                                data: { key: 'telegram_posting', delayMs },
+                                data: {
+                                    key: 'telegram_posting',
+                                    delayMs,
+                                    queue: queueName,
+                                    jobName,
+                                    jobId,
+                                    attempt,
+                                    maxAttempts,
+                                    delay,
+                                    durationMs,
+                                    postJobId: postJob.id,
+                                },
                             },
                             'PostWorker',
                         );
@@ -162,12 +229,48 @@ export function startPostWorker(
                         });
                     });
 
+                    const durationMs =
+                        Number(process.hrtime.bigint() - startTime) / 1_000_000;
                     logger.log(
                         {
                             event: 'post_job_sent_success',
                             entityType: 'post_job',
                             entityId: postJob.id,
-                            data: { telegramMessageId: telegramResult.telegramMessageId ?? null },
+                            data: {
+                                telegramMessageId: telegramResult.telegramMessageId ?? null,
+                                queue: queueName,
+                                jobName,
+                                jobId,
+                                attempt,
+                                maxAttempts,
+                                delay,
+                                durationMs,
+                                postJobId: postJob.id,
+                                campaignTargetId: postJob.campaignTargetId,
+                                targetId: postJob.campaignTargetId,
+                                campaignId: postJob.campaignTarget?.campaignId ?? null,
+                            },
+                        },
+                        'PostWorker',
+                    );
+                    logger.log(
+                        {
+                            event: 'post_attempt_succeeded',
+                            entityType: 'post_job',
+                            entityId: postJob.id,
+                            data: {
+                                queue: queueName,
+                                jobName,
+                                jobId,
+                                attempt,
+                                maxAttempts,
+                                delay,
+                                durationMs,
+                                postJobId: postJob.id,
+                                campaignTargetId: postJob.campaignTargetId,
+                                targetId: postJob.campaignTargetId,
+                                campaignId: postJob.campaignTarget?.campaignId ?? null,
+                            },
                         },
                         'PostWorker',
                     );
@@ -179,6 +282,9 @@ export function startPostWorker(
                     const isPermanent = failure?.permanent ?? false;
                     const attemptsMade = job.attemptsMade + 1;
                     const shouldRetry = !isPermanent && attemptsMade < maxAttempts;
+                    const durationMs =
+                        Number(process.hrtime.bigint() - startTime) / 1_000_000;
+                    const attemptsRemaining = maxAttempts - attemptsMade;
 
                     await prisma.$transaction(async (tx) => {
                         assertPostJobTransition({
@@ -219,13 +325,49 @@ export function startPostWorker(
                             entityType: 'post_job',
                             entityId: postJob.id,
                             data: {
-                                attemptsMade,
+                                queue: queueName,
+                                jobName,
+                                jobId,
+                                attempt,
                                 maxAttempts,
+                                delay,
+                                durationMs,
+                                attemptsMade,
                                 shouldRetry,
                                 permanent: isPermanent,
                                 telegramReason: failure?.reason ?? null,
                                 retryAfterSeconds: failure?.retryAfterSeconds ?? null,
                                 error: err instanceof Error ? err.message : String(err),
+                                postJobId: postJob.id,
+                                campaignTargetId: postJob.campaignTargetId,
+                                targetId: postJob.campaignTargetId,
+                                campaignId: postJob.campaignTarget?.campaignId ?? null,
+                            },
+                        },
+                        err instanceof Error ? err.stack : undefined,
+                        'PostWorker',
+                    );
+
+                    logger.error(
+                        {
+                            event: 'post_attempt_failed',
+                            alert: attemptsRemaining <= 1,
+                            entityType: 'post_job',
+                            entityId: postJob.id,
+                            data: {
+                                queue: queueName,
+                                jobName,
+                                jobId,
+                                attempt,
+                                maxAttempts,
+                                delay,
+                                durationMs,
+                                attemptsRemaining,
+                                shouldRetry,
+                                postJobId: postJob.id,
+                                campaignTargetId: postJob.campaignTargetId,
+                                targetId: postJob.campaignTargetId,
+                                campaignId: postJob.campaignTarget?.campaignId ?? null,
                             },
                         },
                         err instanceof Error ? err.stack : undefined,
@@ -259,7 +401,16 @@ export function startPostWorker(
                         alert: true,
                         entityType: 'post_job',
                         entityId: String(job.data.postJobId),
-                        data: { jobId: job.id, attemptsMade: job.attemptsMade },
+                        correlationId: `job:${job.queueName}:${job.id}`,
+                        data: {
+                            queue: job.queueName,
+                            jobName: job.name,
+                            jobId: job.id,
+                            attempt: job.attemptsMade,
+                            maxAttempts,
+                            delay: job.opts.delay ?? 0,
+                            durationMs: null,
+                        },
                     },
                     'PostWorker',
                 );
@@ -270,8 +421,15 @@ export function startPostWorker(
                         alert: true,
                         entityType: 'post_job',
                         entityId: String(job.data.postJobId),
+                        correlationId: `job:${job.queueName}:${job.id}`,
                         data: {
+                            queue: job.queueName,
+                            jobName: job.name,
                             jobId: job.id,
+                            attempt: job.attemptsMade,
+                            maxAttempts,
+                            delay: job.opts.delay ?? 0,
+                            durationMs: null,
                             error: dlqError instanceof Error ? dlqError.message : String(dlqError),
                         },
                     },

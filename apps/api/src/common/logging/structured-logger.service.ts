@@ -1,12 +1,19 @@
 import { LoggerService, LogLevel } from '@nestjs/common';
-import { sanitizeForJson } from '@/common/serialization/sanitize';
-import { RequestContext } from '@/common/context/request-context';
-import { loadEnv } from '@/config/env';
+import { sanitizeForJson } from '../serialization/sanitize';
+import { RequestContext } from '../context/request-context';
+import { loadEnv } from '../../config/env';
 
 /**
  * 🔥 BANK-GRADE LOG PAYLOAD
  */
-export type LogSeverity = 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+export type LogSeverity = 'debug' | 'info' | 'warn' | 'error';
+
+export type StructuredLogError = {
+    name?: string;
+    message?: string;
+    stack?: string;
+    code?: string;
+};
 
 export type StructuredLogPayload = {
     timestamp: string;
@@ -19,7 +26,7 @@ export type StructuredLogPayload = {
     message?: unknown;
 
     /** Traceability */
-    correlationId?: string | null;
+    correlationId: string | null;
 
     /** WHO */
     actorId?: string;
@@ -30,10 +37,11 @@ export type StructuredLogPayload = {
     entityId?: string;
 
     /** Context */
-    context?: string;
+    context: string;
 
     /** Extra data (sanitized) */
     data?: unknown;
+    err?: StructuredLogError;
 
     /** Alerting */
     alert?: boolean;
@@ -48,7 +56,7 @@ const MAX_OBJECT_KEYS = 100;
 const MAX_DEPTH = 6;
 
 const SENSITIVE_KEY_PATTERN =
-    /(password|passphrase|token|secret|authorization|api[-_]?key|jwt|cookie|session|telegram|database_url|redis_url)/i;
+    /(password|passphrase|token|refresh[_-]?token|access[_-]?token|secret|authorization|api[-_]?key|x-api-key|jwt|cookie|set-cookie|session|telegram|bot[_-]?token|database[_-]?url|redis[_-]?url)/i;
 const JWT_PATTERN = /(?:^|\s)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:$|\s)/;
 
 const normalizeLevel = (level: LogLevel): LogSeverity => {
@@ -57,6 +65,8 @@ const normalizeLevel = (level: LogLevel): LogSeverity => {
             return 'info';
         case 'verbose':
             return 'debug';
+        case 'fatal':
+            return 'error';
         default:
             return level;
     }
@@ -155,7 +165,7 @@ const redactValue = (value: unknown): unknown => {
     return value;
 };
 
-const prepareLogValue = (value: unknown): unknown => {
+export const prepareLogValue = (value: unknown): unknown => {
     const sanitized = sanitizeForJson(value);
     const redacted = redactValue(sanitized);
     return truncateValue(redacted);
@@ -251,12 +261,13 @@ export class StructuredLogger implements LoggerService {
         const messageValue = prepareLogValue(message.message);
         const dataValue = prepareLogValue(message.data);
 
-        const errorPayload =
+        const errorSource =
             message.message instanceof Error
-                ? serializeError(message.message)
+                ? message.message
                 : message.data instanceof Error
-                    ? serializeError(message.data)
+                    ? message.data
                     : undefined;
+        const errorPayload = errorSource ? serializeError(errorSource) : undefined;
 
         const resolvedStack =
             stack
@@ -273,6 +284,17 @@ export class StructuredLogger implements LoggerService {
                     ? { value: dataValue }
                     : undefined;
 
+        const errPayload: StructuredLogError | undefined = errorPayload
+            ? {
+                name: errorPayload.name,
+                message: errorPayload.message,
+                stack: errorPayload.stack,
+                code: typeof (errorSource as { code?: unknown } | undefined)?.code === 'string'
+                    ? String((errorSource as { code?: unknown }).code)
+                    : undefined,
+            }
+            : undefined;
+
         const payload: StructuredLogPayload = {
             timestamp: new Date().toISOString(),
             level: normalizeLevel(level),
@@ -286,10 +308,11 @@ export class StructuredLogger implements LoggerService {
             entityType: message.entityType,
             entityId: message.entityId,
 
-            context,
+            context: message.context ?? context ?? 'unknown',
             data: errorPayload
                 ? { ...(baseData ?? {}), error: errorPayload }
                 : baseData ?? dataValue,
+            err: errPayload,
 
             alert: message.alert ?? false,
             stack: resolvedStack,

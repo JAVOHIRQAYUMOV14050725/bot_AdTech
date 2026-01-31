@@ -49,7 +49,7 @@ export const buildCronCorrelationId = (jobName: string) =>
 export const buildWorkerCorrelationId = (
     queue: string,
     jobId: string | number | undefined,
-) => `worker:${queue}:${jobId ?? randomUUID()}`;
+) => `job:${queue}:${jobId ?? randomUUID()}`;
 
 export const runWithCronContext = async <T>(
     jobName: string,

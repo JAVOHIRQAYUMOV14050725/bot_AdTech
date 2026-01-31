@@ -41,6 +41,7 @@ export const envSchema = z.object({
     SUPER_ADMIN_PASSWORD: z.string().optional(),
     SUPER_ADMIN_BOOTSTRAP_SECRET: z.string().optional(),
     LOG_LEVEL: z.string().optional(),
+    LOG_HTTP_HEALTH: booleanString.default('true'),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;    

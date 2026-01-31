@@ -4,7 +4,7 @@ import { SystemService } from '@/modules/system/system.service';
 import { OutboxService } from '@/modules/outbox/outbox.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { CronStatusService } from './cron-status.service';
-import { runWithCronContext } from '@/common/context/request-context';
+import { RequestContext, runWithCronContext } from '@/common/context/request-context';
 
 @Injectable()
 export class SchedulerService {
@@ -135,7 +135,18 @@ export class SchedulerService {
                 return;
             }
 
-            this.logger.warn('[CRON] Ledger invariant check');
+            this.logger.warn(
+                {
+                    event: 'ledger_invariant_check_triggered',
+                    context: 'SchedulerService',
+                    correlationId: RequestContext.getCorrelationId(),
+                    alert: false,
+                    data: {
+                        source: 'cron',
+                        jobName: 'ledger_invariant_check',
+                    },
+                },
+            );
             try {
                 await this.systemService.checkLedgerInvariant();
                 await this.cronStatusService.recordRun({

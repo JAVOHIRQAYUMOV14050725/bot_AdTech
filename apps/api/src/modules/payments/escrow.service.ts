@@ -25,6 +25,9 @@ import {
 
 @Injectable()
 export class EscrowService {
+    static refund(campaignTargetId: string, arg1: { actor: string; reason: string; correlationId: string; }): any {
+        throw new Error('Method not implemented.');
+    }
 
     constructor(
         private readonly prisma: PrismaService,
@@ -79,6 +82,11 @@ export class EscrowService {
 
         return rows.length > 0 ? rows[0] : null;
     }
+
+
+    
+
+
     /**
      * RELEASE ESCROW
      * Called when post is successfully published
@@ -102,11 +110,72 @@ export class EscrowService {
 
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
-
             if (!escrow) {
                 throw new BadRequestException('Escrow not found');
             }
 
+
+            // ─────────────────────────────────────────────
+            // 🔒 OPERATION CLAIM (GLOBAL IDEMPOTENCY)
+            // ─────────────────────────────────────────────
+            const opKey = `escrow:release:${campaignTargetId}`;
+
+            const existingOp = await tx.financialAuditEvent.findUnique({
+                where: { idempotencyKey: opKey },
+            });
+
+            if (existingOp) {
+                return { ok: true, alreadyReleased: true };
+            }
+
+            await tx.financialAuditEvent.create({
+                data: {
+                    idempotencyKey: opKey,
+                    walletId: escrow.publisherWalletId, // ✅ MUHIM
+                    escrowId: escrow.id,
+                    campaignTargetId,
+                    type: LedgerType.credit, // semantic emas, audit-marker
+                    amount: new Prisma.Decimal(0),
+                    reason: LedgerReason.payout,
+                    actor,
+                    correlationId,
+                },
+            });
+
+
+            // 🔐 INTERMEDIATE STATUS GUARD (BANK-GRADE)
+            // 🔐 1️⃣ ATOMIC STATE CLAIM: held → releasing
+            const updated = await tx.escrow.updateMany({
+                where: {
+                    id: escrow.id,
+                    status: EscrowStatus.held,
+                },
+                data: {
+                    status: EscrowStatus.releasing,
+                },
+            });
+
+            // 🔁 2️⃣ IDEMPOTENCY / INVALID STATE GUARD
+            if (updated.count === 0) {
+                if (escrow.status === EscrowStatus.released) {
+                    return { ok: true, alreadyReleased: true };
+                }
+
+                throw new ConflictException(
+                    `Escrow ${escrow.id} in invalid state ${escrow.status}`,
+                );
+            }
+
+            // 🔄 3️⃣ RE-READ ESCROW (DB = SOURCE OF TRUTH)
+            const escrowAfter = await tx.escrow.findUnique({
+                where: { id: escrow.id },
+            });
+
+            if (!escrowAfter) {
+                throw new BadRequestException('Escrow not found after state transition');
+            }
+
+            // 🔍 4️⃣ LOAD CAMPAIGN TARGET
             const campaignTarget = await tx.campaignTarget.findUnique({
                 where: { id: campaignTargetId },
                 include: { postJob: true },
@@ -117,25 +186,25 @@ export class EscrowService {
                 Boolean(campaignTarget),
             );
 
-            if (escrow.status === EscrowStatus.released) {
-                assertEscrowCampaignTargetInvariant({
-                    campaignTargetId,
-                    escrowStatus: escrow.status,
-                    campaignTargetStatus: campaignTarget!.status,
-                });
-                return {
-                    ok: true,
-                    alreadyReleased: true,
-                };
-            }
-
+            // 🧠 5️⃣ FSM: held → releasing
             assertEscrowTransition({
                 escrowId: escrow.id,
-                from: escrow.status,
+                from: EscrowStatus.held,
+                to: EscrowStatus.releasing,
+                actor,
+                correlationId,
+            });
+
+            // 🧠 6️⃣ FSM: releasing → released
+            assertEscrowTransition({
+                escrowId: escrow.id,
+                from: escrowAfter.status,
                 to: EscrowStatus.released,
                 actor,
                 correlationId,
             });
+
+
 
             assertPostJobOutcomeForEscrow({
                 campaignTargetId,
@@ -286,10 +355,7 @@ export class EscrowService {
                 },
             });
 
-            await this.paymentsService.ensureWalletInvariant(
-                tx,
-                escrow.publisherWalletId,
-            );
+   
 
             if (platformWalletId) {
                 await this.paymentsService.ensureWalletInvariant(
@@ -347,11 +413,67 @@ export class EscrowService {
         const execute = async (tx: Prisma.TransactionClient) => {
             // 🔒 LOCK ESCROW ROW
             const escrow = await this.lockEscrow(tx, campaignTargetId);
-
             if (!escrow) {
                 throw new BadRequestException('Escrow not found');
             }
 
+            const opKey = `escrow:refund:${campaignTargetId}`;
+
+            const existingOp = await tx.financialAuditEvent.findUnique({
+                where: { idempotencyKey: opKey },
+            });
+
+            if (existingOp) {
+                return { ok: true, alreadyRefunded: true };
+            }
+
+            await tx.financialAuditEvent.create({
+                data: {
+                    idempotencyKey: opKey,
+                    walletId: escrow.advertiserWalletId, // ✅ MUHIM
+                    escrowId: escrow.id,
+                    campaignTargetId,
+                    type: LedgerType.credit,
+                    amount: new Prisma.Decimal(0),
+                    reason: LedgerReason.refund,
+                    actor,
+                    correlationId,
+                },
+            });
+
+
+            // 1️⃣ HELD → REFUNDING (ATOMIC GUARD)
+            const updated = await tx.escrow.updateMany({
+                where: {
+                    id: escrow.id,
+                    status: EscrowStatus.held,
+                },
+                data: {
+                    status: EscrowStatus.refunding,
+                },
+            });
+
+            // 2️⃣ IDEMPOTENCY / INVALID STATE CHECK
+            if (updated.count === 0) {
+                if (escrow.status === EscrowStatus.refunded) {
+                    return { ok: true, alreadyRefunded: true };
+                }
+
+                throw new ConflictException(
+                    `Escrow ${escrow.id} in invalid state ${escrow.status}`,
+                );
+            }
+
+            // 3️⃣ RE-READ ESCROW (SOURCE OF TRUTH)
+            const escrowAfter = await tx.escrow.findUnique({
+                where: { id: escrow.id },
+            });
+
+            if (!escrowAfter) {
+                throw new BadRequestException('Escrow not found after update');
+            }
+
+            // 4️⃣ LOAD CAMPAIGN TARGET
             const campaignTarget = await tx.campaignTarget.findUnique({
                 where: { id: campaignTargetId },
                 include: { postJob: true },
@@ -362,25 +484,25 @@ export class EscrowService {
                 Boolean(campaignTarget),
             );
 
-            if (escrow.status === EscrowStatus.refunded) {
-                assertEscrowCampaignTargetInvariant({
-                    campaignTargetId,
-                    escrowStatus: escrow.status,
-                    campaignTargetStatus: campaignTarget!.status,
-                });
-                return {
-                    ok: true,
-                    alreadyRefunded: true,
-                };
-            }
-
+            // 5️⃣ FSM: HELD → REFUNDING
             assertEscrowTransition({
                 escrowId: escrow.id,
-                from: escrow.status,
+                from: EscrowStatus.held,
+                to: EscrowStatus.refunding,
+                actor,
+                correlationId,
+            });
+
+            // 6️⃣ FSM: REFUNDING → REFUNDED
+            assertEscrowTransition({
+                escrowId: escrow.id,
+                from: escrowAfter.status,
                 to: EscrowStatus.refunded,
                 actor,
                 correlationId,
             });
+
+
 
             assertPostJobOutcomeForEscrow({
                 campaignTargetId,

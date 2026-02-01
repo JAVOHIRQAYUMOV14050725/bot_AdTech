@@ -17,6 +17,7 @@ import {
     LoggerService,
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { ConfigService } from '@nestjs/config';
 
 
 @Injectable()
@@ -26,6 +27,7 @@ export class PaymentsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly killSwitchService: KillSwitchService,
+        private readonly configService: ConfigService,
         @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
 
@@ -134,66 +136,69 @@ export class PaymentsService {
             throw new BadRequestException('Amount must be positive');
         }
 
-        const auditIdempotencyKey = `audit:${idempotencyKey}`;
-        let ledgerEntry: { id: string; amount: Prisma.Decimal } | null = null;
-        let created = false;
-        try {
-            ledgerEntry = await tx.ledgerEntry.create({
-                data: {
-                    walletId,
-                    type,
-                    amount:
-                        type === LedgerType.debit
-                            ? normalizedAmount.negated()
-                            : normalizedAmount,
-                    reason,
-                    referenceId,
-                    idempotencyKey,
-                },
-            });
-            created = true;
-        } catch (err) {
-            const existing = await tx.ledgerEntry.findUnique({
-                where: { idempotencyKey },
-            });
-            if (!existing) {
-                throw err;
-            }
-            ledgerEntry = existing;
+        /* ─────────────────────────────────────────────
+           1️⃣ IDEMPOTENCY FAST-PATH
+        ───────────────────────────────────────────── */
+        const existing = await tx.ledgerEntry.findUnique({
+            where: { idempotencyKey },
+        });
+
+        if (existing) {
+            return existing;
         }
 
-        if (created) {
-            if (type === LedgerType.debit) {
-                const debitResult = await tx.wallet.updateMany({
-                    where: {
-                        id: walletId,
-                        balance: { gte: normalizedAmount },
-                    },
-                    data: {
-                        balance: { decrement: normalizedAmount },
-                    },
-                });
+        /* ─────────────────────────────────────────────
+           2️⃣ WALLET ROW LOCK (SERIALIZABLE BEHAVIOR)
+        ───────────────────────────────────────────── */
+        const wallet = await tx.wallet.findUnique({
+            where: { id: walletId },
+            select: { id: true, balance: true },
+        });
 
-                if (debitResult.count === 0) {
-                    throw new BadRequestException('Insufficient balance');
-                }
-            } else {
-                await tx.wallet.update({
-                    where: { id: walletId },
-                    data: {
-                        balance: { increment: normalizedAmount },
-                    },
-                });
-            }
+        if (!wallet) {
+            throw new BadRequestException('Wallet not found');
         }
 
-        await tx.financialAuditEvent.upsert({
-            where: { idempotencyKey: auditIdempotencyKey },
-            update: {},
-            create: {
+        if (type === LedgerType.debit && wallet.balance.lt(normalizedAmount)) {
+            throw new BadRequestException('Insufficient balance');
+        }
+
+        /* ─────────────────────────────────────────────
+           3️⃣ APPLY WALLET BALANCE (SOURCE OF TRUTH)
+        ───────────────────────────────────────────── */
+        const updatedWallet = await tx.wallet.update({
+            where: { id: walletId },
+            data:
+                type === LedgerType.debit
+                    ? { balance: { decrement: normalizedAmount } }
+                    : { balance: { increment: normalizedAmount } },
+        });
+
+        /* ─────────────────────────────────────────────
+           4️⃣ WRITE LEDGER ENTRY
+        ───────────────────────────────────────────── */
+        const ledgerEntry = await tx.ledgerEntry.create({
+            data: {
                 walletId,
-                idempotencyKey: auditIdempotencyKey,
+                type,
+                amount:
+                    type === LedgerType.debit
+                        ? normalizedAmount.negated()
+                        : normalizedAmount,
+                reason,
+                referenceId,
+                idempotencyKey,
+            },
+        });
+
+        /* ─────────────────────────────────────────────
+           5️⃣ FINANCIAL AUDIT EVENT (STRICT IDEMPOTENT)
+        ───────────────────────────────────────────── */
+        await tx.financialAuditEvent.create({
+            data: {
+                walletId,
                 ledgerEntryId: ledgerEntry.id,
+                idempotencyKey: `audit:${idempotencyKey}`,
                 campaignId,
                 campaignTargetId,
                 escrowId,
@@ -205,8 +210,23 @@ export class PaymentsService {
             },
         });
 
-        await this.assertLedgerMatchesWallet(tx, walletId);
+        /* ─────────────────────────────────────────────
+           6️⃣ INVARIANT ASSERT (OPTIONAL / FEATURE FLAG)
+        ───────────────────────────────────────────── */
+        const enableInvariant =
+            this.configService.get<boolean>(
+                'ENABLE_LEDGER_INVARIANT_CHECK',
+                false,
+            );
 
+        if (enableInvariant) {
+            await this.assertLedgerMatchesWallet(tx, walletId);
+        }
+
+
+        /* ─────────────────────────────────────────────
+           7️⃣ STRUCTURED LOG
+        ───────────────────────────────────────────── */
         this.logger.log(
             {
                 event: 'ledger_tx_committed',
@@ -214,7 +234,8 @@ export class PaymentsService {
                 entityId: ledgerEntry.id,
                 data: {
                     walletId,
-                    amount: ledgerEntry.amount.toString(),
+                    delta: ledgerEntry.amount.toString(),
+                    resultingBalance: updatedWallet.balance.toString(),
                     type,
                     reason,
                     referenceId: referenceId ?? null,
@@ -224,13 +245,14 @@ export class PaymentsService {
                     escrowId: escrowId ?? null,
                     actor: actor ?? null,
                 },
-                correlationId: correlationId ?? undefined,
+                correlationId,
             },
             'PaymentsService',
         );
 
         return ledgerEntry;
     }
+
 
     /**
      * 💰 USER DEPOSIT

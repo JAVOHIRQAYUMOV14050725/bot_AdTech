@@ -93,12 +93,22 @@ const postJobTransitions: TransitionMap<PostJobStatus> = {
 
 const escrowTransitions: TransitionMap<EscrowStatus> = {
     [EscrowStatus.held]: {
+        [EscrowStatus.releasing]: { actors: ['worker', 'system', 'admin'] },
+        [EscrowStatus.refunding]: { actors: ['worker', 'system', 'admin'] },
+    },
+
+    [EscrowStatus.releasing]: {
         [EscrowStatus.released]: { actors: ['worker', 'system', 'admin'] },
+    },
+
+    [EscrowStatus.refunding]: {
         [EscrowStatus.refunded]: { actors: ['worker', 'system', 'admin'] },
     },
+
     [EscrowStatus.released]: {},
     [EscrowStatus.refunded]: {},
 };
+
 
 type TransitionPayload<S extends string> = {
     entity: string;

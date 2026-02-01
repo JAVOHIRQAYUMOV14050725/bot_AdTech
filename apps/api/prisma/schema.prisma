@@ -81,7 +81,9 @@ enum LedgerReason {
 
 enum EscrowStatus {
   held
+  releasing
   released
+  refunding
   refunded
 }
 

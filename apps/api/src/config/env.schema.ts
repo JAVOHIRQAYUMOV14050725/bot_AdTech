@@ -29,6 +29,7 @@ export const envSchema = z.object({
     WORKER_AUTOSTART: booleanString.default('false'),
     ENABLE_DEBUG: booleanString.default('false'),
     ENABLE_SWAGGER: booleanString.default('false'),
+    ENABLE_LEDGER_INVARIANT_CHECK:booleanString.default('true'),
     AUTH_RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(5),
     AUTH_RATE_LIMIT_TTL_MS: z.coerce.number().int().positive().default(60000),
     BCRYPT_SALT_ROUNDS: z.coerce.number().int().positive().default(10),

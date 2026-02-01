@@ -5,6 +5,8 @@
     "lib": ["ES2021"],
     "outDir": "./dist",
     "rootDir": "./src",
+    "types": ["node", "jest"],
+
 
     "strict": true,
     "strictPropertyInitialization": false,
@@ -18,6 +20,6 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "test/integration/escrow.race.e2e-spec.ts"],
   "exclude": ["node_modules", "dist"]
 }

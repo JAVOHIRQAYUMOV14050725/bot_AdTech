@@ -15,7 +15,11 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
     let escrowService: EscrowService;
 
     beforeAll(async () => {
-        prisma = new PrismaService();
+        beforeAll(async () => {
+            const ctx = await createPaymentsTestModule();
+            prisma = ctx.prisma;
+            escrowService = ctx.escrowService;
+        });
         await prisma.$connect();
         const killSwitchService = new KillSwitchService(prisma);
         paymentsService = new PaymentsService(prisma, killSwitchService);
@@ -47,7 +51,11 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
             },
         });
 
-        await paymentsService.deposit(user.id, new Prisma.Decimal(50));
+        await paymentsService.deposit(
+            user.id,
+            new Prisma.Decimal(50),
+            'test-deposit'
+        );
 
         const dbWallet = await prisma.wallet.findUnique({
             where: { id: wallet.id },

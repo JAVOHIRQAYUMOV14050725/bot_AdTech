@@ -14,10 +14,13 @@ describe('CorrelationIdMiddleware', () => {
 
         expect(req.correlationId).toBeDefined();
         expect(req.correlationId).not.toEqual('');
-        expect(res.setHeader).toHaveBeenCalledWith(
-            'x-correlation-id',
-            req.correlationId,
+        const calls = (res.setHeader as jest.Mock).mock.calls;
+        const headerCall = calls.find(([key]) =>
+            key.toLowerCase() === 'x-correlation-id'
         );
+        expect(headerCall).toBeDefined();
+        expect(headerCall![1]).toBe(req.correlationId);
+
         expect(contextCorrelationId).toEqual(req.correlationId);
     });
 
@@ -34,10 +37,13 @@ describe('CorrelationIdMiddleware', () => {
         });
 
         expect(req.correlationId).toEqual(incomingCorrelationId);
-        expect(res.setHeader).toHaveBeenCalledWith(
-            'x-correlation-id',
-            incomingCorrelationId,
+        const calls = (res.setHeader as jest.Mock).mock.calls;
+        const headerCall = calls.find(([key]) =>
+            key.toLowerCase() === 'x-correlation-id'
         );
+        expect(headerCall).toBeDefined();
+        expect(headerCall![1]).toBe(req.correlationId);
+
         expect(contextCorrelationId).toEqual(incomingCorrelationId);
     });
 });

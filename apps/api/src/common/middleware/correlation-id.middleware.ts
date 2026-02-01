@@ -13,14 +13,22 @@ export const correlationIdMiddleware = (
     response: Response,
     next: NextFunction,
 ): void => {
-    const incoming = request.headers['x-correlation-id'];
-    const correlationId =
-        isValidCorrelationId(incoming)
-            ? incoming
-            : randomUUID();
+    const rawHeader =
+        request.headers['x-correlation-id'] ??
+        request.headers['X-Correlation-Id'];
+
+    const incoming =
+        typeof rawHeader === 'string'
+            ? rawHeader
+            : undefined;
+
+    const correlationId = isValidCorrelationId(incoming)
+        ? incoming
+        : randomUUID();
 
     (request as Request & { correlationId?: string }).correlationId =
         correlationId;
+
     response.setHeader('X-Correlation-Id', correlationId);
 
     RequestContext.runWithContext({ correlationId }, () => next());

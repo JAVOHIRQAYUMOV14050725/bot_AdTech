@@ -85,10 +85,7 @@ import { APP_GUARD } from '@nestjs/core';
             JwtModule
         ],
         providers: [
-            {
-                provide: APP_GUARD,
-                useClass: ThrottlerGuard,
-            },
+           
             JwtAuthGuard,
         ],
         exports: [JwtModule, JwtAuthGuard,],

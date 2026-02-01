@@ -133,11 +133,7 @@ async function bootstrap() {
         }),
     );
 
-    app.useGlobalInterceptors(
-        new HttpLoggingInterceptor(logger),
-        new JsonSanitizeInterceptor(),
-    );
-    app.useGlobalFilters(new AllExceptionsFilter(logger));
+ 
 
     app.setGlobalPrefix('api');
 

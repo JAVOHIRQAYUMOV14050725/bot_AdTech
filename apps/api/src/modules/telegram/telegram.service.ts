@@ -51,7 +51,7 @@ function isTelegramFailure(
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly bot: Telegraf<Context>;
-    private started = false;
+    private started = true;
     private botId?: number;
     private readonly breaker: CircuitBreaker;
 
@@ -120,6 +120,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         this.registerAdminCommands();
 
+        this.registerUserHandlers(); // 👈 SHU MUHIM
+
+
         const autostart = this.telegramConfig.autostart;
         if (!autostart) {
             this.logger.warn({
@@ -148,6 +151,41 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             'sendSmokeTest',
             () => this.bot.telegram.sendMessage(channel, '✅ bot startup test'),
         );
+    }
+
+
+
+    // ===============================
+    // USER HANDLERS
+    // ===============================
+    private registerUserHandlers() {
+        this.bot.start(async (ctx) => {
+            await ctx.reply(
+                `👋 Welcome to AdTech
+
+Safe Telegram advertising with escrow protection.
+
+Who are you?`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🧑‍💼 Advertiser', callback_data: 'ROLE_ADVERTISER' }],
+                            [{ text: '📢 Publisher', callback_data: 'ROLE_PUBLISHER' }],
+                        ],
+                    },
+                },
+            );
+        });
+
+        this.bot.action('ROLE_ADVERTISER', async (ctx) => {
+            await ctx.answerCbQuery();
+            await ctx.reply('🧑‍💼 Advertiser panel (coming soon)');
+        });
+
+        this.bot.action('ROLE_PUBLISHER', async (ctx) => {
+            await ctx.answerCbQuery();
+            await ctx.reply('📢 Publisher panel (coming soon)');
+        });
     }
 
 

@@ -12,8 +12,16 @@
     export class CampaignTargetsController {
         constructor(private readonly campaignsService: CampaignsService) {}
 
-        @Post(':id/submit')
-        submit(@Param('id') targetId: string, @Actor() actor: { id: string }) {
-            return this.campaignsService.submitTarget('', targetId, actor.id);
+        @Post(':id/accept')
+        @Roles(UserRole.publisher)
+        acceptDeal(
+            @Param('id') targetId: string,
+            @Actor() actor: { id: string },
+        ) {
+            return this.campaignsService.acceptTargetAsDeal(
+                targetId,
+                actor.id,
+            );
         }
+
     }

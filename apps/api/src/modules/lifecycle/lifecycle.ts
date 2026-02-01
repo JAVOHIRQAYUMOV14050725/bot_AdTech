@@ -11,8 +11,12 @@ import {
 } from '@prisma/client';
 
 
-export type TransitionActor = 'system' | 'worker' | 'admin' | 'advertiser';
-
+export type TransitionActor =
+    | 'system'
+    | 'worker'
+    | 'admin'
+    | 'advertiser'
+    | 'publisher';
 type TransitionRule = {
     actors: TransitionActor[];
 };
@@ -45,34 +49,48 @@ const campaignTransitions: TransitionMap<CampaignStatus> = {
 const campaignTargetTransitions: TransitionMap<CampaignTargetStatus> = {
     [CampaignTargetStatus.pending]: {
         [CampaignTargetStatus.submitted]: {
-            actors: ['advertiser', 'admin', 'system'],
-        },
-        [CampaignTargetStatus.posted]: { actors: ['worker', 'system', 'admin'] },
-        [CampaignTargetStatus.failed]: { actors: ['worker', 'system'] },
-        [CampaignTargetStatus.refunded]: {
-            actors: ['worker', 'system', 'admin'],
+            actors: ['advertiser'],
         },
     },
+
     [CampaignTargetStatus.submitted]: {
-        [CampaignTargetStatus.approved]: { actors: ['admin', 'system'] },
-        [CampaignTargetStatus.rejected]: { actors: ['admin', 'system'] },
-    },
-    [CampaignTargetStatus.approved]: {
-        [CampaignTargetStatus.posted]: { actors: ['worker', 'system', 'admin'] },
-        [CampaignTargetStatus.failed]: { actors: ['worker', 'system'] },
-        [CampaignTargetStatus.refunded]: {
-            actors: ['worker', 'system', 'admin'],
+        [CampaignTargetStatus.accepted]: {
+            actors: ['publisher'], // ✅ ONLY publisher
+        },
+        [CampaignTargetStatus.rejected]: {
+            actors: ['publisher', 'admin'],
         },
     },
-    [CampaignTargetStatus.rejected]: {},
-    [CampaignTargetStatus.posted]: {},
+
+    [CampaignTargetStatus.accepted]: {
+        [CampaignTargetStatus.approved]: {
+            actors: ['admin'],
+        },
+        [CampaignTargetStatus.rejected]: {
+            actors: ['admin'],
+        },
+    },
+
+    [CampaignTargetStatus.approved]: {
+        [CampaignTargetStatus.posted]: {
+            actors: ['worker', 'system'],
+        },
+        [CampaignTargetStatus.failed]: {
+            actors: ['worker', 'system'],
+        },
+    },
+
     [CampaignTargetStatus.failed]: {
         [CampaignTargetStatus.refunded]: {
             actors: ['worker', 'system', 'admin'],
         },
     },
+
+    [CampaignTargetStatus.posted]: {},
     [CampaignTargetStatus.refunded]: {},
+    [CampaignTargetStatus.rejected]: {},
 };
+
 
 const postJobTransitions: TransitionMap<PostJobStatus> = {
     [PostJobStatus.queued]: {

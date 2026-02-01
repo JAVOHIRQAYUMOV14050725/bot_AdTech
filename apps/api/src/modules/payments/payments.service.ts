@@ -18,6 +18,7 @@ import {
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { ConfigService } from '@nestjs/config';
+import { TransitionActor } from '../lifecycle/lifecycle';
 
 
 @Injectable()
@@ -112,7 +113,7 @@ export class PaymentsService {
         campaignId?: string;
         campaignTargetId?: string;
         escrowId?: string;
-        actor?: string;
+        actor?: TransitionActor;
         correlationId?: string;
     }) {
         const {
@@ -284,12 +285,9 @@ export class PaymentsService {
             const existing = await tx.ledgerEntry.findUnique({
                 where: { idempotencyKey },
             });
+
             if (existing) {
-                return {
-                    ok: true,
-                    idempotent: true,
-                    idempotencyKey,
-                };
+                return { ok: true, idempotent: true };
             }
 
             await this.recordWalletMovement({
@@ -303,9 +301,10 @@ export class PaymentsService {
                 correlationId: `deposit:${userId}:${idempotencyKey}`,
             });
 
-            return { ok: true, idempotencyKey };
+            return { ok: true };
         });
     }
+
 
     /**
      * =========================================================
@@ -314,7 +313,7 @@ export class PaymentsService {
      */
     async holdEscrow(
         campaignTargetId: string,
-        options?: { transaction?: Prisma.TransactionClient; actor?: string; correlationId?: string },
+        options?: { transaction?: Prisma.TransactionClient; actor?: TransitionActor; correlationId?: string },
     ) {
         await this.killSwitchService.assertEnabled({
             key: KillSwitchKey.new_escrows,
@@ -417,9 +416,10 @@ export class PaymentsService {
                 idempotencyKey: `escrow_hold:${campaignTargetId}`,
                 campaignId: target.campaignId,
                 campaignTargetId,
-                actor: options?.actor ?? 'system',
+                actor: options?.actor ?? 'system', // ✅ endi OK
                 correlationId: options?.correlationId ?? campaignTargetId,
             });
+
 
             const escrow = await tx.escrow.create({
                 data: {

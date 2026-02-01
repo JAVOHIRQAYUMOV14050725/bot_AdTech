@@ -314,4 +314,48 @@ export class CampaignsService {
 
         return this.mapTarget(updated);
     }
+
+    async acceptTargetAsDeal(targetId: string, publisherId: string) {
+        const target = await this.prisma.campaignTarget.findUnique({
+            where: { id: targetId },
+            include: { channel: true },
+        });
+
+        if (!target) {
+            throw new NotFoundException('Deal not found');
+        }
+
+        if (target.channel.ownerId !== publisherId) {
+            throw new BadRequestException('Not channel owner');
+        }
+
+        if (target.status !== CampaignTargetStatus.submitted) {
+            throw new BadRequestException(
+                `Deal cannot be accepted from status ${target.status}`,
+            );
+        }
+
+        assertCampaignTargetTransition({
+            campaignTargetId: targetId,
+            from: target.status,
+            to: CampaignTargetStatus.accepted,
+            actor: 'publisher',
+            correlationId: targetId,
+        });
+
+        const updated = await this.prisma.campaignTarget.update({
+            where: { id: targetId },
+            data: { status: CampaignTargetStatus.accepted },
+        });
+
+        await this.auditService.log({
+            userId: publisherId,
+            action: 'campaign_target_accepted',
+            metadata: { targetId },
+        });
+
+        return this.mapTarget(updated);
+
+    }
+
 }

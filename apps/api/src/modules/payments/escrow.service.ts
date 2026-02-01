@@ -25,9 +25,7 @@ import {
 
 @Injectable()
 export class EscrowService {
-    static refund(campaignTargetId: string, arg1: { actor: string; reason: string; correlationId: string; }): any {
-        throw new Error('Method not implemented.');
-    }
+  
 
     constructor(
         private readonly prisma: PrismaService,
@@ -97,7 +95,8 @@ export class EscrowService {
             transaction?: Prisma.TransactionClient;
             actor?: TransitionActor;
             correlationId?: string;
-        },
+        }
+,
     ) {
         const actor = options?.actor ?? 'system';
         const correlationId = options?.correlationId ?? campaignTargetId;

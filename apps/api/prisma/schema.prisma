@@ -44,14 +44,16 @@ enum CampaignStatus {
 }
 
 enum CampaignTargetStatus {
-  pending
-  submitted
-  approved
+  pending       
+  submitted  
+  accepted     
+  approved       
   rejected
   posted
   failed
   refunded
 }
+
 
 enum CreativeType {
   text

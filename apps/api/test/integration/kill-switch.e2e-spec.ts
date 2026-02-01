@@ -1,13 +1,17 @@
+import { Test } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
+import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { ConfigService } from '@nestjs/config';
+import { LoggerService } from '@nestjs/common';
+
 import {
     createCampaignTargetScenario,
     resetDatabase,
     seedKillSwitches,
 } from '../utils/test-helpers';
-import { PrismaService } from '@/prisma/prisma.service';
 
 describe('Kill switch integration', () => {
     let prisma: PrismaService;
@@ -15,11 +19,37 @@ describe('Kill switch integration', () => {
     let escrowService: EscrowService;
 
     beforeAll(async () => {
-        prisma = new PrismaService();
+        const moduleRef = await Test.createTestingModule({
+            providers: [
+                PrismaService,
+                KillSwitchService,
+                PaymentsService,
+                EscrowService,
+
+                // 🔧 REQUIRED MOCKS
+                {
+                    provide: ConfigService,
+                    useValue: {
+                        get: jest.fn(),
+                    },
+                },
+                {
+                    provide: 'LOGGER',
+                    useValue: {
+                        log: jest.fn(),
+                        warn: jest.fn(),
+                        error: jest.fn(),
+                        debug: jest.fn(),
+                    } satisfies LoggerService,
+                },
+            ],
+        }).compile();
+
+        prisma = moduleRef.get(PrismaService);
+        paymentsService = moduleRef.get(PaymentsService);
+        escrowService = moduleRef.get(EscrowService);
+
         await prisma.$connect();
-        const killSwitchService = new KillSwitchService(prisma);
-        paymentsService = new PaymentsService(prisma, killSwitchService);
-        escrowService = new EscrowService(prisma, paymentsService, killSwitchService);
     });
 
     beforeEach(async () => {
@@ -40,11 +70,9 @@ describe('Kill switch integration', () => {
             price: new Prisma.Decimal(20),
         });
 
-        try {
-            await paymentsService.holdEscrow(scenario.target.id);
-        } catch {
-            // Expected: kill switch blocks operation.
-        }
+        await expect(
+            paymentsService.holdEscrow(scenario.target.id),
+        ).rejects.toBeDefined();
 
         const escrow = await prisma.escrow.findUnique({
             where: { campaignTargetId: scenario.target.id },
@@ -54,7 +82,10 @@ describe('Kill switch integration', () => {
     });
 
     it('blocks escrow release when payouts kill switch is OFF', async () => {
-        await seedKillSwitches(prisma, { new_escrows: true, payouts: false });
+        await seedKillSwitches(prisma, {
+            new_escrows: true,
+            payouts: false,
+        });
 
         const scenario = await createCampaignTargetScenario({
             prisma,
@@ -70,15 +101,14 @@ describe('Kill switch integration', () => {
             data: { status: 'success' },
         });
 
-        try {
-            await escrowService.release(scenario.target.id, { actor: 'worker' });
-        } catch {
-            // Expected: kill switch blocks operation.
-        }
+        await expect(
+            escrowService.release(scenario.target.id, { actor: 'worker' }),
+        ).rejects.toBeDefined();
 
         const escrow = await prisma.escrow.findUnique({
             where: { campaignTargetId: scenario.target.id },
         });
+
         const target = await prisma.campaignTarget.findUnique({
             where: { id: scenario.target.id },
         });

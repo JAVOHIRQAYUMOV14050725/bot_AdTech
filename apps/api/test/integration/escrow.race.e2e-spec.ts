@@ -1,99 +1,123 @@
 import { Test } from '@nestjs/testing';
-import { EscrowService } from '../../src/modules/payments/escrow.service';
+import { EscrowService } from '@/modules/payments/escrow.service';
+import { PaymentsService } from '@/modules/payments/payments.service';
+import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { EscrowStatus } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { LoggerService } from '@nestjs/common';
 
-describe('Escrow race condition – RELEASE', () => {
+describe('Escrow race condition – RELEASE & REFUND', () => {
     let escrowService: EscrowService;
     let prisma: PrismaService;
 
     beforeAll(async () => {
         const moduleRef = await Test.createTestingModule({
-            providers: [EscrowService, PrismaService],
+            providers: [
+                PrismaService,
+                KillSwitchService,
+                PaymentsService,
+                EscrowService,
+
+                // 🔧 REQUIRED MOCKS
+                {
+                    provide: ConfigService,
+                    useValue: {
+                        get: jest.fn(),
+                    },
+                },
+                {
+                    provide: 'LOGGER',
+                    useValue: {
+                        log: jest.fn(),
+                        warn: jest.fn(),
+                        error: jest.fn(),
+                        debug: jest.fn(),
+                    } satisfies LoggerService,
+                },
+            ],
         }).compile();
 
         escrowService = moduleRef.get(EscrowService);
         prisma = moduleRef.get(PrismaService);
+
+        await prisma.$connect();
     });
 
-    it('should allow only ONE release under parallel calls', async () => {
-        const campaignTargetId = 'test-ct-race-release';
-
-        const escrow = await prisma.escrow.findUnique({
-            where: { campaignTargetId },
-        });
-
-        expect(escrow?.status).toBe(EscrowStatus.held);
-
-        const results = await Promise.allSettled(
-            Array.from({ length: 5 }).map(() =>
-                escrowService.release(campaignTargetId, {
-                    actor: 'system',
-                    correlationId: 'race-test-release',
-                }),
-            ),
-        );
-
-        const fulfilled = results.filter(r => r.status === 'fulfilled');
-
-        const released = fulfilled.filter(
-            r =>
-                'value' in r &&
-                r.value?.ok === true &&
-                !r.value?.alreadyReleased,
-        );
-
-        expect(released.length).toBe(1);
-
-        const finalEscrow = await prisma.escrow.findUnique({
-            where: { campaignTargetId },
-        });
-
-        expect(finalEscrow?.status).toBe(EscrowStatus.released);
-    });
-});
-
-describe('Escrow race condition – REFUND', () => {
-    let escrowService: EscrowService;
-    let prisma: PrismaService;
-
-    beforeAll(async () => {
-        const moduleRef = await Test.createTestingModule({
-            providers: [EscrowService, PrismaService],
-        }).compile();
-
-        escrowService = moduleRef.get(EscrowService);
-        prisma = moduleRef.get(PrismaService);
+    afterAll(async () => {
+        await prisma.$disconnect();
     });
 
-    it('should allow only ONE refund under parallel calls', async () => {
-        const campaignTargetId = 'test-ct-race-refund';
+    describe('RELEASE race', () => {
+        it('allows only ONE release under parallel calls', async () => {
+            const campaignTargetId = 'test-ct-race-release';
 
-        const results = await Promise.allSettled(
-            Array.from({ length: 5 }).map(() =>
-                escrowService.refund(campaignTargetId, {
-                    actor: 'system',
-                    reason: 'race-test',
-                    correlationId: 'race-test-refund',
-                }),
-            ),
-        );
+            const escrow = await prisma.escrow.findUnique({
+                where: { campaignTargetId },
+            });
 
-        const fulfilled = results.filter(r => r.status === 'fulfilled');
+            expect(escrow?.status).toBe(EscrowStatus.held);
 
-        const refunded = fulfilled.filter(
-            r =>
-                'value' in r &&
-                r.value?.ok === true &&
-                !r.value?.alreadyRefunded,
-        );
+            const results = await Promise.allSettled(
+                Array.from({ length: 5 }).map(() =>
+                    escrowService.release(campaignTargetId, {
+                        actor: 'system',
+                        correlationId: 'race-test-release',
+                    }),
+                ),
+            );
 
-        expect(refunded.length).toBe(1);
+            const fulfilled = results.filter(r => r.status === 'fulfilled');
 
-        const finalEscrow = await prisma.escrow.findUnique({
-            where: { campaignTargetId },
+            const released = fulfilled.filter(
+                r =>
+                    'value' in r &&
+                    r.value?.ok === true &&
+                    !r.value?.alreadyReleased,
+            );
+
+            // 🔐 EXACTLY ONE real transition
+            expect(released.length).toBe(1);
+
+            const finalEscrow = await prisma.escrow.findUnique({
+                where: { campaignTargetId },
+            });
+
+            expect(finalEscrow?.status).toBe(EscrowStatus.released);
         });
+    });
 
-        expect(finalEscrow?.status).toBe(EscrowStatus.refunded);
+    describe('REFUND race', () => {
+        it('allows only ONE refund under parallel calls', async () => {
+            const campaignTargetId = 'test-ct-race-refund';
+
+            const results = await Promise.allSettled(
+                Array.from({ length: 5 }).map(() =>
+                    escrowService.refund(campaignTargetId, {
+                        actor: 'system',
+                        reason: 'race-test',
+                        correlationId: 'race-test-refund',
+                    }),
+                ),
+            );
+
+            const fulfilled = results.filter(r => r.status === 'fulfilled');
+
+            const refunded = fulfilled.filter(
+                r =>
+                    'value' in r &&
+                    r.value?.ok === true &&
+                    !r.value?.alreadyRefunded,
+            );
+
+            // 🔐 EXACTLY ONE real transition
+            expect(refunded.length).toBe(1);
+
+            const finalEscrow = await prisma.escrow.findUnique({
+                where: { campaignTargetId },
+            });
+
+            expect(finalEscrow?.status).toBe(EscrowStatus.refunded);
+        });
     });
 });

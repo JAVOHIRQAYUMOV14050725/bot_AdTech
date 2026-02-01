@@ -1,22 +1,23 @@
 import type { Config } from 'jest';
 
 const config: Config = {
-  moduleFileExtensions: ['js', 'json', 'ts'],
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+
   rootDir: '.',
-  testRegex: 'test/integration/.*\\.e2e-spec\\.ts$',
-  transform: {
-    '^.+\\.(t|j)s$': [
-      'ts-jest',
-      {
-        tsconfig: 'test/tsconfig.spec.json',
-      },
-    ],
-  },
+
+  testRegex: 'integration/.*\\.e2e-spec\\.ts$',
+
+  moduleFileExtensions: ['ts', 'js', 'json'],
 
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
+    '^@/(.*)$': '<rootDir>/../src/$1',
   },
-  testEnvironment: 'node',
+
+  transform: {
+    '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/../tsconfig.json' }],
+  },
+
   testTimeout: 120000,
 };
 

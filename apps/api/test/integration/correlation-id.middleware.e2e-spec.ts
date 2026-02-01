@@ -1,49 +1,87 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
 import { RequestContext } from '@/common/context/request-context';
 
+type TestRequest = Request & { correlationId?: string };
+
 describe('CorrelationIdMiddleware', () => {
     it('sets correlationId when header is missing', () => {
-        const req = { headers: {} } as Request;
-        const res = { setHeader: jest.fn() } as unknown as Response;
+        const req = {
+            headers: {},
+        } as TestRequest;
+
+        const res = {
+            setHeader: jest.fn(),
+        } as unknown as Response;
+
+        const next: NextFunction = jest.fn();
+
         let contextCorrelationId: string | undefined;
 
         correlationIdMiddleware(req, res, () => {
             contextCorrelationId = RequestContext.getCorrelationId();
+            next();
         });
 
+        // request
         expect(req.correlationId).toBeDefined();
-        expect(req.correlationId).not.toEqual('');
+        expect(typeof req.correlationId).toBe('string');
+        expect(req.correlationId).not.toBe('');
+
+        // response header
         const calls = (res.setHeader as jest.Mock).mock.calls;
-        const headerCall = calls.find(([key]) =>
-            key.toLowerCase() === 'x-correlation-id'
+        const headerCall = calls.find(
+            ([key]) => String(key).toLowerCase() === 'x-correlation-id',
         );
+
         expect(headerCall).toBeDefined();
         expect(headerCall![1]).toBe(req.correlationId);
 
-        expect(contextCorrelationId).toEqual(req.correlationId);
+        // async context
+        expect(contextCorrelationId).toBe(req.correlationId);
+
+        // next called
+        expect(next).toHaveBeenCalledTimes(1);
     });
 
     it('preserves incoming x-correlation-id header', () => {
         const incomingCorrelationId = 'test-correlation-id';
+
         const req = {
-            headers: { 'x-correlation-id': incomingCorrelationId },
-        } as unknown as Request;
-        const res = { setHeader: jest.fn() } as unknown as Response;
+            headers: {
+                'x-correlation-id': incomingCorrelationId,
+            },
+        } as TestRequest;
+
+        const res = {
+            setHeader: jest.fn(),
+        } as unknown as Response;
+
+        const next: NextFunction = jest.fn();
+
         let contextCorrelationId: string | undefined;
 
         correlationIdMiddleware(req, res, () => {
             contextCorrelationId = RequestContext.getCorrelationId();
+            next();
         });
 
-        expect(req.correlationId).toEqual(incomingCorrelationId);
-        const calls = (res.setHeader as jest.Mock).mock.calls;
-        const headerCall = calls.find(([key]) =>
-            key.toLowerCase() === 'x-correlation-id'
-        );
-        expect(headerCall).toBeDefined();
-        expect(headerCall![1]).toBe(req.correlationId);
+        // request
+        expect(req.correlationId).toBe(incomingCorrelationId);
 
-        expect(contextCorrelationId).toEqual(incomingCorrelationId);
+        // response header
+        const calls = (res.setHeader as jest.Mock).mock.calls;
+        const headerCall = calls.find(
+            ([key]) => String(key).toLowerCase() === 'x-correlation-id',
+        );
+
+        expect(headerCall).toBeDefined();
+        expect(headerCall![1]).toBe(incomingCorrelationId);
+
+        // async context
+        expect(contextCorrelationId).toBe(incomingCorrelationId);
+
+        // next called
+        expect(next).toHaveBeenCalledTimes(1);
     });
 });

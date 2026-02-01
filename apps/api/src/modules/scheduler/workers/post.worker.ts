@@ -1,6 +1,6 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { LoggerService } from '@nestjs/common'; // ✅
-import { Worker } from 'bullmq';
+import { Worker, WorkerOptions } from 'bullmq';
 import { ConfigType } from '@nestjs/config';
 import { workerConfig } from '@/config/worker.config';
 
@@ -21,6 +21,7 @@ export function startPostWorker(
     redisService: RedisService,
     logger: LoggerService, // ✅ endi tashqaridan keladi
     config: ConfigType<typeof workerConfig>,
+    opts?: WorkerOptions,
 ) {
     const redisClient = redisService.getClient();
     const heartbeatKey = 'worker:heartbeat';

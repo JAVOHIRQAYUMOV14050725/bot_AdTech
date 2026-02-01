@@ -1,6 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { correlationIdMiddleware } from '@/common/middleware/correlation-id.middleware';
 import { RequestContext } from '@/common/context/request-context';
+import { randomUUID } from 'crypto';
+const incomingCorrelationId = randomUUID();
+
 
 type TestRequest = Request & { correlationId?: string };
 
@@ -8,7 +11,7 @@ describe('CorrelationIdMiddleware', () => {
     it('sets correlationId when header is missing', () => {
         const req = {
             headers: {},
-        } as TestRequest;
+        } as unknown as TestRequest;
 
         const res = {
             setHeader: jest.fn(),
@@ -31,7 +34,7 @@ describe('CorrelationIdMiddleware', () => {
         // response header
         const calls = (res.setHeader as jest.Mock).mock.calls;
         const headerCall = calls.find(
-            ([key]) => String(key).toLowerCase() === 'x-correlation-id',
+            ([key]: [string]) => String(key).toLowerCase() === 'x-correlation-id',
         );
 
         expect(headerCall).toBeDefined();
@@ -45,13 +48,12 @@ describe('CorrelationIdMiddleware', () => {
     });
 
     it('preserves incoming x-correlation-id header', () => {
-        const incomingCorrelationId = 'test-correlation-id';
 
         const req = {
             headers: {
                 'x-correlation-id': incomingCorrelationId,
             },
-        } as TestRequest;
+        } as unknown as TestRequest;
 
         const res = {
             setHeader: jest.fn(),
@@ -72,7 +74,7 @@ describe('CorrelationIdMiddleware', () => {
         // response header
         const calls = (res.setHeader as jest.Mock).mock.calls;
         const headerCall = calls.find(
-            ([key]) => String(key).toLowerCase() === 'x-correlation-id',
+            ([key]: [string]) => String(key).toLowerCase() === 'x-correlation-id',
         );
 
         expect(headerCall).toBeDefined();

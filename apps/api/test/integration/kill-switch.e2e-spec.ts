@@ -114,6 +114,6 @@ describe('Kill switch integration', () => {
         });
 
         expect(escrow?.status).toBe('held');
-        expect(target?.status).toBe('pending');
+        expect(target?.status).toBe('submitted');
     });
 });

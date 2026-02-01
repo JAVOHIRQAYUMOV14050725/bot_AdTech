@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
+import { workerConfig as workerConfigFactory } from '@/config/worker.config';
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
@@ -12,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import { LoggerService } from '@nestjs/common';
 import { RedisService } from '@/modules/redis/redis.service';
 
-
 import {
     createCampaignTargetScenario,
     resetDatabase,
@@ -20,12 +20,17 @@ import {
     waitForCondition,
 } from '../utils/test-helpers';
 
+// ✅ REAL WORKER CONFIG
+const workerSettings = workerConfigFactory();
+
 describe('PostJob integration (BullMQ + worker)', () => {
     let prisma: PrismaService;
     let paymentsService: PaymentsService;
     let escrowService: EscrowService;
     let killSwitchService: KillSwitchService;
     let telegramService: TelegramService;
+    let redisService: RedisService;
+    let logger: LoggerService;
 
     beforeAll(async () => {
         if (!process.env.REDIS_HOST || !process.env.REDIS_PORT) {
@@ -43,13 +48,27 @@ describe('PostJob integration (BullMQ + worker)', () => {
                 AdminHandler,
                 TelegramService,
 
-                // 🔧 INFRA MOCKS
                 {
                     provide: ConfigService,
+                    useValue: { get: jest.fn() },
+                },
+                {
+                    provide: 'CONFIGURATION(telegram)',
                     useValue: {
-                        get: jest.fn(),
+                        botToken: 'test-token',
+                        parseMode: 'HTML',
+                        disableWebPreview: true,
                     },
                 },
+                {
+                    provide: 'CONFIGURATION(app)',
+                    useValue: {
+                        env: 'test',
+                        name: 'api',
+                    },
+                },
+
+
                 {
                     provide: RedisService,
                     useValue: {
@@ -75,8 +94,8 @@ describe('PostJob integration (BullMQ + worker)', () => {
         escrowService = moduleRef.get(EscrowService);
         killSwitchService = moduleRef.get(KillSwitchService);
         telegramService = moduleRef.get(TelegramService);
-       
-
+        redisService = moduleRef.get(RedisService);
+        logger = moduleRef.get('LOGGER');
 
         await prisma.$connect();
     });
@@ -84,7 +103,6 @@ describe('PostJob integration (BullMQ + worker)', () => {
     beforeEach(async () => {
         await resetDatabase(prisma);
 
-        // 🧹 QUEUE CLEANUP (RACE-SAFE)
         await postQueue.drain(true);
         await postQueue.clean(0, 1000, 'completed');
         await postQueue.clean(0, 1000, 'failed');
@@ -93,12 +111,16 @@ describe('PostJob integration (BullMQ + worker)', () => {
 
     afterAll(async () => {
         await postQueue.close();
+
+        const client = redisService.getClient?.();
+        if (client?.quit) {
+            await client.quit();
+        }
+
         await prisma.$disconnect();
     });
 
-    // ─────────────────────────────────────────────
-    // ⛔ WORKER DISABLED
-    // ─────────────────────────────────────────────
+
     it('delays posting when worker_post kill switch is OFF', async () => {
         await seedKillSwitches(prisma, {
             worker_post: false,
@@ -116,12 +138,14 @@ describe('PostJob integration (BullMQ + worker)', () => {
 
         await paymentsService.holdEscrow(scenario.target.id);
 
-        
         const worker = startPostWorker(
             prisma,
             escrowService,
             telegramService,
             killSwitchService,
+            redisService,
+            logger,
+            workerSettings,
         );
 
         await postQueue.add(
@@ -146,9 +170,6 @@ describe('PostJob integration (BullMQ + worker)', () => {
         expect(finalJob?.status).toBe('queued');
     });
 
-    // ─────────────────────────────────────────────
-    // ❌ TELEGRAM FAILURE → REFUND
-    // ─────────────────────────────────────────────
     it('marks failed post jobs and refunds escrow when Telegram send fails', async () => {
         await seedKillSwitches(prisma, {
             worker_post: true,
@@ -161,7 +182,7 @@ describe('PostJob integration (BullMQ + worker)', () => {
             advertiserBalance: new Prisma.Decimal(90),
             publisherBalance: new Prisma.Decimal(0),
             price: new Prisma.Decimal(20),
-            creativePayload: { text: '' } as Prisma.JsonObject, // force Telegram failure
+            creativePayload: { text: '' } as Prisma.JsonObject,
         });
 
         await paymentsService.holdEscrow(scenario.target.id);
@@ -171,7 +192,9 @@ describe('PostJob integration (BullMQ + worker)', () => {
             escrowService,
             telegramService,
             killSwitchService,
-            RedisService
+            redisService,
+            logger,
+            workerSettings,
         );
 
         await postQueue.add(

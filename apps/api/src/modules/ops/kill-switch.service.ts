@@ -10,13 +10,9 @@ import {
 
 @Injectable()
 export class KillSwitchService {
-
-    constructor(private readonly prisma: PrismaService,
-        @Inject('LOGGER') private readonly logger: LoggerService
-    ) { }
-
     async seedDefaults() {
         const keys = Object.values(KillSwitchKey);
+
         await Promise.all(
             keys.map((key) =>
                 this.prisma.killSwitch.upsert({
@@ -31,12 +27,81 @@ export class KillSwitchService {
                 }),
             ),
         );
-        this.logger.warn({
-            event: 'kill_switch_seeded_defaults',
-            keys,
-        },
-            'KillSwitchService');
+
+        this.logger.warn(
+            {
+                event: 'kill_switch_seeded_defaults',
+                keys,
+            },
+            'KillSwitchService',
+        );
     }
+
+
+    constructor(private readonly prisma: PrismaService,
+        @Inject('LOGGER') private readonly logger: LoggerService
+    ) { }
+
+    async setEnabled(params: {
+        key: KillSwitchKey;
+        enabled: boolean;
+        actor: string;
+        reason: string;
+        metadata?: Record<string, any>;
+    }) {
+        const { key, enabled, actor, reason, metadata } = params;
+
+        return this.prisma.$transaction(async (tx) => {
+            const current = await tx.killSwitch.findUnique({
+                where: { key },
+            });
+
+            if (!current) {
+                throw new ServiceUnavailableException(
+                    `Kill switch ${key} not found`,
+                );
+            }
+
+            if (current.enabled === enabled) {
+                return { ok: true, noop: true };
+            }
+
+            await tx.killSwitch.update({
+                where: { key },
+                data: {
+                    enabled,
+                    reason,
+                    updatedBy: actor,
+                },
+            });
+
+            await tx.killSwitchEvent.create({
+                data: {
+                    key,
+                    previousEnabled: current.enabled,
+                    newEnabled: enabled,
+                    actor,
+                    reason,
+                    metadata,
+                },
+            });
+
+            this.logger.warn(
+                {
+                    event: 'kill_switch_toggled',
+                    key,
+                    from: current.enabled,
+                    to: enabled,
+                    actor,
+                    reason,
+                },
+                'KillSwitchService',
+            );
+
+            return { ok: true };
+        });
+    }
+
 
     async isEnabled(key: KillSwitchKey): Promise<boolean> {
         try {

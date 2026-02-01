@@ -485,11 +485,15 @@ model KillSwitch {
 model KillSwitchEvent {
   id        String        @id @default(uuid())
   key       KillSwitchKey
-  enabled   Boolean
-  reason    String?
-  updatedBy String
+
+  previousEnabled Boolean?
+  newEnabled      Boolean
+
+  actor     String
+  reason    String
   metadata  Json?
-  createdAt DateTime      @default(now())
+
+  createdAt DateTime @default(now())
 
   killSwitch KillSwitch @relation(fields: [key], references: [key])
 

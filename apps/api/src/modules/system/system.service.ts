@@ -360,7 +360,7 @@ export class SystemService {
     async updateKillSwitch(params: {
         key: KillSwitchKey;
         enabled: boolean;
-        reason?: string;
+        reason: string;
         actorUserId: string;
     }) {
         const { key, enabled, reason, actorUserId } = params;
@@ -384,9 +384,10 @@ export class SystemService {
             await tx.killSwitchEvent.create({
                 data: {
                     key,
-                    enabled,
+                    previousEnabled: killSwitch.enabled,
+                    newEnabled: enabled,
+                    actor: actorUserId,
                     reason,
-                    updatedBy: actorUserId,
                     metadata: {
                         source: 'system_api',
                     },

@@ -22,5 +22,5 @@ export class KillSwitchDto {
     @IsOptional()
     @MinLength(3)
     @MaxLength(500)
-    reason?: string;
+    reason: string;
 }

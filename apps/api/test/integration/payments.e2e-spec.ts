@@ -1,29 +1,55 @@
+import { Test } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
+import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
+import { ConfigService } from '@nestjs/config';
+import { LoggerService } from '@nestjs/common';
+
 import {
     createCampaignTargetScenario,
     resetDatabase,
     seedKillSwitches,
 } from '../utils/test-helpers';
-import { PrismaService } from '@/prisma/prisma.service';
 
-describe('Payments integration (wallet/ledger + escrow)', () => {
+describe('Payments integration (wallet / ledger / escrow)', () => {
     let prisma: PrismaService;
     let paymentsService: PaymentsService;
     let escrowService: EscrowService;
 
     beforeAll(async () => {
-        beforeAll(async () => {
-            const ctx = await createPaymentsTestModule();
-            prisma = ctx.prisma;
-            escrowService = ctx.escrowService;
-        });
+        const moduleRef = await Test.createTestingModule({
+            providers: [
+                PrismaService,
+                KillSwitchService,
+                PaymentsService,
+                EscrowService,
+
+                // 🔧 REQUIRED INFRA
+                {
+                    provide: ConfigService,
+                    useValue: {
+                        get: jest.fn(),
+                    },
+                },
+                {
+                    provide: 'LOGGER',
+                    useValue: {
+                        log: jest.fn(),
+                        warn: jest.fn(),
+                        error: jest.fn(),
+                        debug: jest.fn(),
+                    } satisfies LoggerService,
+                },
+            ],
+        }).compile();
+
+        prisma = moduleRef.get(PrismaService);
+        paymentsService = moduleRef.get(PaymentsService);
+        escrowService = moduleRef.get(EscrowService);
+
         await prisma.$connect();
-        const killSwitchService = new KillSwitchService(prisma);
-        paymentsService = new PaymentsService(prisma, killSwitchService);
-        escrowService = new EscrowService(prisma, paymentsService, killSwitchService);
     });
 
     beforeEach(async () => {
@@ -34,6 +60,9 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
         await prisma.$disconnect();
     });
 
+    // ─────────────────────────────────────────────
+    // 💰 DEPOSIT
+    // ─────────────────────────────────────────────
     it('records deposits and preserves wallet = ledger invariant', async () => {
         const user = await prisma.user.create({
             data: {
@@ -54,7 +83,7 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
         await paymentsService.deposit(
             user.id,
             new Prisma.Decimal(50),
-            'test-deposit'
+            'test-deposit',
         );
 
         const dbWallet = await prisma.wallet.findUnique({
@@ -68,9 +97,14 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
         });
 
         expect(dbWallet?.balance?.toString()).toBe('50');
-        expect(new Prisma.Decimal(ledgerSum._sum.amount ?? 0).toString()).toBe('50');
+        expect(
+            new Prisma.Decimal(ledgerSum._sum.amount ?? 0).toString(),
+        ).toBe('50');
     });
 
+    // ─────────────────────────────────────────────
+    // 🔒 ESCROW HOLD
+    // ─────────────────────────────────────────────
     it('holds escrow and debits advertiser wallet with matching ledger entry', async () => {
         await seedKillSwitches(prisma, { new_escrows: true });
 
@@ -105,8 +139,14 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
         expect(holdLedger?.amount.toString()).toBe('-75');
     });
 
+    // ─────────────────────────────────────────────
+    // ✅ RELEASE
+    // ─────────────────────────────────────────────
     it('releases escrow, credits publisher, and marks target posted', async () => {
-        await seedKillSwitches(prisma, { new_escrows: true, payouts: true });
+        await seedKillSwitches(prisma, {
+            new_escrows: true,
+            payouts: true,
+        });
 
         const scenario = await createCampaignTargetScenario({
             prisma,
@@ -122,7 +162,9 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
             data: { status: 'success' },
         });
 
-        await escrowService.release(scenario.target.id, { actor: 'worker' });
+        await escrowService.release(scenario.target.id, {
+            actor: 'worker',
+        });
 
         const escrow = await prisma.escrow.findUnique({
             where: { campaignTargetId: scenario.target.id },
@@ -151,6 +193,9 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
         expect(payoutLedger?.amount.toString()).toBe('40');
     });
 
+    // ─────────────────────────────────────────────
+    // 🔄 REFUND
+    // ─────────────────────────────────────────────
     it('refunds escrow, credits advertiser, and marks target refunded', async () => {
         await seedKillSwitches(prisma, { new_escrows: true });
 
@@ -168,7 +213,9 @@ describe('Payments integration (wallet/ledger + escrow)', () => {
             data: { status: 'failed' },
         });
 
-        await escrowService.refund(scenario.target.id, { actor: 'worker' });
+        await escrowService.refund(scenario.target.id, {
+            actor: 'worker',
+        });
 
         const escrow = await prisma.escrow.findUnique({
             where: { campaignTargetId: scenario.target.id },

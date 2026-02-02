@@ -14,7 +14,6 @@ export class StartHandler {
 
         await this.fsm.set(
             userId,
-            null,
             TelegramState.SELECT_ROLE,
         );
 
@@ -31,4 +30,3 @@ export class StartHandler {
         );
     }
 }
-

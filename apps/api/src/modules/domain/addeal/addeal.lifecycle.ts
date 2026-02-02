@@ -57,7 +57,11 @@ const AD_DEAL_TRANSITIONS: TransitionMap = {
             moneyMovement: NO_MONEY_MOVEMENT,
         },
         [DealState.refunded]: {
-            actors: [TransitionActor.admin, TransitionActor.system],
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
             moneyMovement: {
                 type: 'ledger',
                 required: [LedgerReason.refund],

@@ -1,14 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { RedisService } from '@/modules/redis/redis.service';
-import { TelegramState } from './telegram-fsm.types';
+import { TelegramRole, TelegramState } from './telegram-fsm.types';
 
 interface FSMContext {
     role: 'advertiser' | 'publisher' | 'admin' | null;
     state: TelegramState;
     payload: Record<string, any>;
 }
-
-// telegram-fsm.service.ts
 @Injectable()
 export class TelegramFSMService {
     constructor(private readonly redis: RedisService) { }
@@ -29,30 +27,9 @@ export class TelegramFSMService {
         return JSON.parse(raw);
     }
 
-    // 🔥 ASOSIY METHOD
-    async setState(
+    async set(
         userId: number,
-        state: TelegramState,
-        payload: Record<string, any> = {},
-    ) {
-        const ctx = await this.get(userId);
-
-        await this.redis.getClient().set(
-            this.key(userId),
-            JSON.stringify({
-                role: ctx.role,
-                state,
-                payload,
-            }),
-            'EX',
-            3600,
-        );
-    }
-
-    // 🔐 ROLE SET
-    async setRole(
-        userId: number,
-        role: FSMContext['role'],
+        role: TelegramRole,
         state: TelegramState,
         payload: Record<string, any> = {},
     ) {
@@ -64,13 +41,17 @@ export class TelegramFSMService {
         );
     }
 
-    async patch(userId: number, patch: Partial<FSMContext>) {
+    async transition(
+        userId: number,
+        state: TelegramState,
+        payload?: Record<string, any>,
+    ) {
         const ctx = await this.get(userId);
-        await this.redis.getClient().set(
-            this.key(userId),
-            JSON.stringify({ ...ctx, ...patch }),
-            'EX',
-            3600,
+        await this.set(
+            userId,
+            ctx.role,
+            state,
+            payload ?? ctx.payload,
         );
     }
 
@@ -78,4 +59,3 @@ export class TelegramFSMService {
         await this.redis.getClient().del(this.key(userId));
     }
 }
-

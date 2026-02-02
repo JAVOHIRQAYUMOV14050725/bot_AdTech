@@ -1,6 +1,7 @@
+export type TelegramRole = 'advertiser' | 'publisher' | 'admin' | null;
+
 export enum TelegramState {
     IDLE = 'IDLE',
-
     SELECT_ROLE = 'SELECT_ROLE',
 
     // Advertiser
@@ -14,4 +15,10 @@ export enum TelegramState {
 
     // Admin
     ADMIN_PANEL = 'ADMIN_PANEL',
+}
+
+export interface FSMContext {
+    role: TelegramRole;
+    state: TelegramState;
+    payload: Record<string, any>;
 }

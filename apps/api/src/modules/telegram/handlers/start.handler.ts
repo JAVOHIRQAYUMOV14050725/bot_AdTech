@@ -10,7 +10,13 @@ export class StartHandler {
 
     @Start()
     async start(@Ctx() ctx: Context) {
-        await this.fsm.reset(ctx.from!.id);
+        const userId = ctx.from!.id;
+
+        await this.fsm.set(
+            userId,
+            null,
+            TelegramState.SELECT_ROLE,
+        );
 
         await ctx.reply(
             `👋 Welcome to AdTech\n\nWho are you?`,
@@ -24,5 +30,5 @@ export class StartHandler {
             },
         );
     }
-
 }
+

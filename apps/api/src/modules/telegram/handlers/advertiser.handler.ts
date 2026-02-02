@@ -109,7 +109,7 @@ export class AdvertiserHandler {
             if (command === 'lock_addeal') {
                 await this.lockEscrow.execute({
                     adDealId,
-                    actor: user.id,
+                    actor: 'advertiser',
                 });
                 return ctx.reply(`🔒 Escrow locked for AdDeal ${adDealId}`);
             }

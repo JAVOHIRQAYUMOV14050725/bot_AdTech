@@ -13,6 +13,7 @@ import {
 
 export type TransitionActor =
     | 'system'
+    | 'payment_provider'
     | 'worker'
     | 'admin'
     | 'advertiser'

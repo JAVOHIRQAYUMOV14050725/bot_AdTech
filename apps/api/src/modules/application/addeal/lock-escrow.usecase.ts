@@ -1,3 +1,4 @@
+import { TransitionActor } from '@/modules/lifecycle/lifecycle';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { LedgerReason, LedgerType, Prisma } from '@prisma/client';
 
@@ -12,7 +13,7 @@ export class LockEscrowUseCase {
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentsService: PaymentsService,
-    ) { }
+    ) {}
 
     async execute(params: {
         adDealId: string;
@@ -70,7 +71,7 @@ export class LockEscrowUseCase {
                 type: LedgerType.debit,
                 reason: LedgerReason.escrow_hold,
                 idempotencyKey: `addeal:${adDeal.id}:escrow_lock`,
-                actor: params.actor ?? 'system',
+                actor: TransitionActor ,
                 correlationId: `addeal:${adDeal.id}:escrow_lock`,
                 referenceId: adDeal.id,
             });

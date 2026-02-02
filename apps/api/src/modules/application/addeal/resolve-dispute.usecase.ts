@@ -31,7 +31,10 @@ export class ResolveDisputeUseCase {
                 throw new NotFoundException('Admin not found');
             }
 
-            if (![UserRole.admin, UserRole.super_admin].includes(admin.role)) {
+            if (
+                admin.role !== UserRole.admin
+                && admin.role !== UserRole.super_admin
+            ) {
                 throw new BadRequestException('Admin privileges required');
             }
 

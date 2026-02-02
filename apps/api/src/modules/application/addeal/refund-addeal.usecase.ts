@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AdDealEscrowStatus, LedgerReason, LedgerType } from '@prisma/client';
+import { AdDealEscrowStatus, LedgerReason, LedgerType, Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
 import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
 import { toAdDealSnapshot } from './addeal.mapper';
+import { TransitionActor } from '@/modules/lifecycle/lifecycle';
 
 @Injectable()
 export class RefundAdDealUseCase {
@@ -16,7 +17,7 @@ export class RefundAdDealUseCase {
 
     async execute(params: {
         adDealId: string;
-        actor?: string;
+        actor?: TransitionActor;
         transaction?: Prisma.TransactionClient;
     }) {
         const execute = async (tx: Prisma.TransactionClient) => {

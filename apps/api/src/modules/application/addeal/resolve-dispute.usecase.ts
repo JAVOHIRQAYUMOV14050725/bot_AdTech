@@ -20,7 +20,7 @@ export class ResolveDisputeUseCase {
         adminId: string;
         resolution: DisputeResolution;
         reason: string;
-        metadata?: Prisma.JsonValue;
+        metadata?: Prisma.InputJsonValue;
     }) {
         return this.prisma.$transaction(async (tx) => {
             const admin = await tx.user.findUnique({
@@ -65,13 +65,13 @@ export class ResolveDisputeUseCase {
             if (params.resolution === DisputeResolution.release) {
                 await this.settleAdDeal.execute({
                     adDealId: disputeRecord.adDealId,
-                    actor: admin.id,
+                    actor: 'admin',
                     transaction: tx,
                 });
             } else if (params.resolution === DisputeResolution.refund) {
                 await this.refundAdDeal.execute({
                     adDealId: disputeRecord.adDealId,
-                    actor: admin.id,
+                    actor: 'admin',
                     transaction: tx,
                 });
             } else {
@@ -96,7 +96,7 @@ export class ResolveDisputeUseCase {
                     adminId: admin.id,
                     action: 'RESOLVE',
                     reason: params.reason,
-                    metadata: params.metadata ?? null,
+                    metadata: params.metadata ?? Prisma.DbNull,
                 },
             });
 

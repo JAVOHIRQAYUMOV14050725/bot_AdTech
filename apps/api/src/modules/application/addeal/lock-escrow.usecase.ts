@@ -17,7 +17,7 @@ export class LockEscrowUseCase {
 
     async execute(params: {
         adDealId: string;
-        actor?: string;
+        actor?: TransitionActor;
     }) {
         return this.prisma.$transaction(async (tx) => {
             const adDeal = await tx.adDeal.findUnique({
@@ -71,7 +71,7 @@ export class LockEscrowUseCase {
                 type: LedgerType.debit,
                 reason: LedgerReason.escrow_hold,
                 idempotencyKey: `addeal:${adDeal.id}:escrow_lock`,
-                actor: TransitionActor ,
+                actor: params.actor ?? 'system',
                 correlationId: `addeal:${adDeal.id}:escrow_lock`,
                 referenceId: adDeal.id,
             });

@@ -18,7 +18,7 @@ import { ReconciliationDto, ReconciliationMode } from './dto/reconciliation.dto'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 import { Actor } from '../auth/decorators/actor.decorator';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';
 import {

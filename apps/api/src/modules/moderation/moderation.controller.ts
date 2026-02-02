@@ -10,7 +10,7 @@ import { ModerationService } from './moderation.service';
 import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from '@/modules/auth/guards/roles.guard';
 import { Roles } from '@/modules/auth/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 import { Actor } from '@/modules/auth/decorators/actor.decorator';
 import { ModerationDecisionDto } from './dto/moderation-decision.dto';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';

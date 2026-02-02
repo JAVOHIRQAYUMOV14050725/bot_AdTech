@@ -11,7 +11,7 @@ import { ChannelsService } from './channels.service';
 import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from '@/modules/auth/guards/roles.guard';
 import { Roles } from '@/modules/auth/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 import { Actor } from '@/modules/auth/decorators/actor.decorator';
 import { ChannelDecisionDto } from './dto/channel-decision.dto';
 import { ApiStandardErrorResponses } from '@/common/swagger/api-standard-error-responses.decorator';

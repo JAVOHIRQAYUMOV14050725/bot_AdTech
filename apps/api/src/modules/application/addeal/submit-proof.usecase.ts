@@ -3,7 +3,11 @@ import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
+import { DealState, TransitionActor } from '@/modules/domain/contracts';
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
@@ -14,6 +18,7 @@ export class SubmitProofUseCase {
         adDealId: string;
         proofPayload: Prisma.InputJsonValue;
         submittedAt?: Date;
+        actor?: TransitionActor;
     }) {
         return this.prisma.$transaction(async (tx) => {
             const adDeal = await tx.adDeal.findUnique({
@@ -24,14 +29,30 @@ export class SubmitProofUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === AdDealStatus.proof_submitted) {
+            if (adDeal.status === DealState.proof_submitted) {
                 return adDeal;
             }
 
-            if (adDeal.status !== AdDealStatus.accepted) {
+            if (adDeal.status !== DealState.accepted) {
                 throw new BadRequestException(
                     `AdDeal cannot submit proof from status ${adDeal.status}`,
                 );
+            }
+
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.proof_submitted,
+                actor: params.actor ?? TransitionActor.system,
+                correlationId: `addeal:${adDeal.id}:submit_proof`,
+            });
+
+            if (!transition.noop) {
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons: [],
+                });
             }
 
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));

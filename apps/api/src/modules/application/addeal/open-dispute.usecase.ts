@@ -3,7 +3,11 @@ import { randomUUID } from 'crypto';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
+import { DealState, TransitionActor } from '@/modules/domain/contracts';
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 import { Dispute } from '@/modules/domain/dispute/dispute.aggregate';
 import { toAdDealSnapshot } from './addeal.mapper';
 
@@ -15,6 +19,7 @@ export class OpenDisputeUseCase {
         adDealId: string;
         openedBy: string;
         reason: string;
+        actor?: TransitionActor;
     }) {
         return this.prisma.$transaction(async (tx) => {
             const adDeal = await tx.adDeal.findUnique({
@@ -38,10 +43,10 @@ export class OpenDisputeUseCase {
 
             if (
                 ![
-                    AdDealStatus.escrow_locked,
-                    AdDealStatus.accepted,
-                    AdDealStatus.proof_submitted,
-                ].includes(adDeal.status as AdDealStatus)
+                    DealState.escrow_locked,
+                    DealState.accepted,
+                    DealState.proof_submitted,
+                ].includes(adDeal.status as DealState)
             ) {
                 throw new BadRequestException(
                     `AdDeal cannot be disputed from status ${adDeal.status}`,
@@ -56,6 +61,20 @@ export class OpenDisputeUseCase {
             }).toSnapshot();
 
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.disputed,
+                actor: params.actor ?? TransitionActor.system,
+                correlationId: `addeal:${adDeal.id}:dispute`,
+            });
+            if (!transition.noop) {
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons: [],
+                });
+            }
             const disputed = domain.dispute().toSnapshot();
 
             await tx.adDeal.update({

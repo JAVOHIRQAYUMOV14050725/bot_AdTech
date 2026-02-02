@@ -7,6 +7,7 @@ import { publisherHome } from '../keyboards';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usecase';
 import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.usecase';
+import { TransitionActor } from '@/modules/domain/contracts';
 @Update()
 export class PublisherHandler {
     constructor(
@@ -37,7 +38,10 @@ export class PublisherHandler {
         const userId = ctx.from!.id;
         const fsm = await this.fsm.get(userId);
 
-        if (fsm.role !== 'publisher') return;
+        if (fsm.role !== 'publisher') {
+            await ctx.reply('⛔ Not allowed yet. Switch to publisher role.');
+            return;
+        }
 
         await this.fsm.transition(
             userId,
@@ -56,7 +60,10 @@ export class PublisherHandler {
         const userId = ctx.from!.id;
         const fsm = await this.fsm.get(userId);
 
-        if (fsm.role !== 'publisher') return;
+        if (fsm.role !== 'publisher') {
+            await ctx.reply('⛔ Not allowed yet. Switch to publisher role.');
+            return;
+        }
 
         const acceptMatch = text.match(/^\/(accept_addeal)\s+(\S+)/);
         if (acceptMatch) {
@@ -77,7 +84,10 @@ export class PublisherHandler {
                 return ctx.reply('❌ AdDeal not found for publisher');
             }
 
-            await this.acceptDeal.execute({ adDealId });
+            await this.acceptDeal.execute({
+                adDealId,
+                actor: TransitionActor.publisher,
+            });
 
             return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
         }
@@ -147,6 +157,7 @@ export class PublisherHandler {
         await this.submitProof.execute({
             adDealId,
             proofPayload: { text: proofText },
+            actor: TransitionActor.publisher,
         });
 
         return ctx.reply(`✅ Proof submitted\nID: ${adDealId}`);

@@ -1,11 +1,19 @@
-import { TransitionActor } from '@/modules/lifecycle/lifecycle';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LedgerReason, LedgerType, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
+import {
+    DealState,
+    LedgerReason,
+    LedgerType,
+    TransitionActor,
+} from '@/modules/domain/contracts';
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
@@ -28,11 +36,11 @@ export class LockEscrowUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === AdDealStatus.escrow_locked) {
+            if (adDeal.status === DealState.escrow_locked) {
                 return adDeal;
             }
 
-            if (adDeal.status !== AdDealStatus.funded) {
+            if (adDeal.status !== DealState.funded) {
                 throw new BadRequestException(
                     `AdDeal cannot lock escrow from status ${adDeal.status}`,
                 );
@@ -64,6 +72,22 @@ export class LockEscrowUseCase {
                 });
             }
 
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.escrow_locked,
+                actor: params.actor ?? TransitionActor.system,
+                correlationId: `addeal:${adDeal.id}:escrow_lock`,
+            });
+
+            if (!transition.noop) {
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons: [LedgerReason.escrow_hold],
+                });
+            }
+
             await this.paymentsService.recordWalletMovement({
                 tx,
                 walletId: advertiserWallet.id,
@@ -71,7 +95,7 @@ export class LockEscrowUseCase {
                 type: LedgerType.debit,
                 reason: LedgerReason.escrow_hold,
                 idempotencyKey: `addeal:${adDeal.id}:escrow_lock`,
-                actor: params.actor ?? 'system',
+                actor: params.actor ?? TransitionActor.system,
                 correlationId: `addeal:${adDeal.id}:escrow_lock`,
                 referenceId: adDeal.id,
             });

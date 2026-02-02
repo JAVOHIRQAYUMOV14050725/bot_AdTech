@@ -14,7 +14,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 
 @Controller('auth')
 @ApiTags('Auth')

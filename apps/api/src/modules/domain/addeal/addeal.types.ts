@@ -1,13 +1,4 @@
-export enum AdDealStatus {
-    created = 'created',
-    funded = 'funded',
-    escrow_locked = 'escrow_locked',
-    accepted = 'accepted',
-    proof_submitted = 'proof_submitted',
-    settled = 'settled',
-    refunded = 'refunded',
-    disputed = 'disputed',
-}
+import { DealState } from '@/modules/domain/contracts';
 
 export type AdDealSnapshot = {
     id: string;
@@ -15,7 +6,7 @@ export type AdDealSnapshot = {
     publisherId: string;
     amount: string;
     currency: string;
-    status: AdDealStatus;
+    status: DealState;
     createdAt: Date;
     fundedAt?: Date | null;
     lockedAt?: Date | null;

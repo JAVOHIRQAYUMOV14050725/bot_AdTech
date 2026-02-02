@@ -1,12 +1,20 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AdDealEscrowStatus, LedgerReason, LedgerType, Prisma } from '@prisma/client';
+import { AdDealEscrowStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
+import {
+    DealState,
+    LedgerReason,
+    LedgerType,
+    TransitionActor,
+} from '@/modules/domain/contracts';
 import { toAdDealSnapshot } from './addeal.mapper';
-import { TransitionActor } from '@/modules/lifecycle/lifecycle';
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 
 @Injectable()
 export class RefundAdDealUseCase {
@@ -29,16 +37,16 @@ export class RefundAdDealUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === AdDealStatus.refunded) {
+            if (adDeal.status === DealState.refunded) {
                 return adDeal;
             }
 
             if (
                 ![
-                    AdDealStatus.escrow_locked,
-                    AdDealStatus.proof_submitted,
-                    AdDealStatus.disputed,
-                ].includes(adDeal.status as AdDealStatus)
+                    DealState.escrow_locked,
+                    DealState.proof_submitted,
+                    DealState.disputed,
+                ].includes(adDeal.status as DealState)
             ) {
                 throw new BadRequestException(
                     `AdDeal cannot be refunded from status ${adDeal.status}`,
@@ -53,6 +61,28 @@ export class RefundAdDealUseCase {
                 throw new BadRequestException('Escrow not found for deal');
             }
 
+            if (escrow.status !== AdDealEscrowStatus.locked) {
+                throw new BadRequestException(
+                    `Escrow cannot be refunded from status ${escrow.status}`,
+                );
+            }
+
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.refunded,
+                actor: params.actor ?? TransitionActor.system,
+                correlationId: `addeal:${adDeal.id}:refund`,
+            });
+
+            if (!transition.noop) {
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons: [LedgerReason.refund],
+                });
+            }
+
             await this.paymentsService.recordWalletMovement({
                 tx,
                 walletId: escrow.advertiserWalletId,
@@ -61,7 +91,8 @@ export class RefundAdDealUseCase {
                 reason: LedgerReason.refund,
                 idempotencyKey: `addeal:${adDeal.id}:refund`,
                 referenceId: adDeal.id,
-                actor: params.actor ?? 'system',
+                settlementStatus: 'settled',
+                actor: params.actor ?? TransitionActor.system,
                 correlationId: `addeal:${adDeal.id}:refund`,
             });
 

@@ -89,6 +89,33 @@ enum EscrowStatus {
   refunded
 }
 
+enum AdDealStatus {
+  created
+  funded
+  escrow_locked
+  accepted
+  proof_submitted
+  settled
+  refunded
+  disputed
+}
+
+enum AdDealEscrowStatus {
+  locked
+  settled
+  refunded
+}
+
+enum DisputeStatus {
+  open
+  resolved
+}
+
+enum DisputeResolution {
+  release
+  refund
+}
+
 enum KillSwitchKey {
   payouts
   new_escrows
@@ -129,6 +156,11 @@ model User {
   channels  Channel[]
   wallet    Wallet?
   campaigns Campaign[]
+  advertiserAdDeals AdDeal[] @relation("AdDealAdvertiser")
+  publisherAdDeals  AdDeal[] @relation("AdDealPublisher")
+  openedDisputes    Dispute[] @relation("DisputeOpenedBy")
+  resolvedDisputes  Dispute[] @relation("DisputeResolvedBy")
+  disputeAuditLogs  DisputeAuditLog[]
 
   verifiedChannels  ChannelVerification[]
   approvedCreatives AdCreative[]
@@ -273,6 +305,115 @@ model CampaignTarget {
   @@map("campaign_targets")
 }
 
+//////////////////////
+// AD DEALS
+//////////////////////
+
+model AdDeal {
+  id           String @id @default(uuid())
+  advertiserId String
+  publisherId  String
+  amount       Decimal @db.Decimal(14, 2)
+  currency     String  @default("USD")
+  status       AdDealStatus @default(created)
+  commissionPercentage Decimal? @db.Decimal(5, 2)
+  commissionAmount     Decimal? @db.Decimal(14, 2)
+
+  createdAt        DateTime @default(now())
+  fundedAt         DateTime?
+  lockedAt         DateTime?
+  acceptedAt       DateTime?
+  proofSubmittedAt DateTime?
+  proofPayload     Json?
+  settledAt        DateTime?
+  refundedAt       DateTime?
+  disputedAt       DateTime?
+
+  advertiser User @relation("AdDealAdvertiser", fields: [advertiserId], references: [id])
+  publisher  User @relation("AdDealPublisher", fields: [publisherId], references: [id])
+  escrow     AdDealEscrow?
+  fundingEvents AdDealFundingEvent[]
+  dispute    Dispute?
+
+  @@index([advertiserId])
+  @@index([publisherId])
+  @@map("ad_deals")
+}
+
+model AdDealFundingEvent {
+  id               String   @id @default(uuid())
+  adDealId         String
+  provider         String
+  providerReference String  @unique
+  amount           Decimal  @db.Decimal(14, 2)
+  receivedAt       DateTime @default(now())
+
+  adDeal AdDeal @relation(fields: [adDealId], references: [id])
+
+  @@index([adDealId])
+  @@map("ad_deal_funding_events")
+}
+
+model AdDealEscrow {
+  id String @id @default(uuid())
+
+  adDealId          String @unique
+  advertiserWalletId String
+  publisherWalletId  String
+  amount            Decimal @db.Decimal(14, 2)
+  status            AdDealEscrowStatus @default(locked)
+
+  lockedAt   DateTime @default(now())
+  settledAt  DateTime?
+  refundedAt DateTime?
+
+  adDeal           AdDeal @relation(fields: [adDealId], references: [id])
+  advertiserWallet Wallet @relation("AdDealAdvertiserWallet", fields: [advertiserWalletId], references: [id])
+  publisherWallet  Wallet @relation("AdDealPublisherWallet", fields: [publisherWalletId], references: [id])
+
+  @@index([advertiserWalletId])
+  @@index([publisherWalletId])
+  @@map("ad_deal_escrows")
+}
+
+model Dispute {
+  id       String @id @default(uuid())
+  adDealId String @unique
+  openedBy String
+  reason   String
+  status   DisputeStatus @default(open)
+  resolution DisputeResolution?
+  resolvedBy String?
+  resolvedAt DateTime?
+  createdAt DateTime @default(now())
+
+  adDeal  AdDeal @relation(fields: [adDealId], references: [id])
+  opener  User   @relation("DisputeOpenedBy", fields: [openedBy], references: [id])
+  resolver User? @relation("DisputeResolvedBy", fields: [resolvedBy], references: [id])
+  auditLogs DisputeAuditLog[]
+
+  @@index([openedBy])
+  @@index([status])
+  @@map("disputes")
+}
+
+model DisputeAuditLog {
+  id        String @id @default(uuid())
+  disputeId String
+  adminId   String
+  action    String
+  reason    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  dispute Dispute @relation(fields: [disputeId], references: [id])
+  admin   User @relation(fields: [adminId], references: [id])
+
+  @@index([disputeId])
+  @@index([adminId])
+  @@map("dispute_audit_logs")
+}
+
 model AdCreative {
   id         String @id @default(uuid())
   campaignId String
@@ -361,6 +502,8 @@ model Wallet {
 
   advertiserEscrows Escrow[] @relation("AdvertiserWallet")
   publisherEscrows  Escrow[] @relation("PublisherWallet")
+  adDealAdvertiserEscrows AdDealEscrow[] @relation("AdDealAdvertiserWallet")
+  adDealPublisherEscrows  AdDealEscrow[] @relation("AdDealPublisherWallet")
 
   @@map("wallets")
 }

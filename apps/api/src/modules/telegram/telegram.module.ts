@@ -14,6 +14,7 @@ import { StartHandler } from './handlers/start.handler';
 import { AdvertiserHandler } from './handlers/advertiser.handler';
 import { ChannelsModule } from '../channels/channels.module';
 import { PublisherHandler } from './handlers/publisher.handler';
+import { AdDealModule } from '../application/addeal/addeal.module';
 
 const env = loadEnv()
 const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN
@@ -26,6 +27,7 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
         PaymentsModule,
         OpsModule,
         RedisModule,
+        AdDealModule,
     ],
     providers: [
         TelegramFSMService,
@@ -38,4 +40,3 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
     exports: [TelegramService],
 })
 export class TelegramModule { }
-

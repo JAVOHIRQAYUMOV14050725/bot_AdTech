@@ -8,6 +8,7 @@ export const roleKeyboard = Markup.inlineKeyboard([
 
 export const advertiserHome = Markup.inlineKeyboard([
     [Markup.button.callback('➕ Create campaign', 'CREATE_CAMPAIGN')],
+    [Markup.button.callback('🤝 Create ad deal', 'CREATE_ADDEAL')],
     [Markup.button.callback('💰 Add balance', 'ADD_BALANCE')],
     [Markup.button.callback('📊 My campaigns', 'MY_CAMPAIGNS')],
 ]);

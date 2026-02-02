@@ -33,6 +33,7 @@
     import { workerConfig } from '@/config/worker.config';
     import { campaignConfig } from '@/config/campaign.config';
     import { ConfigType } from '@nestjs/config';
+    import { AdDealModule } from './modules/application/addeal/addeal.module';
 import { APP_GUARD } from '@nestjs/core';
 
 
@@ -77,6 +78,7 @@ import { APP_GUARD } from '@nestjs/core';
             CampaignsModule,
             ModerationModule,
             PaymentsModule,
+            AdDealModule,
             TelegramModule,
             SchedulerModule,
             SystemModule,

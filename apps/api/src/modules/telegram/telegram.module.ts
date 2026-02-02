@@ -8,6 +8,12 @@ import { OpsModule } from '@/modules/ops/ops.module';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { loadEnv } from '@/config/env';
 import { TelegramUpdate } from './telegram.update';
+import { TelegramFSMService } from './fsm/telegram-fsm.service';
+import { RedisModule } from '../redis/redis.module';
+import { StartHandler } from './handlers/start.handler';
+import { AdvertiserHandler } from './handlers/advertiser.handler';
+import { ChannelsModule } from '../channels/channels.module';
+import { PublisherHandler } from './handlers/publisher.handler';
 
 const env = loadEnv()
 const TELEGRAM_BOT_TOKEN =env.TELEGRAM_BOT_TOKEN
@@ -15,19 +21,21 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
 
 @Module({
     imports: [
-        TelegrafModule.forRoot({
-            token: TELEGRAM_BOT_TOKEN,
-        }),
+        TelegrafModule.forRoot({ token: TELEGRAM_BOT_TOKEN }),
         PrismaModule,
         PaymentsModule,
         OpsModule,
+        RedisModule,
     ],
     providers: [
-        TelegramService,
+        TelegramFSMService,
+        StartHandler,
+        AdvertiserHandler,
+        PublisherHandler,
         AdminHandler,
-        TelegramUpdate,
+        TelegramService,
     ],
-    exports: [TelegramService], // ✅ MUHIM
-
+    exports: [TelegramService],
 })
 export class TelegramModule { }
+

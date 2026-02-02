@@ -16,3 +16,8 @@ export const confirmKeyboard = Markup.inlineKeyboard([
     Markup.button.callback('✅ Confirm', 'CONFIRM'),
     Markup.button.callback('❌ Cancel', 'CANCEL'),
 ]);
+
+export const publisherHome = Markup.inlineKeyboard([
+    [Markup.button.callback('➕ Add channel', 'PUB_ADD_CHANNEL')],
+    [Markup.button.callback('📊 My channels', 'PUB_MY_CHANNELS')],
+]);

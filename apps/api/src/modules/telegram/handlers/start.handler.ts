@@ -1,10 +1,11 @@
-import { Update, Start, Action, On, Ctx } from 'nestjs-telegraf';
+// handlers/start.handler.ts
+import { Update, Start, Ctx, Action } from 'nestjs-telegraf';
 import { Context } from 'telegraf';
-import { TelegramFSMService } from './fsm/telegram-fsm.service';
-import { TelegramState } from './fsm/telegram-fsm.types';
+import { TelegramFSMService } from '../fsm/telegram-fsm.service';
+import { TelegramState } from '../fsm/telegram-fsm.types';
 
 @Update()
-export class TelegramUpdate {
+export class StartHandler {
     constructor(private readonly fsm: TelegramFSMService) { }
 
     @Start()

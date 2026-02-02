@@ -1,0 +1,17 @@
+export enum TelegramState {
+    IDLE = 'IDLE',
+
+    SELECT_ROLE = 'SELECT_ROLE',
+
+    // Advertiser
+    ADV_DASHBOARD = 'ADV_DASHBOARD',
+    ADV_ADD_BALANCE_AMOUNT = 'ADV_ADD_BALANCE_AMOUNT',
+    ADV_CREATE_CAMPAIGN_NAME = 'ADV_CREATE_CAMPAIGN_NAME',
+
+    // Publisher
+    PUB_DASHBOARD = 'PUB_DASHBOARD',
+    PUB_ADD_CHANNEL = 'PUB_ADD_CHANNEL',
+
+    // Admin
+    ADMIN_PANEL = 'ADMIN_PANEL',
+}

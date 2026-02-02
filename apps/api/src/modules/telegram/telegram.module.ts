@@ -8,7 +8,7 @@ import { OpsModule } from '@/modules/ops/ops.module';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { loadEnv } from '@/config/env';
 import { TelegramUpdate } from './telegram.update';
-import { TelegramFSMService } from './fsm/telegram-fsm.service';
+import { TelegramFSMService } from '../application/telegram/telegram-fsm.service';
 import { RedisModule } from '../redis/redis.module';
 import { StartHandler } from './handlers/start.handler';
 import { AdvertiserHandler } from './handlers/advertiser.handler';
@@ -16,7 +16,7 @@ import { ChannelsModule } from '../channels/channels.module';
 import { PublisherHandler } from './handlers/publisher.handler';
 
 const env = loadEnv()
-const TELEGRAM_BOT_TOKEN =env.TELEGRAM_BOT_TOKEN
+const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN
 console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
 
 @Module({

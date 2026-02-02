@@ -1,7 +1,7 @@
 import { Update, Start, Action, On, Ctx } from 'nestjs-telegraf';
 import { Context } from 'telegraf';
-import { TelegramFSMService } from './fsm/telegram-fsm.service';
-import { TelegramState } from './fsm/telegram-fsm.types';
+import { TelegramFSMService } from '../application/telegram/telegram-fsm.service';
+import { TelegramState } from '../application/telegram/telegram-fsm.types';
 
 @Update()
 export class TelegramUpdate {

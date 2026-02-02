@@ -1,7 +1,7 @@
 import { Action, On, Ctx, Update } from 'nestjs-telegraf';
 import { Context } from 'telegraf';
-import { TelegramFSMService } from '../fsm/telegram-fsm.service';
-import { TelegramState } from '../fsm/telegram-fsm.types';
+import { TelegramFSMService } from '../../application/telegram/telegram-fsm.service';
+import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome, confirmKeyboard } from '../keyboards';
 
 @Update()

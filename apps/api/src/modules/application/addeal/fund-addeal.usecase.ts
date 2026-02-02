@@ -43,6 +43,7 @@ export class FundAdDealUseCase {
             params.provider === 'telegram_sandbox'
                 ? 'internal_custody'
                 : params.provider;
+        const useWalletBalance = provider === 'wallet_balance';
         const fundingAmount = new Prisma.Decimal(params.amount).toDecimalPlaces(
             2,
             Prisma.Decimal.ROUND_HALF_UP,
@@ -94,12 +95,23 @@ export class FundAdDealUseCase {
             });
 
             if (!wallet) {
+                if (useWalletBalance) {
+                    throw new BadRequestException(
+                        'Advertiser wallet not found for balance funding',
+                    );
+                }
                 wallet = await tx.wallet.create({
                     data: {
                         userId: adDeal.advertiserId,
                         balance: new Prisma.Decimal(0),
                     },
                 });
+            }
+
+            if (useWalletBalance && wallet.balance.lt(fundingAmount)) {
+                throw new BadRequestException(
+                    'Insufficient wallet balance to fund deal',
+                );
             }
 
             const transition = assertAdDealTransition({
@@ -118,17 +130,19 @@ export class FundAdDealUseCase {
                 });
             }
 
-            await this.paymentsService.recordWalletMovement({
-                tx,
-                walletId: wallet.id,
-                amount: fundingAmount,
-                type: LedgerType.credit,
-                reason: LedgerReason.deposit,
-                idempotencyKey: `addeal:fund:${params.providerReference}`,
-                settlementStatus: 'non_settlement',
-                actor: params.actor ?? TransitionActor.payment_provider,
-                correlationId: `addeal:${adDeal.id}:fund`,
-            });
+            if (!useWalletBalance) {
+                await this.paymentsService.recordWalletMovement({
+                    tx,
+                    walletId: wallet.id,
+                    amount: fundingAmount,
+                    type: LedgerType.credit,
+                    reason: LedgerReason.deposit,
+                    idempotencyKey: `addeal:fund:${params.providerReference}`,
+                    settlementStatus: 'non_settlement',
+                    actor: params.actor ?? TransitionActor.payment_provider,
+                    correlationId: `addeal:${adDeal.id}:fund`,
+                });
+            }
 
             if (adDeal.status !== DealState.created) {
                 return adDeal;

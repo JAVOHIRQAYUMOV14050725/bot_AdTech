@@ -7,14 +7,19 @@ import { publisherHome } from '../keyboards';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usecase';
 import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.usecase';
+import { SettleAdDealUseCase } from '@/modules/application/addeal/settle-addeal.usecase';
 import { TransitionActor } from '@/modules/domain/contracts';
+import { Logger } from '@nestjs/common';
 @Update()
 export class PublisherHandler {
+    private readonly logger = new Logger(PublisherHandler.name);
+
     constructor(
         private readonly fsm: TelegramFSMService,
         private readonly prisma: PrismaService,
         private readonly acceptDeal: AcceptDealUseCase,
         private readonly submitProof: SubmitProofUseCase,
+        private readonly settleAdDeal: SettleAdDealUseCase,
     ) { }
 
     @Action('ROLE_PUBLISHER')
@@ -39,6 +44,13 @@ export class PublisherHandler {
         const fsm = await this.fsm.get(userId);
 
         if (fsm.role !== 'publisher') {
+            this.logger.warn({
+                event: 'telegram_role_block',
+                action: 'add_channel',
+                userId,
+                role: fsm.role,
+                state: fsm.state,
+            });
             await ctx.reply('⛔ Not allowed yet. Switch to publisher role.');
             return;
         }
@@ -61,6 +73,13 @@ export class PublisherHandler {
         const fsm = await this.fsm.get(userId);
 
         if (fsm.role !== 'publisher') {
+            this.logger.warn({
+                event: 'telegram_role_block',
+                action: 'publisher_text',
+                userId,
+                role: fsm.role,
+                state: fsm.state,
+            });
             await ctx.reply('⛔ Not allowed yet. Switch to publisher role.');
             return;
         }
@@ -68,28 +87,41 @@ export class PublisherHandler {
         const acceptMatch = text.match(/^\/(accept_addeal)\s+(\S+)/);
         if (acceptMatch) {
             const adDealId = acceptMatch[2];
-            const publisher = await this.prisma.user.findUnique({
-                where: { telegramId: BigInt(userId) },
-            });
+            try {
+                const publisher = await this.prisma.user.findUnique({
+                    where: { telegramId: BigInt(userId) },
+                });
 
-            if (!publisher) {
-                return ctx.reply('❌ Publisher not found');
+                if (!publisher) {
+                    return ctx.reply('❌ Publisher not found');
+                }
+
+                const adDeal = await this.prisma.adDeal.findUnique({
+                    where: { id: adDealId },
+                });
+
+                if (!adDeal || adDeal.publisherId !== publisher.id) {
+                    return ctx.reply('❌ AdDeal not found for publisher');
+                }
+
+                await this.acceptDeal.execute({
+                    adDealId,
+                    actor: TransitionActor.publisher,
+                });
+
+                return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
+            } catch (err) {
+                const message = this.formatError(err);
+                this.logger.error({
+                    event: 'telegram_accept_failed',
+                    adDealId,
+                    userId,
+                    role: fsm.role,
+                    state: fsm.state,
+                    error: message,
+                });
+                return ctx.reply(`❌ ${message}`);
             }
-
-            const adDeal = await this.prisma.adDeal.findUnique({
-                where: { id: adDealId },
-            });
-
-            if (!adDeal || adDeal.publisherId !== publisher.id) {
-                return ctx.reply('❌ AdDeal not found for publisher');
-            }
-
-            await this.acceptDeal.execute({
-                adDealId,
-                actor: TransitionActor.publisher,
-            });
-
-            return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
         }
 
         const submitMatch = text.match(
@@ -138,28 +170,56 @@ export class PublisherHandler {
         adDealId: string,
         proofText: string,
     ) {
-        const publisher = await this.prisma.user.findUnique({
-            where: { telegramId: BigInt(ctx.from!.id) },
-        });
+        const userId = ctx.from!.id;
+        const fsm = await this.fsm.get(userId);
 
-        if (!publisher) {
-            return ctx.reply('❌ Publisher not found');
+        try {
+            const publisher = await this.prisma.user.findUnique({
+                where: { telegramId: BigInt(userId) },
+            });
+
+            if (!publisher) {
+                return ctx.reply('❌ Publisher not found');
+            }
+
+            const adDeal = await this.prisma.adDeal.findUnique({
+                where: { id: adDealId },
+            });
+
+            if (!adDeal || adDeal.publisherId !== publisher.id) {
+                return ctx.reply('❌ AdDeal not found for publisher');
+            }
+
+            await this.submitProof.execute({
+                adDealId,
+                proofPayload: { text: proofText },
+                actor: TransitionActor.publisher,
+            });
+
+            await this.settleAdDeal.execute({
+                adDealId,
+                actor: TransitionActor.system,
+            });
+
+            return ctx.reply(`✅ Proof submitted & settled\nID: ${adDealId}`);
+        } catch (err) {
+            const message = this.formatError(err);
+            this.logger.error({
+                event: 'telegram_proof_failed',
+                adDealId,
+                userId,
+                role: fsm.role,
+                state: fsm.state,
+                error: message,
+            });
+            return ctx.reply(`❌ ${message}`);
         }
+    }
 
-        const adDeal = await this.prisma.adDeal.findUnique({
-            where: { id: adDealId },
-        });
-
-        if (!adDeal || adDeal.publisherId !== publisher.id) {
-            return ctx.reply('❌ AdDeal not found for publisher');
+    private formatError(err: unknown) {
+        if (err instanceof Error) {
+            return err.message;
         }
-
-        await this.submitProof.execute({
-            adDealId,
-            proofPayload: { text: proofText },
-            actor: TransitionActor.publisher,
-        });
-
-        return ctx.reply(`✅ Proof submitted\nID: ${adDealId}`);
+        return String(err);
     }
 }

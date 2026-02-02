@@ -118,35 +118,36 @@ export class AdDeal {
             );
         }
 
-        if (
-            [
-                DealState.escrow_locked,
-                DealState.accepted,
-                DealState.proof_submitted,
-                DealState.settled,
-                DealState.disputed,
-            ].includes(snapshot.status) && !snapshot.lockedAt
-        ) {
+        const lockedStatuses: DealState[] = [
+            DealState.escrow_locked,
+            DealState.accepted,
+            DealState.proof_submitted,
+            DealState.settled,
+            DealState.disputed,
+        ];
+
+        if (lockedStatuses.includes(snapshot.status) && !snapshot.lockedAt) {
             throw new BadRequestException(
                 'AdDeal escrow lock timestamp required after lock',
             );
         }
 
-        if (
-            [
-                DealState.accepted,
-                DealState.proof_submitted,
-                DealState.settled,
-            ].includes(snapshot.status) && !snapshot.acceptedAt
-        ) {
+        const acceptedStatuses: DealState[] = [
+            DealState.accepted,
+            DealState.proof_submitted,
+            DealState.settled,
+        ];
+
+        if (acceptedStatuses.includes(snapshot.status) && !snapshot.acceptedAt) {
             throw new BadRequestException('AdDeal accept timestamp required');
         }
 
-        if (
-            [DealState.proof_submitted, DealState.settled].includes(
-                snapshot.status,
-            ) && !snapshot.proofSubmittedAt
-        ) {
+        const proofStatuses: DealState[] = [
+            DealState.proof_submitted,
+            DealState.settled,
+        ];
+
+        if (proofStatuses.includes(snapshot.status) && !snapshot.proofSubmittedAt) {
             throw new BadRequestException('Proof timestamp required');
         }
 

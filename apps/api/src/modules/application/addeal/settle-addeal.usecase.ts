@@ -45,11 +45,12 @@ export class SettleAdDealUseCase {
                 return adDeal;
             }
 
-            if (
-                ![DealState.proof_submitted, DealState.disputed].includes(
-                    adDeal.status as DealState,
-                )
-            ) {
+            const settlementEligibleStatuses: DealState[] = [
+                DealState.proof_submitted,
+                DealState.disputed,
+            ];
+
+            if (!settlementEligibleStatuses.includes(adDeal.status as DealState)) {
                 throw new BadRequestException(
                     `AdDeal cannot be settled from status ${adDeal.status}`,
                 );
@@ -91,7 +92,7 @@ export class SettleAdDealUseCase {
             });
 
             if (!transition.noop) {
-                const reasons = [LedgerReason.payout];
+                const reasons: LedgerReason[] = [LedgerReason.payout];
                 if (commissionAmount.gt(0)) {
                     reasons.push(LedgerReason.commission);
                 }

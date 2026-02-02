@@ -16,6 +16,9 @@ type TransitionRule = {
 };
 
 type TransitionMap = Record<DealState, Partial<Record<DealState, TransitionRule>>>;
+type TransitionResult =
+    | { noop: true; rule: null }
+    | { noop: false; rule: TransitionRule };
 
 const logger = new Logger('AdDealLifecycle');
 
@@ -146,7 +149,7 @@ export function assertAdDealTransition(params: {
     to: DealState;
     actor: TransitionActor;
     correlationId?: string;
-}) {
+}): TransitionResult {
     if (params.from === params.to) {
         return { noop: true, rule: null };
     }

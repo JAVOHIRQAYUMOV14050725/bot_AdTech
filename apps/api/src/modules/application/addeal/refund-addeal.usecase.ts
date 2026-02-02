@@ -41,13 +41,13 @@ export class RefundAdDealUseCase {
                 return adDeal;
             }
 
-            if (
-                ![
-                    DealState.escrow_locked,
-                    DealState.proof_submitted,
-                    DealState.disputed,
-                ].includes(adDeal.status as DealState)
-            ) {
+            const refundableStatuses: DealState[] = [
+                DealState.escrow_locked,
+                DealState.proof_submitted,
+                DealState.disputed,
+            ];
+
+            if (!refundableStatuses.includes(adDeal.status as DealState)) {
                 throw new BadRequestException(
                     `AdDeal cannot be refunded from status ${adDeal.status}`,
                 );

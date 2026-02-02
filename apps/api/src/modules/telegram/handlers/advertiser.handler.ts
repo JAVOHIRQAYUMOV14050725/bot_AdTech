@@ -7,6 +7,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { CreateAdDealUseCase } from '@/modules/application/addeal/create-addeal.usecase';
 import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usecase';
 import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
+import { Prisma } from '@prisma/client';
 
 @Update()
 export class AdvertiserHandler {
@@ -50,7 +51,7 @@ export class AdvertiserHandler {
     }
 
     @Action('CREATE_ADDEAL')
-    async createAdDeal(@Ctx() ctx: Context) {
+    async beginCreateAdDeal(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
         const fsm = await this.fsm.get(userId);
 
@@ -153,8 +154,12 @@ export class AdvertiserHandler {
         }
 
         if (fsm.state === TelegramState.ADV_ADDEAL_AMOUNT) {
-            const amount = Number(text);
-            if (!Number.isFinite(amount) || amount <= 0) {
+            const amountText = text.trim();
+            if (!/^\d+(\.\d{1,2})?$/.test(amountText)) {
+                return ctx.reply('❌ Invalid amount');
+            }
+
+            if (new Prisma.Decimal(amountText).lte(0)) {
                 return ctx.reply('❌ Invalid amount');
             }
 
@@ -169,7 +174,7 @@ export class AdvertiserHandler {
             const adDeal = await this.createAdDeal.execute({
                 advertiserId: advertiser.id,
                 publisherId: fsm.payload.publisherId,
-                amount,
+                amount: amountText,
             });
 
             await this.fsm.transition(

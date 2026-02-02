@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
@@ -11,7 +12,7 @@ export class SubmitProofUseCase {
 
     async execute(params: {
         adDealId: string;
-        proofPayload: Record<string, unknown>;
+        proofPayload: Prisma.InputJsonValue;
         submittedAt?: Date;
     }) {
         return this.prisma.$transaction(async (tx) => {

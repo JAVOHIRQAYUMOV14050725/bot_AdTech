@@ -41,13 +41,13 @@ export class OpenDisputeUseCase {
                 throw new BadRequestException('Dispute already resolved');
             }
 
-            if (
-                ![
-                    DealState.escrow_locked,
-                    DealState.accepted,
-                    DealState.proof_submitted,
-                ].includes(adDeal.status as DealState)
-            ) {
+            const disputeAllowedStatuses: DealState[] = [
+                DealState.escrow_locked,
+                DealState.accepted,
+                DealState.proof_submitted,
+            ];
+
+            if (!disputeAllowedStatuses.includes(adDeal.status as DealState)) {
                 throw new BadRequestException(
                     `AdDeal cannot be disputed from status ${adDeal.status}`,
                 );

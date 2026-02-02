@@ -2,14 +2,23 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
+import { DealState, TransitionActor } from '@/modules/domain/contracts';
+
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
 export class AcceptDealUseCase {
     constructor(private readonly prisma: PrismaService) { }
 
-    async execute(params: { adDealId: string; acceptedAt?: Date }) {
+    async execute(params: {
+        adDealId: string;
+        acceptedAt?: Date;
+        actor?: TransitionActor;
+    }) {
         return this.prisma.$transaction(async (tx) => {
             const adDeal = await tx.adDeal.findUnique({
                 where: { id: params.adDealId },
@@ -19,14 +28,30 @@ export class AcceptDealUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === AdDealStatus.accepted) {
+            if (adDeal.status === DealState.accepted) {
                 return adDeal;
             }
 
-            if (adDeal.status !== AdDealStatus.escrow_locked) {
+            if (adDeal.status !== DealState.escrow_locked) {
                 throw new BadRequestException(
                     `AdDeal cannot be accepted from status ${adDeal.status}`,
                 );
+            }
+
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.accepted,
+                actor: params.actor ?? TransitionActor.system,
+                correlationId: `addeal:${adDeal.id}:accept`,
+            });
+
+            if (!transition.noop) {
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons: [],
+                });
             }
 
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));

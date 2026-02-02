@@ -2,11 +2,9 @@ import { Action, On, Ctx, Update } from 'nestjs-telegraf';
 import { Context } from 'telegraf';
 import { TelegramFSMService } from '../../application/telegram/telegram-fsm.service';
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
-import { advertiserHome, confirmKeyboard } from '../keyboards';
+import { advertiserHome } from '../keyboards';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateAdDealUseCase } from '@/modules/application/addeal/create-addeal.usecase';
-import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usecase';
-import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
 import { Prisma } from '@prisma/client';
 
 @Update()
@@ -15,8 +13,6 @@ export class AdvertiserHandler {
         private readonly fsm: TelegramFSMService,
         private readonly prisma: PrismaService,
         private readonly createAdDeal: CreateAdDealUseCase,
-        private readonly fundAdDeal: FundAdDealUseCase,
-        private readonly lockEscrow: LockEscrowUseCase,
     ) { }
 
     @Action('ROLE_ADVERTISER')
@@ -40,7 +36,10 @@ export class AdvertiserHandler {
         const userId = ctx.from!.id;
         const fsm = await this.fsm.get(userId);
 
-        if (fsm.role !== 'advertiser') return;
+        if (fsm.role !== 'advertiser') {
+            await ctx.reply('⛔ Not allowed yet. Switch to advertiser role.');
+            return;
+        }
 
         await this.fsm.transition(
             userId,
@@ -55,7 +54,10 @@ export class AdvertiserHandler {
         const userId = ctx.from!.id;
         const fsm = await this.fsm.get(userId);
 
-        if (fsm.role !== 'advertiser') return;
+        if (fsm.role !== 'advertiser') {
+            await ctx.reply('⛔ Not allowed yet. Switch to advertiser role.');
+            return;
+        }
 
         await this.fsm.transition(
             userId,
@@ -74,7 +76,10 @@ export class AdvertiserHandler {
         const userId = ctx.from!.id;
         const fsm = await this.fsm.get(userId);
 
-        if (fsm.role !== 'advertiser') return;
+        if (fsm.role !== 'advertiser') {
+            await ctx.reply('⛔ Not allowed yet. Switch to advertiser role.');
+            return;
+        }
         const commandMatch = text.match(/^\/(fund_addeal|lock_addeal)\s+(\S+)/);
         if (commandMatch) {
             const [, command, adDealId] = commandMatch;
@@ -86,32 +91,24 @@ export class AdvertiserHandler {
                 return ctx.reply('❌ Advertiser account not found');
             }
 
+            const adDeal = await this.prisma.adDeal.findUnique({
+                where: { id: adDealId },
+            });
+
+            if (!adDeal || adDeal.advertiserId !== user.id) {
+                return ctx.reply('❌ AdDeal not found for advertiser');
+            }
+
             if (command === 'fund_addeal') {
-                const adDeal = await this.prisma.adDeal.findUnique({
-                    where: { id: adDealId },
-                });
-
-                if (!adDeal || adDeal.advertiserId !== user.id) {
-                    return ctx.reply('❌ AdDeal not found for advertiser');
-                }
-
-                await this.fundAdDeal.execute({
-                    adDealId,
-                    provider: 'telegram_sandbox',
-                    providerReference: `telegram:${adDealId}`,
-                    amount: adDeal.amount,
-                    verified: true,
-                });
-
-                return ctx.reply(`✅ AdDeal funded\nID: ${adDealId}`);
+                return ctx.reply(
+                    '⛔ Funding requires a verified provider callback. Telegram cannot move money directly.',
+                );
             }
 
             if (command === 'lock_addeal') {
-                await this.lockEscrow.execute({
-                    adDealId,
-                    actor: 'advertiser',
-                });
-                return ctx.reply(`🔒 Escrow locked for AdDeal ${adDealId}`);
+                return ctx.reply(
+                    '⛔ Escrow locking must be confirmed server-side after wallet verification.',
+                );
             }
         }
 
@@ -127,7 +124,9 @@ export class AdvertiserHandler {
                 { amount },
             );
 
-            return ctx.reply(`✅ Balance updated`);
+            return ctx.reply(
+                '📝 Deposit amount recorded. Balance updates only after a verified provider deposit.',
+            );
         }
 
         if (fsm.state === TelegramState.ADV_ADDEAL_PUBLISHER) {
@@ -185,8 +184,8 @@ export class AdvertiserHandler {
             return ctx.reply(
                 `✅ AdDeal created\nID: ${adDeal.id}\n\n` +
                 `Next steps:\n` +
-                `/fund_addeal ${adDeal.id}\n` +
-                `/lock_addeal ${adDeal.id}`,
+                `• Fund via verified provider callback\n` +
+                `• Escrow locks after wallet verification`,
             );
         }
 

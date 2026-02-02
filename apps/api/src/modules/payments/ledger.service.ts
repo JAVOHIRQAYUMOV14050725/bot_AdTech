@@ -1,6 +1,7 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { Injectable } from '@nestjs/common';
-import { LedgerReason, LedgerType, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { LedgerReason, LedgerType } from '@/modules/domain/contracts';
 @Injectable()
 export class LedgerService {
     constructor(private readonly prisma: PrismaService) { }
@@ -11,8 +12,12 @@ export class LedgerService {
         reason: LedgerReason,
         idempotencyKey: string,
         ref?: string,
+        settlementStatus?: 'settled' | 'non_settlement',
     ) {
         const normalized = new Prisma.Decimal(amount);
+        if (!settlementStatus) {
+            throw new Error('Credit ledger entry requires settlement status');
+        }
         return this.prisma.ledgerEntry.upsert({
             where: { idempotencyKey },
             update: {},

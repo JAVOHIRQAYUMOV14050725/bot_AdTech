@@ -8,7 +8,7 @@ import {
     MaxLength,
     MinLength,
 } from 'class-validator';
-import { UserRole } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
 import { IsTelegramIdString, TELEGRAM_ID_EXAMPLE } from '@/common/validators/telegram-id-string.decorator';
 import { IsTelegramUsername, USERNAME_EXAMPLE } from '@/common/validators/telegram-username.decorator';

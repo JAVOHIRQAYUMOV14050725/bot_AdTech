@@ -9,15 +9,8 @@ import {
     EscrowStatus,
     PostJobStatus,
 } from '@prisma/client';
+import { TransitionActor } from '@/modules/domain/contracts';
 
-
-export type TransitionActor =
-    | 'system'
-    | 'payment_provider'
-    | 'worker'
-    | 'admin'
-    | 'advertiser'
-    | 'publisher';
 type TransitionRule = {
     actors: TransitionActor[];
 };
@@ -31,17 +24,27 @@ const logger = new Logger('LifecycleFSM');
 
 const campaignTransitions: TransitionMap<CampaignStatus> = {
     [CampaignStatus.draft]: {
-        [CampaignStatus.active]: { actors: ['advertiser', 'admin', 'system'] },
-        [CampaignStatus.cancelled]: { actors: ['admin'] },
+        [CampaignStatus.active]: {
+            actors: [TransitionActor.advertiser, TransitionActor.admin, TransitionActor.system],
+        },
+        [CampaignStatus.cancelled]: { actors: [TransitionActor.admin] },
     },
     [CampaignStatus.active]: {
-        [CampaignStatus.paused]: { actors: ['advertiser', 'admin'] },
-        [CampaignStatus.completed]: { actors: ['admin', 'system'] },
-        [CampaignStatus.cancelled]: { actors: ['advertiser', 'admin'] },
+        [CampaignStatus.paused]: {
+            actors: [TransitionActor.advertiser, TransitionActor.admin],
+        },
+        [CampaignStatus.completed]: {
+            actors: [TransitionActor.admin, TransitionActor.system],
+        },
+        [CampaignStatus.cancelled]: {
+            actors: [TransitionActor.advertiser, TransitionActor.admin],
+        },
     },
     [CampaignStatus.paused]: {
-        [CampaignStatus.active]: { actors: ['advertiser', 'admin'] },
-        [CampaignStatus.cancelled]: { actors: ['admin'] },
+        [CampaignStatus.active]: {
+            actors: [TransitionActor.advertiser, TransitionActor.admin],
+        },
+        [CampaignStatus.cancelled]: { actors: [TransitionActor.admin] },
     },
     [CampaignStatus.completed]: {},
     [CampaignStatus.cancelled]: {},
@@ -50,40 +53,44 @@ const campaignTransitions: TransitionMap<CampaignStatus> = {
 const campaignTargetTransitions: TransitionMap<CampaignTargetStatus> = {
     [CampaignTargetStatus.pending]: {
         [CampaignTargetStatus.submitted]: {
-            actors: ['advertiser'],
+            actors: [TransitionActor.advertiser],
         },
     },
 
     [CampaignTargetStatus.submitted]: {
         [CampaignTargetStatus.accepted]: {
-            actors: ['publisher'], // ✅ ONLY publisher
+            actors: [TransitionActor.publisher], // ✅ ONLY publisher
         },
         [CampaignTargetStatus.rejected]: {
-            actors: ['publisher', 'admin'],
+            actors: [TransitionActor.publisher, TransitionActor.admin],
         },
     },
 
     [CampaignTargetStatus.accepted]: {
         [CampaignTargetStatus.approved]: {
-            actors: ['admin'],
+            actors: [TransitionActor.admin],
         },
         [CampaignTargetStatus.rejected]: {
-            actors: ['admin'],
+            actors: [TransitionActor.admin],
         },
     },
 
     [CampaignTargetStatus.approved]: {
         [CampaignTargetStatus.posted]: {
-            actors: ['worker', 'system'],
+            actors: [TransitionActor.worker, TransitionActor.system],
         },
         [CampaignTargetStatus.failed]: {
-            actors: ['worker', 'system'],
+            actors: [TransitionActor.worker, TransitionActor.system],
         },
     },
 
     [CampaignTargetStatus.failed]: {
         [CampaignTargetStatus.refunded]: {
-            actors: ['worker', 'system', 'admin'],
+            actors: [
+                TransitionActor.worker,
+                TransitionActor.system,
+                TransitionActor.admin,
+            ],
         },
     },
 
@@ -95,33 +102,67 @@ const campaignTargetTransitions: TransitionMap<CampaignTargetStatus> = {
 
 const postJobTransitions: TransitionMap<PostJobStatus> = {
     [PostJobStatus.queued]: {
-        [PostJobStatus.sending]: { actors: ['worker'] },
-        [PostJobStatus.success]: { actors: ['worker', 'system'] },
-        [PostJobStatus.failed]: { actors: ['worker', 'system'] },
+        [PostJobStatus.sending]: { actors: [TransitionActor.worker] },
+        [PostJobStatus.success]: {
+            actors: [TransitionActor.worker, TransitionActor.system],
+        },
+        [PostJobStatus.failed]: {
+            actors: [TransitionActor.worker, TransitionActor.system],
+        },
     },
     [PostJobStatus.sending]: {
-        [PostJobStatus.success]: { actors: ['worker', 'system'] },
-        [PostJobStatus.failed]: { actors: ['worker', 'system'] },
-        [PostJobStatus.queued]: { actors: ['worker', 'system'] },
+        [PostJobStatus.success]: {
+            actors: [TransitionActor.worker, TransitionActor.system],
+        },
+        [PostJobStatus.failed]: {
+            actors: [TransitionActor.worker, TransitionActor.system],
+        },
+        [PostJobStatus.queued]: {
+            actors: [TransitionActor.worker, TransitionActor.system],
+        },
     },
     [PostJobStatus.success]: {},
     [PostJobStatus.failed]: {
-        [PostJobStatus.queued]: { actors: ['admin'] },
+        [PostJobStatus.queued]: { actors: [TransitionActor.admin] },
     },
 };
 
 const escrowTransitions: TransitionMap<EscrowStatus> = {
     [EscrowStatus.held]: {
-        [EscrowStatus.releasing]: { actors: ['worker', 'system', 'admin'] },
-        [EscrowStatus.refunding]: { actors: ['worker', 'system', 'admin'] },
+        [EscrowStatus.releasing]: {
+            actors: [
+                TransitionActor.worker,
+                TransitionActor.system,
+                TransitionActor.admin,
+            ],
+        },
+        [EscrowStatus.refunding]: {
+            actors: [
+                TransitionActor.worker,
+                TransitionActor.system,
+                TransitionActor.admin,
+            ],
+        },
     },
 
     [EscrowStatus.releasing]: {
-        [EscrowStatus.released]: { actors: ['worker', 'system', 'admin'] },
+        [EscrowStatus.released]: {
+            actors: [
+                TransitionActor.worker,
+                TransitionActor.system,
+                TransitionActor.admin,
+            ],
+        },
     },
 
     [EscrowStatus.refunding]: {
-        [EscrowStatus.refunded]: { actors: ['worker', 'system', 'admin'] },
+        [EscrowStatus.refunded]: {
+            actors: [
+                TransitionActor.worker,
+                TransitionActor.system,
+                TransitionActor.admin,
+            ],
+        },
     },
 
     [EscrowStatus.released]: {},
@@ -307,7 +348,7 @@ export function assertPostJobOutcomeForEscrow(params: {
 }) {
     const { campaignTargetId, postJobStatus, action, actor } = params;
 
-    if (actor === 'admin') {
+    if (actor === TransitionActor.admin) {
         return;
     }
 
@@ -334,7 +375,7 @@ export function assertPostJobOutcomeForEscrow(params: {
             );
         }
 
-        if (actor === 'worker' && postJobStatus !== PostJobStatus.failed) {
+        if (actor === TransitionActor.worker && postJobStatus !== PostJobStatus.failed) {
             logger.error(
                 `[INVARIANT] Worker refund blocked: PostJob is ${postJobStatus} (campaignTarget=${campaignTargetId})`,
             );

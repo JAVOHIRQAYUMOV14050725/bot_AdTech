@@ -5,8 +5,6 @@ import {
     CampaignStatus,
     EscrowStatus,
     KillSwitchKey,
-    LedgerReason,
-    LedgerType,
     Prisma,
 } from '@prisma/client';
 import {
@@ -18,7 +16,11 @@ import {
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { ConfigService } from '@nestjs/config';
-import { TransitionActor } from '../lifecycle/lifecycle';
+import {
+    LedgerReason,
+    LedgerType,
+    TransitionActor,
+} from '@/modules/domain/contracts';
 
 
 @Injectable()
@@ -108,6 +110,7 @@ export class PaymentsService {
         amount: Prisma.Decimal;
         type: LedgerType;
         reason: LedgerReason;
+        settlementStatus?: 'settled' | 'non_settlement';
         referenceId?: string;
         idempotencyKey: string;
         campaignId?: string;
@@ -135,6 +138,12 @@ export class PaymentsService {
 
         if (normalizedAmount.lte(0)) {
             throw new BadRequestException('Amount must be positive');
+        }
+
+        if (type === LedgerType.credit && !params.settlementStatus) {
+            throw new BadRequestException(
+                'Credit ledger entry requires explicit settlement status',
+            );
         }
 
         /* ─────────────────────────────────────────────
@@ -296,8 +305,9 @@ export class PaymentsService {
                 amount: normalizedAmount,
                 type: LedgerType.credit,
                 reason: LedgerReason.deposit,
+                settlementStatus: 'non_settlement',
                 idempotencyKey,
-                actor: 'system',
+                actor: TransitionActor.system,
                 correlationId: `deposit:${userId}:${idempotencyKey}`,
             });
 
@@ -416,7 +426,7 @@ export class PaymentsService {
                 idempotencyKey: `escrow_hold:${campaignTargetId}`,
                 campaignId: target.campaignId,
                 campaignTargetId,
-                actor: options?.actor ?? 'system', // ✅ endi OK
+                actor: options?.actor ?? TransitionActor.system,
                 correlationId: options?.correlationId ?? campaignTargetId,
             });
 

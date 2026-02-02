@@ -6,12 +6,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Context } from 'telegraf';
-import { EscrowService } from '@/modules/payments/escrow.service';
 import {
     assertCampaignTransition,
     assertPostJobTransition,
 } from '@/modules/lifecycle/lifecycle';
-import { CampaignStatus, PostJobStatus, UserRole } from '@prisma/client';
+import { CampaignStatus, PostJobStatus } from '@prisma/client';
+import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 
 @Injectable()
 export class AdminHandler {
@@ -19,7 +19,6 @@ export class AdminHandler {
 
     constructor(
         private readonly prisma: PrismaService,
-        private readonly escrowService: EscrowService,
     ) { }
 
     // 🔐 RBAC CHECK
@@ -46,21 +45,22 @@ export class AdminHandler {
     async forceRelease(ctx: Context, campaignTargetId: string) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.escrowService.release(campaignTargetId, {
-            actor: 'admin',
-            correlationId: campaignTargetId,
-        });
-
         await this.prisma.userAuditLog.create({
             data: {
                 userId: admin.id,
                 action: 'force_release',
-                metadata: { campaignTargetId },
+                metadata: {
+                    campaignTargetId,
+                    status: 'queued_manual_review',
+                    requestedVia: 'telegram',
+                },
                 ipAddress: ctx.from?.username ?? 'telegram',
             },
         });
 
-        await ctx.reply(`✅ Escrow RELEASED\nTarget: ${campaignTargetId}`);
+        await ctx.reply(
+            `⏳ Escrow release queued for manual review.\nTarget: ${campaignTargetId}`,
+        );
     }
 
     // ===============================
@@ -73,23 +73,22 @@ export class AdminHandler {
     ) {
         const admin = await this.assertAdmin(ctx);
 
-        await this.escrowService.refund(campaignTargetId, {
-            actor: 'admin',
-            reason,
-            correlationId: campaignTargetId,
-        });
-
         await this.prisma.userAuditLog.create({
             data: {
                 userId: admin.id,
                 action: 'force_refund',
-                metadata: { campaignTargetId, reason },
+                metadata: {
+                    campaignTargetId,
+                    reason,
+                    status: 'queued_manual_review',
+                    requestedVia: 'telegram',
+                },
                 ipAddress: ctx.from?.username ?? 'telegram',
             },
         });
 
         await ctx.reply(
-            `🔁 Escrow REFUNDED\nTarget: ${campaignTargetId}\nReason: ${reason}`,
+            `⏳ Escrow refund queued for manual review.\nTarget: ${campaignTargetId}\nReason: ${reason}`,
         );
     }
 
@@ -112,7 +111,7 @@ export class AdminHandler {
             postJobId,
             from: postJob.status,
             to: PostJobStatus.queued,
-            actor: 'admin',
+            actor: TransitionActor.admin,
             correlationId: postJobId,
         });
 
@@ -156,7 +155,7 @@ export class AdminHandler {
             campaignId,
             from: campaign.status,
             to: CampaignStatus.paused,
-            actor: 'admin',
+            actor: TransitionActor.admin,
             correlationId: campaignId,
         });
 
@@ -194,7 +193,7 @@ export class AdminHandler {
             campaignId,
             from: campaign.status,
             to: CampaignStatus.active,
-            actor: 'admin',
+            actor: TransitionActor.admin,
             correlationId: campaignId,
         });
 

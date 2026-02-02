@@ -18,6 +18,7 @@ import {
 } from '@prisma/client';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { CampaignConfig, campaignConfig } from '@/config/campaign.config';
+import { TransitionActor } from '@/modules/domain/contracts';
 
 @Injectable()
 export class ModerationService {
@@ -229,7 +230,7 @@ export class ModerationService {
                 campaignTargetId: targetId,
                 from: fresh.status,
                 to: CampaignTargetStatus.approved,
-                actor: 'admin',
+                actor: TransitionActor.admin,
                 correlationId: targetId,
             });
 
@@ -251,7 +252,7 @@ export class ModerationService {
             // =========================================================
             await this.paymentsService.holdEscrow(targetId, {
                 transaction: tx,
-                actor: 'admin',
+                actor: TransitionActor.admin,
                 correlationId: targetId,
             });
 
@@ -380,7 +381,7 @@ export class ModerationService {
                 campaignTargetId: targetId,
                 from: fresh.status,
                 to: CampaignTargetStatus.rejected,
-                actor: 'admin',
+                actor: TransitionActor.admin,
                 correlationId: targetId,
             });
 

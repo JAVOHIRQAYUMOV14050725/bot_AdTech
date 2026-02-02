@@ -1,10 +1,19 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LedgerReason, LedgerType, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
+import {
+    DealState,
+    LedgerReason,
+    LedgerType,
+    TransitionActor,
+} from '@/modules/domain/contracts';
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
@@ -21,6 +30,7 @@ export class FundAdDealUseCase {
         amount: Prisma.Decimal | string;
         verified: boolean;
         receivedAt?: Date;
+        actor?: TransitionActor;
     }) {
         if (!params.verified) {
             throw new BadRequestException(
@@ -29,6 +39,10 @@ export class FundAdDealUseCase {
         }
 
         const receivedAt = params.receivedAt ?? new Date();
+        const provider =
+            params.provider === 'telegram_sandbox'
+                ? 'internal_custody'
+                : params.provider;
         const fundingAmount = new Prisma.Decimal(params.amount).toDecimalPlaces(
             2,
             Prisma.Decimal.ROUND_HALF_UP,
@@ -47,23 +61,33 @@ export class FundAdDealUseCase {
                 throw new BadRequestException('Funding amount mismatch');
             }
 
-            const fundingEvent = await tx.adDealFundingEvent.upsert({
+            const existingFundingEvent = await tx.adDealFundingEvent.findUnique({
+                where: { providerReference: params.providerReference },
+            });
+
+            if (existingFundingEvent && existingFundingEvent.adDealId !== adDeal.id) {
+                throw new BadRequestException(
+                    'Funding reference already bound to another deal',
+                );
+            }
+
+            if (!existingFundingEvent && adDeal.status !== DealState.created) {
+                throw new BadRequestException(
+                    `AdDeal funding rejected from status ${adDeal.status}`,
+                );
+            }
+
+            await tx.adDealFundingEvent.upsert({
                 where: { providerReference: params.providerReference },
                 update: {},
                 create: {
                     adDealId: adDeal.id,
-                    provider: params.provider,
+                    provider,
                     providerReference: params.providerReference,
                     amount: fundingAmount,
                     receivedAt,
                 },
             });
-
-            if (fundingEvent.adDealId !== adDeal.id) {
-                throw new BadRequestException(
-                    'Funding reference already bound to another deal',
-                );
-            }
 
             let wallet = await tx.wallet.findUnique({
                 where: { userId: adDeal.advertiserId },
@@ -78,6 +102,22 @@ export class FundAdDealUseCase {
                 });
             }
 
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.funded,
+                actor: params.actor ?? TransitionActor.payment_provider,
+                correlationId: `addeal:${adDeal.id}:fund`,
+            });
+
+            if (!transition.noop) {
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons: [LedgerReason.deposit],
+                });
+            }
+
             await this.paymentsService.recordWalletMovement({
                 tx,
                 walletId: wallet.id,
@@ -85,11 +125,12 @@ export class FundAdDealUseCase {
                 type: LedgerType.credit,
                 reason: LedgerReason.deposit,
                 idempotencyKey: `addeal:fund:${params.providerReference}`,
-                actor: 'payment_provider',
+                settlementStatus: 'non_settlement',
+                actor: params.actor ?? TransitionActor.payment_provider,
                 correlationId: `addeal:${adDeal.id}:fund`,
             });
 
-            if (adDeal.status !== AdDealStatus.created) {
+            if (adDeal.status !== DealState.created) {
                 return adDeal;
             }
 

@@ -10,7 +10,8 @@ import {
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
 import { AdminCreateChannelDto } from './dto/admin-create-channel.dto';
-import { Channel, ChannelStatus, Prisma, UserRole } from '@prisma/client';
+import { Channel, ChannelStatus, Prisma } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';

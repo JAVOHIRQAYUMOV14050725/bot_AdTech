@@ -7,6 +7,7 @@ import { workerConfig } from '@/config/worker.config';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { EscrowService } from '@/modules/payments/escrow.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
+import { TransitionActor } from '@/modules/domain/contracts';
 import { postDlq, redisConnection } from '../queues';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { KillSwitchKey, PostJobStatus } from '@prisma/client';
@@ -208,7 +209,7 @@ export function startPostWorker(
                             postJobId: postJob.id,
                             from: postJob.status,
                             to: PostJobStatus.success,
-                            actor: 'worker',
+                            actor: TransitionActor.worker,
                             correlationId: postJob.id,
                         });
 
@@ -225,7 +226,7 @@ export function startPostWorker(
 
                         await escrowService.release(postJob.campaignTargetId, {
                             transaction: tx,
-                            actor: 'worker',
+                            actor: TransitionActor.worker,
                             correlationId: postJob.id,
                         });
                     });
@@ -292,7 +293,7 @@ export function startPostWorker(
                             postJobId: postJob.id,
                             from: postJob.status,
                             to: shouldRetry ? PostJobStatus.queued : PostJobStatus.failed,
-                            actor: 'worker',
+                            actor: TransitionActor.worker,
                             correlationId: postJob.id,
                         });
 
@@ -309,7 +310,7 @@ export function startPostWorker(
                             await escrowService.refund(postJob.campaignTargetId, {
                                 reason: 'post_failed',
                                 transaction: tx,
-                                actor: 'worker',
+                                actor: TransitionActor.worker,
                                 correlationId: postJob.id,
                             });
                         }

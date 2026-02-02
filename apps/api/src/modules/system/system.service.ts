@@ -12,14 +12,15 @@ import {
     CampaignTargetStatus,
     EscrowStatus,
     KillSwitchKey,
-    LedgerReason,
     PostJobStatus,
     Prisma,
 } from '@prisma/client';
+import { LedgerReason } from '@/modules/domain/contracts';
 import { ReconciliationMode } from './dto/reconciliation.dto';
 import { OutboxService } from '@/modules/outbox/outbox.service';
 import { assertPostJobTransition } from '@/modules/lifecycle/lifecycle';
 import { WorkerConfig, workerConfig } from '@/config/worker.config';
+import { TransitionActor } from '@/modules/domain/contracts';
 
 const toJsonValue = (value: unknown): Prisma.InputJsonValue | null => {
     if (value === null) {
@@ -108,13 +109,13 @@ export class SystemService {
                 let result;
                 if (action === ResolveAction.RELEASE) {
                     result = await this.escrowService.release(campaignTargetId, {
-                        actor: 'admin',
+                        actor: TransitionActor.admin,
                         correlationId: campaignTargetId,
                         transaction: tx,
                     });
                 } else if (action === ResolveAction.REFUND) {
                     result = await this.escrowService.refund(campaignTargetId, {
-                        actor: 'admin',
+                        actor: TransitionActor.admin,
                         reason,
                         correlationId: campaignTargetId,
                         transaction: tx,
@@ -235,7 +236,7 @@ export class SystemService {
                 await this.escrowService.refund(
                     escrow.campaignTargetId,
                     {
-                        actor: 'system',
+                        actor: TransitionActor.system,
                         reason: 'watchdog_stuck_escrow',
                         correlationId: escrow.campaignTargetId,
                     },
@@ -480,7 +481,7 @@ export class SystemService {
                             postJobId: job.id,
                             from: job.status,
                             to: PostJobStatus.success,
-                            actor: 'system',
+                            actor: TransitionActor.system,
                             correlationId: job.id,
                         });
 
@@ -498,7 +499,7 @@ export class SystemService {
 
                         await this.escrowService.release(job.campaignTargetId, {
                             transaction: tx,
-                            actor: 'system',
+                            actor: TransitionActor.system,
                             correlationId: job.id,
                         });
                     });
@@ -511,7 +512,7 @@ export class SystemService {
                             postJobId: job.id,
                             from: job.status,
                             to: PostJobStatus.failed,
-                            actor: 'system',
+                            actor: TransitionActor.system,
                             correlationId: job.id,
                         });
 
@@ -527,7 +528,7 @@ export class SystemService {
                         await this.escrowService.refund(job.campaignTargetId, {
                             reason: 'stalled_max_attempts',
                             transaction: tx,
-                            actor: 'system',
+                            actor: TransitionActor.system,
                             correlationId: job.id,
                         });
                     });

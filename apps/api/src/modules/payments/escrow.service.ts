@@ -5,27 +5,29 @@ import {
     CampaignTargetStatus,
     EscrowStatus,
     KillSwitchKey,
-    LedgerReason,
-    LedgerType,
     Prisma,
     Escrow,
-    UserRole,
 } from '@prisma/client';
 import { PaymentsService } from './payments.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import {
-    TransitionActor,
     assertCampaignTargetExists,
     assertCampaignTargetTransition,
     assertEscrowCampaignTargetInvariant,
     assertEscrowTransition,
     assertPostJobOutcomeForEscrow,
 } from '@/modules/lifecycle/lifecycle';
+import {
+    LedgerReason,
+    LedgerType,
+    TransitionActor,
+    UserRole,
+} from '@/modules/domain/contracts';
 
 
 @Injectable()
 export class EscrowService {
-  
+
 
     constructor(
         private readonly prisma: PrismaService,
@@ -82,7 +84,7 @@ export class EscrowService {
     }
 
 
-    
+
 
 
     /**
@@ -96,9 +98,9 @@ export class EscrowService {
             actor?: TransitionActor;
             correlationId?: string;
         }
-,
+        ,
     ) {
-        const actor = options?.actor ?? 'system';
+        const actor = options?.actor ?? TransitionActor.system;
         const correlationId = options?.correlationId ?? campaignTargetId;
         const execute = async (tx: Prisma.TransactionClient) => {
             await this.killSwitchService.assertEnabled({
@@ -296,6 +298,7 @@ export class EscrowService {
                 amount: payoutAmount,
                 type: LedgerType.credit,
                 reason: LedgerReason.payout,
+                settlementStatus: 'settled',
                 referenceId: campaignTargetId,
                 idempotencyKey: `payout:${campaignTargetId}`,
                 campaignId: campaignTarget!.campaignId,
@@ -323,6 +326,7 @@ export class EscrowService {
                     amount: commissionAmount,
                     type: LedgerType.credit,
                     reason: LedgerReason.commission,
+                    settlementStatus: 'settled',
                     referenceId: campaignTargetId,
                     idempotencyKey: `commission:${campaignTargetId}`,
                     campaignId: campaignTarget!.campaignId,
@@ -354,7 +358,7 @@ export class EscrowService {
                 },
             });
 
-   
+
 
             if (platformWalletId) {
                 await this.paymentsService.ensureWalletInvariant(
@@ -406,7 +410,7 @@ export class EscrowService {
             correlationId?: string;
         },
     ) {
-        const actor = options?.actor ?? 'system';
+        const actor = options?.actor ?? TransitionActor.system;
         const reason = options?.reason ?? 'post_failed';
         const correlationId = options?.correlationId ?? campaignTargetId;
         const execute = async (tx: Prisma.TransactionClient) => {
@@ -528,6 +532,7 @@ export class EscrowService {
                 amount,
                 type: LedgerType.credit,
                 reason: LedgerReason.refund,
+                settlementStatus: 'settled',
                 referenceId: campaignTargetId,
                 idempotencyKey: `refund:${campaignTargetId}`,
                 campaignId: campaignTarget!.campaignId,

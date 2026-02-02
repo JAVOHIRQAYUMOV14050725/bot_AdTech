@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, UserRole } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
+import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 import { Dispute } from '@/modules/domain/dispute/dispute.aggregate';
 import { DisputeResolution, DisputeStatus } from '@/modules/domain/dispute/dispute.types';
 import { SettleAdDealUseCase } from './settle-addeal.usecase';
@@ -68,13 +69,13 @@ export class ResolveDisputeUseCase {
             if (params.resolution === DisputeResolution.release) {
                 await this.settleAdDeal.execute({
                     adDealId: disputeRecord.adDealId,
-                    actor: 'admin',
+                    actor: TransitionActor.admin,
                     transaction: tx,
                 });
             } else if (params.resolution === DisputeResolution.refund) {
                 await this.refundAdDeal.execute({
                     adDealId: disputeRecord.adDealId,
-                    actor: 'admin',
+                    actor: TransitionActor.admin,
                     transaction: tx,
                 });
             } else {

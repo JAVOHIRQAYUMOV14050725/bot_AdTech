@@ -11,13 +11,14 @@ import {
     CampaignTargetStatus,
     ChannelStatus,
     Prisma,
-    UserRole,
 } from '@prisma/client';
+import { UserRole } from '@/modules/domain/contracts';
 import { AuditService } from '@/modules/audit/audit.service';
 import { assertCampaignTargetTransition, assertCampaignTransition } from '@/modules/lifecycle/lifecycle';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { CampaignConfig, campaignConfig } from '@/config/campaign.config';
 import { ConfigType } from '@nestjs/config';
+import { TransitionActor } from '@/modules/domain/contracts';
 
 @Injectable()
 export class CampaignsService {
@@ -226,7 +227,7 @@ export class CampaignsService {
             campaignId,
             from: campaign.status,
             to: CampaignStatus.active,
-            actor: 'advertiser',
+            actor: TransitionActor.advertiser,
             correlationId: campaignId,
         });
 
@@ -292,7 +293,7 @@ export class CampaignsService {
             campaignTargetId: targetId,
             from: target.status,
             to: CampaignTargetStatus.submitted,
-            actor: 'advertiser',
+            actor: TransitionActor.advertiser,
             correlationId: targetId,
         });
 
@@ -339,7 +340,7 @@ export class CampaignsService {
             campaignTargetId: targetId,
             from: target.status,
             to: CampaignTargetStatus.accepted,
-            actor: 'publisher',
+            actor: TransitionActor.publisher,
             correlationId: targetId,
         });
 

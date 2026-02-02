@@ -1,17 +1,23 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
     AdDealEscrowStatus,
-    LedgerReason,
-    LedgerType,
     Prisma,
-    UserRole,
 } from '@prisma/client';
 
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import { AdDealStatus } from '@/modules/domain/addeal/addeal.types';
-import { TransitionActor } from '@/modules/lifecycle/lifecycle';
+import {
+    DealState,
+    LedgerReason,
+    LedgerType,
+    TransitionActor,
+    UserRole,
+} from '@/modules/domain/contracts';
+import {
+    assertAdDealMoneyMovement,
+    assertAdDealTransition,
+} from '@/modules/domain/addeal/addeal.lifecycle';
 import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
@@ -35,13 +41,13 @@ export class SettleAdDealUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === AdDealStatus.settled) {
+            if (adDeal.status === DealState.settled) {
                 return adDeal;
             }
 
             if (
-                ![AdDealStatus.proof_submitted, AdDealStatus.disputed].includes(
-                    adDeal.status as AdDealStatus,
+                ![DealState.proof_submitted, DealState.disputed].includes(
+                    adDeal.status as DealState,
                 )
             ) {
                 throw new BadRequestException(
@@ -57,6 +63,12 @@ export class SettleAdDealUseCase {
                 throw new BadRequestException('Escrow not found for deal');
             }
 
+            if (escrow.status !== AdDealEscrowStatus.locked) {
+                throw new BadRequestException(
+                    `Escrow cannot be settled from status ${escrow.status}`,
+                );
+            }
+
             const commission = adDeal.commissionPercentage
                 ? {
                     amount: new Prisma.Decimal(0),
@@ -70,6 +82,26 @@ export class SettleAdDealUseCase {
                     commission,
                 );
 
+            const transition = assertAdDealTransition({
+                adDealId: adDeal.id,
+                from: adDeal.status as DealState,
+                to: DealState.settled,
+                actor: params.actor ?? TransitionActor.system,
+                correlationId: `addeal:${adDeal.id}:settle`,
+            });
+
+            if (!transition.noop) {
+                const reasons = [LedgerReason.payout];
+                if (commissionAmount.gt(0)) {
+                    reasons.push(LedgerReason.commission);
+                }
+                assertAdDealMoneyMovement({
+                    adDealId: adDeal.id,
+                    rule: transition.rule,
+                    reasons,
+                });
+            }
+
             await this.paymentsService.recordWalletMovement({
                 tx,
                 walletId: escrow.publisherWalletId,
@@ -78,7 +110,8 @@ export class SettleAdDealUseCase {
                 reason: LedgerReason.payout,
                 idempotencyKey: `addeal:${adDeal.id}:payout`,
                 referenceId: adDeal.id,
-                actor: params.actor ?? 'system',
+                settlementStatus: 'settled',
+                actor: params.actor ?? TransitionActor.system,
                 correlationId: `addeal:${adDeal.id}:settle`,
             });
 
@@ -101,7 +134,8 @@ export class SettleAdDealUseCase {
                     reason: LedgerReason.commission,
                     idempotencyKey: `addeal:${adDeal.id}:commission`,
                     referenceId: adDeal.id,
-                    actor: params.actor ?? 'system',
+                    settlementStatus: 'settled',
+                    actor: params.actor ?? TransitionActor.system,
                     correlationId: `addeal:${adDeal.id}:settle`,
                 });
             }

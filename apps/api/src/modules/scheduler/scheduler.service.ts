@@ -356,12 +356,20 @@ export class SchedulerService {
             }
 
             try {
-                await this.paymentsService.reconcilePendingDepositIntents({
+                const depositResult = await this.paymentsService.reconcilePendingDepositIntents({
                     olderThanMinutes: 10,
                 });
-                await this.paymentsService.reconcilePendingWithdrawalIntents({
+                const withdrawalResult = await this.paymentsService.reconcilePendingWithdrawalIntents({
                     olderThanMinutes: 10,
                 });
+                this.logger.log(
+                    {
+                        event: 'payment_intent_reconciliation_completed',
+                        depositsProcessed: depositResult.processed,
+                        withdrawalsProcessed: withdrawalResult.processed,
+                    },
+                    'SchedulerService',
+                );
                 await this.cronStatusService.recordRun({
                     name: 'payment_intent_reconciliation',
                     result: 'success',

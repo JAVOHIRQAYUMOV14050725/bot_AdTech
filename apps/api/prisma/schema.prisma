@@ -182,11 +182,28 @@ model User {
   moderatedTargets  CampaignTarget[] @relation("CampaignTargetModerator")
   paymentIntents    PaymentIntent[]
   withdrawalIntents WithdrawalIntent[]
+  invites           UserInvite[]
 
   @@index([telegramId])
   @@index([status])
   @@index([refreshTokenExpiresAt]) // ✅ ixtiyoriy, lekin foydali
   @@map("users")
+}
+
+model UserInvite {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@index([usedAt])
+  @@map("user_invites")
 }
 
 
@@ -665,6 +682,8 @@ model PaymentIntent {
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([provider, providerInvoiceId])
+  @@unique([provider, providerInvoiceId])
+  @@unique([provider, providerTxnId])
   @@map("payment_intents")
 }
 
@@ -693,6 +712,8 @@ model WithdrawalIntent {
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([provider, providerPayoutId])
+  @@unique([provider, providerPayoutId])
+  @@unique([provider, providerTxnId])
   @@map("withdrawal_intents")
 }
 

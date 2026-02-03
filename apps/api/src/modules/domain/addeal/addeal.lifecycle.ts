@@ -101,8 +101,7 @@ const AD_DEAL_TRANSITIONS: TransitionMap = {
             actors: [TransitionActor.admin, TransitionActor.system],
             moneyMovement: {
                 type: 'ledger',
-                required: [LedgerReason.payout],
-                optional: [LedgerReason.commission],
+                required: [LedgerReason.payout, LedgerReason.commission],
             },
         },
         [DealState.refunded]: {
@@ -129,8 +128,7 @@ const AD_DEAL_TRANSITIONS: TransitionMap = {
             actors: [TransitionActor.admin, TransitionActor.system],
             moneyMovement: {
                 type: 'ledger',
-                required: [LedgerReason.payout],
-                optional: [LedgerReason.commission],
+                required: [LedgerReason.payout, LedgerReason.commission],
             },
         },
         [DealState.refunded]: {

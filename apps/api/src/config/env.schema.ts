@@ -35,6 +35,7 @@ export const envSchema = z.object({
     AUTH_RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(5),
     AUTH_RATE_LIMIT_TTL_MS: z.coerce.number().int().positive().default(60000),
     BCRYPT_SALT_ROUNDS: z.coerce.number().int().positive().default(10),
+    INVITE_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
     POST_JOB_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
     POST_JOB_RETRY_BACKOFF_MS: z.coerce.number().int().positive().default(5000),
     POST_JOB_STALLED_MINUTES: z.coerce.number().int().positive().default(15),
@@ -51,6 +52,7 @@ export const envSchema = z.object({
     CLICK_SERVICE_ID: z.string().optional(),
     CLICK_MERCHANT_ID: z.string().optional(),
     CLICK_SECRET_KEY: z.string().optional(),
+    CLICK_SIGN_TIME_WINDOW_MINUTES: z.coerce.number().int().positive().default(10),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;    

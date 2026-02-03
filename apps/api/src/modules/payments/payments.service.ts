@@ -70,6 +70,54 @@ export class PaymentsService {
         return this.clickPaymentService.verifyWebhookSignature(payload);
     }
 
+    private assertClickPayloadSafe(params: {
+        payload: Record<string, string | number | null>;
+        expectedAmount?: Prisma.Decimal;
+    }) {
+        const { payload, expectedAmount } = params;
+        const verified = this.clickPaymentService.verifyWebhookSignature(payload);
+        if (!verified) {
+            throw new BadRequestException('Click webhook signature invalid');
+        }
+
+        const serviceId = this.configService.get<string>('CLICK_SERVICE_ID', '');
+        const merchantId = this.configService.get<string>('CLICK_MERCHANT_ID', '');
+
+        if (serviceId && String(payload['service_id'] ?? '') !== serviceId) {
+            throw new BadRequestException('Click service_id mismatch');
+        }
+
+        if (merchantId && String(payload['merchant_id'] ?? '') !== merchantId) {
+            throw new BadRequestException('Click merchant_id mismatch');
+        }
+
+        const signTimeRaw = String(payload['sign_time'] ?? '');
+        const signTimeNumber = Number(signTimeRaw);
+        const signTime = Number.isFinite(signTimeNumber)
+            ? new Date(signTimeNumber > 1e12 ? signTimeNumber : signTimeNumber * 1000)
+            : new Date(signTimeRaw);
+
+        if (Number.isNaN(signTime.getTime())) {
+            throw new BadRequestException('Click sign_time invalid');
+        }
+
+        const maxSkewMinutes = this.configService.get<number>(
+            'CLICK_SIGN_TIME_WINDOW_MINUTES',
+            10,
+        );
+        const deltaMs = Math.abs(Date.now() - signTime.getTime());
+        if (deltaMs > maxSkewMinutes * 60 * 1000) {
+            throw new BadRequestException('Click sign_time expired');
+        }
+
+        if (expectedAmount) {
+            const amount = new Prisma.Decimal(String(payload['amount'] ?? '0'));
+            if (!amount.equals(expectedAmount)) {
+                throw new BadRequestException('Click amount mismatch');
+            }
+        }
+    }
+
     private async assertLedgerMatchesWallet(
         tx: Prisma.TransactionClient,
         walletId: string,
@@ -358,19 +406,8 @@ export class PaymentsService {
 
     async finalizeDepositIntent(params: {
         payload: Record<string, string | number | null>;
-        verified: boolean;
     }) {
-        const { payload, verified } = params;
-        if (!verified) {
-            this.logger.error(
-                {
-                    event: 'click_webhook_invalid_signature',
-                    payload,
-                },
-                'PaymentsService',
-            );
-            throw new BadRequestException('Click webhook signature invalid');
-        }
+        const { payload } = params;
 
         const intentId = String(payload['merchant_trans_id'] ?? '');
         if (!intentId) {
@@ -383,6 +420,23 @@ export class PaymentsService {
 
         if (!intent) {
             throw new BadRequestException('Payment intent not found');
+        }
+
+        try {
+            this.assertClickPayloadSafe({
+                payload,
+                expectedAmount: intent.amount,
+            });
+        } catch (err) {
+            this.logger.error(
+                {
+                    event: 'click_webhook_invalid_signature',
+                    payload,
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                'PaymentsService',
+            );
+            throw err;
         }
 
         if (intent.status === PaymentIntentStatus.succeeded) {
@@ -494,14 +548,26 @@ export class PaymentsService {
             return { ok: true, status: intent.status };
         }
 
+        const signTime = Math.floor(Date.now() / 1000);
         await this.finalizeDepositIntent({
             payload: {
                 merchant_trans_id: intent.id,
                 click_trans_id: status.click_trans_id ?? '',
                 error: 0,
                 amount: intent.amount.toFixed(2),
+                sign_time: signTime,
+                service_id: this.configService.get<string>('CLICK_SERVICE_ID', ''),
+                merchant_id: this.configService.get<string>('CLICK_MERCHANT_ID', ''),
+                action: '1',
+                sign: this.clickPaymentService.buildWebhookSignature({
+                    click_trans_id: status.click_trans_id ?? '',
+                    service_id: this.configService.get<string>('CLICK_SERVICE_ID', ''),
+                    merchant_trans_id: intent.id,
+                    amount: intent.amount.toFixed(2),
+                    action: '1',
+                    sign_time: signTime.toString(),
+                }),
             },
-            verified: true,
         });
 
         return { ok: true, status: PaymentIntentStatus.succeeded };
@@ -602,19 +668,8 @@ export class PaymentsService {
 
     async finalizeWithdrawalIntent(params: {
         payload: Record<string, string | number | null>;
-        verified: boolean;
     }) {
-        const { payload, verified } = params;
-        if (!verified) {
-            this.logger.error(
-                {
-                    event: 'click_withdrawal_webhook_invalid_signature',
-                    payload,
-                },
-                'PaymentsService',
-            );
-            throw new BadRequestException('Click webhook signature invalid');
-        }
+        const { payload } = params;
 
         const intentId = String(payload['merchant_trans_id'] ?? '');
         if (!intentId) {
@@ -627,6 +682,41 @@ export class PaymentsService {
 
         if (!intent) {
             throw new BadRequestException('Withdrawal intent not found');
+        }
+
+        try {
+            this.assertClickPayloadSafe({
+                payload,
+                expectedAmount: intent.amount,
+            });
+        } catch (err) {
+            this.logger.error(
+                {
+                    event: 'click_withdrawal_webhook_invalid_signature',
+                    payload,
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                'PaymentsService',
+            );
+            throw err;
+        }
+
+        const providerTxnId = String(payload['click_trans_id'] ?? '');
+        if (providerTxnId) {
+            const existingTxn = await this.prisma.withdrawalIntent.findFirst({
+                where: {
+                    providerTxnId,
+                    NOT: { id: intent.id },
+                },
+            });
+
+            if (existingTxn?.status === WithdrawalIntentStatus.succeeded) {
+                return { ok: true, idempotent: true };
+            }
+
+            if (existingTxn) {
+                throw new ConflictException('Duplicate provider transaction');
+            }
         }
 
         if (intent.status === WithdrawalIntentStatus.succeeded) {
@@ -655,7 +745,7 @@ export class PaymentsService {
                     data: {
                         status: WithdrawalIntentStatus.failed,
                         failedAt: new Date(),
-                        providerTxnId: String(payload['click_trans_id'] ?? ''),
+                        providerTxnId,
                         metadata: payload as Prisma.JsonObject,
                     },
                 });
@@ -691,7 +781,7 @@ export class PaymentsService {
                 data: {
                     status: WithdrawalIntentStatus.succeeded,
                     succeededAt: new Date(),
-                    providerTxnId: String(payload['click_trans_id'] ?? ''),
+                    providerTxnId,
                     metadata: payload as Prisma.JsonObject,
                 },
             });
@@ -732,14 +822,26 @@ export class PaymentsService {
             return { ok: true, status: intent.status };
         }
 
+        const signTime = Math.floor(Date.now() / 1000);
         await this.finalizeWithdrawalIntent({
             payload: {
                 merchant_trans_id: intent.id,
                 click_trans_id: status.click_trans_id ?? '',
                 error: 0,
                 amount: intent.amount.toFixed(2),
+                sign_time: signTime,
+                service_id: this.configService.get<string>('CLICK_SERVICE_ID', ''),
+                merchant_id: this.configService.get<string>('CLICK_MERCHANT_ID', ''),
+                action: '1',
+                sign: this.clickPaymentService.buildWebhookSignature({
+                    click_trans_id: status.click_trans_id ?? '',
+                    service_id: this.configService.get<string>('CLICK_SERVICE_ID', ''),
+                    merchant_trans_id: intent.id,
+                    amount: intent.amount.toFixed(2),
+                    action: '1',
+                    sign_time: signTime.toString(),
+                }),
             },
-            verified: true,
         });
 
         return { ok: true, status: WithdrawalIntentStatus.succeeded };

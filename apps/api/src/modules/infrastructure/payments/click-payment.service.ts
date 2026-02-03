@@ -94,19 +94,37 @@ export class ClickPaymentService {
             return false;
         }
 
+        const expected = this.buildWebhookSignature({
+            click_trans_id: String(payload['click_trans_id'] ?? ''),
+            service_id: String(payload['service_id'] ?? ''),
+            merchant_trans_id: String(payload['merchant_trans_id'] ?? ''),
+            amount: String(payload['amount'] ?? ''),
+            action: String(payload['action'] ?? ''),
+            sign_time: String(payload['sign_time'] ?? ''),
+        });
+        return expected === signature;
+    }
+
+    buildWebhookSignature(params: {
+        click_trans_id: string;
+        service_id: string;
+        merchant_trans_id: string;
+        amount: string;
+        action: string;
+        sign_time: string;
+    }) {
         const signString = [
-            payload['click_trans_id'],
-            payload['service_id'],
+            params.click_trans_id,
+            params.service_id,
             this.secretKey,
-            payload['merchant_trans_id'],
-            payload['amount'],
-            payload['action'],
-            payload['sign_time'],
+            params.merchant_trans_id,
+            params.amount,
+            params.action,
+            params.sign_time,
         ]
             .map((value) => String(value ?? ''))
             .join('');
 
-        const expected = createHash('md5').update(signString).digest('hex');
-        return expected === signature;
+        return createHash('md5').update(signString).digest('hex');
     }
 }

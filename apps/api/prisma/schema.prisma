@@ -80,6 +80,7 @@ enum LedgerReason {
   payout
   commission
   refund
+  withdrawal
 }
 
 enum EscrowStatus {
@@ -132,6 +133,19 @@ enum OutboxStatus {
   completed
 }
 
+enum PaymentIntentStatus {
+  pending
+  succeeded
+  failed
+}
+
+enum WithdrawalIntentStatus {
+  pending
+  processing
+  succeeded
+  failed
+}
+
 //////////////////////
 // USERS & AUDIT
 //////////////////////
@@ -166,6 +180,8 @@ model User {
   verifiedChannels  ChannelVerification[]
   approvedCreatives AdCreative[]
   moderatedTargets  CampaignTarget[] @relation("CampaignTargetModerator")
+  paymentIntents    PaymentIntent[]
+  withdrawalIntents WithdrawalIntent[]
 
   @@index([telegramId])
   @@index([status])
@@ -523,6 +539,8 @@ model Wallet {
   user   User          @relation(fields: [userId], references: [id])
   ledger LedgerEntry[]
   financialAuditEvents FinancialAuditEvent[]
+  paymentIntents    PaymentIntent[]
+  withdrawalIntents WithdrawalIntent[]
 
   advertiserEscrows Escrow[] @relation("AdvertiserWallet")
   publisherEscrows  Escrow[] @relation("PublisherWallet")
@@ -616,6 +634,66 @@ model FinancialAuditEvent {
   @@index([campaignId, createdAt])
   @@index([campaignTargetId, createdAt])
   @@map("financial_audit_events")
+}
+
+//////////////////////
+// PAYMENT INTENTS
+//////////////////////
+
+model PaymentIntent {
+  id             String              @id @default(uuid())
+  userId         String
+  walletId       String?
+  amount         Decimal             @db.Decimal(14, 2)
+  currency       String              @default("USD")
+  provider       String
+  status         PaymentIntentStatus @default(pending)
+  idempotencyKey String              @unique
+  providerInvoiceId String?
+  providerTxnId     String?
+  paymentUrl     String?
+  metadata       Json?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  succeededAt   DateTime?
+  failedAt      DateTime?
+
+  user   User    @relation(fields: [userId], references: [id])
+  wallet Wallet? @relation(fields: [walletId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([provider, providerInvoiceId])
+  @@map("payment_intents")
+}
+
+model WithdrawalIntent {
+  id             String                @id @default(uuid())
+  userId         String
+  walletId       String
+  amount         Decimal               @db.Decimal(14, 2)
+  currency       String                @default("USD")
+  provider       String
+  status         WithdrawalIntentStatus @default(pending)
+  idempotencyKey String                @unique
+  providerPayoutId String?
+  providerTxnId   String?
+  metadata       Json?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  processingAt  DateTime?
+  succeededAt   DateTime?
+  failedAt      DateTime?
+
+  user   User   @relation(fields: [userId], references: [id])
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([provider, providerPayoutId])
+  @@map("withdrawal_intents")
 }
 
 enum SystemActionType {

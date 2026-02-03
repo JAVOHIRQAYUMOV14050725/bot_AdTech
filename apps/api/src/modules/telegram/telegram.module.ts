@@ -1,5 +1,4 @@
 
-import { PaymentsCoreModule } from '@/modules/payments/payments-core.module';
 import { Module, forwardRef } from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { AdminHandler } from './handlers/admin.handler';
@@ -14,9 +13,9 @@ import { StartHandler } from './handlers/start.handler';
 import { AdvertiserHandler } from './handlers/advertiser.handler';
 import { ChannelsModule } from '../channels/channels.module';
 import { PublisherHandler } from './handlers/publisher.handler';
-import { AdDealModule } from '../application/addeal/addeal.module';
 import { IdentityModule } from '@/modules/identity/identity.module';
 import { TELEGRAM_IDENTITY_ADAPTER } from '@/modules/identity/telegram-identity.adapter';
+import { TelegramBackendClient } from './telegram-backend.client';
 
 const env = loadEnv()
 const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN
@@ -26,15 +25,14 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
     imports: [
         TelegrafModule.forRoot({ token: TELEGRAM_BOT_TOKEN }),
         PrismaModule,
-        PaymentsCoreModule,
         OpsModule,
         RedisModule,
-        AdDealModule,
         forwardRef(() => IdentityModule),
         forwardRef(() => ChannelsModule),
     ],
     providers: [
         TelegramFSMService,
+        TelegramBackendClient,
         StartHandler,
         AdvertiserHandler,
         PublisherHandler,

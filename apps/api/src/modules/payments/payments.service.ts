@@ -5,7 +5,9 @@ import {
     CampaignStatus,
     EscrowStatus,
     KillSwitchKey,
+    PaymentIntentStatus,
     Prisma,
+    WithdrawalIntentStatus,
 } from '@prisma/client';
 import {
     BadRequestException,
@@ -21,6 +23,7 @@ import {
     LedgerType,
     TransitionActor,
 } from '@/modules/domain/contracts';
+import { ClickPaymentService } from '@/modules/infrastructure/payments/click-payment.service';
 
 
 @Injectable()
@@ -31,6 +34,7 @@ export class PaymentsService {
         private readonly prisma: PrismaService,
         private readonly killSwitchService: KillSwitchService,
         private readonly configService: ConfigService,
+        private readonly clickPaymentService: ClickPaymentService,
         @Inject('LOGGER') private readonly logger: LoggerService
     ) { }
 
@@ -60,6 +64,10 @@ export class PaymentsService {
             );
             throw new ConflictException('Escrow amount precision invalid');
         }
+    }
+
+    verifyClickSignature(payload: Record<string, string | number | null>) {
+        return this.clickPaymentService.verifyWebhookSignature(payload);
     }
 
     private async assertLedgerMatchesWallet(
@@ -264,24 +272,35 @@ export class PaymentsService {
     }
 
 
-    /**
-     * 💰 USER DEPOSIT
-     */
-    async deposit(
-        userId: string,
-        amount: Prisma.Decimal,
-        idempotencyKey: string,
-    ) {
+    async createDepositIntent(params: {
+        userId: string;
+        amount: Prisma.Decimal;
+        idempotencyKey: string;
+        returnUrl?: string;
+    }) {
+        const { userId, amount, idempotencyKey, returnUrl } = params;
         const normalizedAmount = this.normalizeDecimal(amount);
         if (normalizedAmount.lte(0)) {
             throw new BadRequestException('Deposit amount must be positive');
         }
 
-        return this.prisma.$transaction(async (tx) => {
-            let wallet = await tx.wallet.findUnique({
-                where: { userId },
-            });
+        const enableClick = this.configService.get<boolean>(
+            'ENABLE_CLICK_PAYMENTS',
+            false,
+        );
+        if (!enableClick) {
+            throw new ConflictException('Click payments are disabled');
+        }
 
+        const intent = await this.prisma.$transaction(async (tx) => {
+            const existing = await tx.paymentIntent.findUnique({
+                where: { idempotencyKey },
+            });
+            if (existing) {
+                return existing;
+            }
+
+            let wallet = await tx.wallet.findUnique({ where: { userId } });
             if (!wallet) {
                 wallet = await tx.wallet.create({
                     data: {
@@ -291,33 +310,162 @@ export class PaymentsService {
                 });
             }
 
-            const existing = await tx.ledgerEntry.findUnique({
-                where: { idempotencyKey },
+            return tx.paymentIntent.create({
+                data: {
+                    userId,
+                    walletId: wallet.id,
+                    amount: normalizedAmount,
+                    currency: wallet.currency,
+                    provider: 'click',
+                    status: PaymentIntentStatus.pending,
+                    idempotencyKey,
+                },
+            });
+        });
+
+        const invoice = await this.clickPaymentService.createInvoice({
+            amount: normalizedAmount.toFixed(2),
+            merchantTransId: intent.id,
+            description: `Wallet deposit ${intent.id}`,
+            returnUrl,
+        });
+
+        const updated = await this.prisma.paymentIntent.update({
+            where: { id: intent.id },
+            data: {
+                providerInvoiceId: invoice.invoice_id,
+                paymentUrl: invoice.payment_url,
+            },
+        });
+
+        this.logger.log(
+            {
+                event: 'deposit_intent_created',
+                entityType: 'payment_intent',
+                entityId: updated.id,
+                data: {
+                    userId,
+                    amount: normalizedAmount.toFixed(2),
+                    provider: 'click',
+                    providerInvoiceId: invoice.invoice_id,
+                },
+            },
+            'PaymentsService',
+        );
+
+        return updated;
+    }
+
+    async finalizeDepositIntent(params: {
+        payload: Record<string, string | number | null>;
+        verified: boolean;
+    }) {
+        const { payload, verified } = params;
+        if (!verified) {
+            this.logger.error(
+                {
+                    event: 'click_webhook_invalid_signature',
+                    payload,
+                },
+                'PaymentsService',
+            );
+            throw new BadRequestException('Click webhook signature invalid');
+        }
+
+        const intentId = String(payload['merchant_trans_id'] ?? '');
+        if (!intentId) {
+            throw new BadRequestException('Missing merchant_trans_id');
+        }
+
+        const intent = await this.prisma.paymentIntent.findUnique({
+            where: { id: intentId },
+        });
+
+        if (!intent) {
+            throw new BadRequestException('Payment intent not found');
+        }
+
+        if (intent.status === PaymentIntentStatus.succeeded) {
+            return { ok: true, idempotent: true };
+        }
+
+        const errorCode = Number(payload['error'] ?? 0);
+        const isSuccess = errorCode === 0;
+
+        return this.prisma.$transaction(async (tx) => {
+            const locked = await tx.paymentIntent.findUnique({
+                where: { id: intent.id },
             });
 
-            if (existing) {
+            if (!locked) {
+                throw new BadRequestException('Payment intent not found');
+            }
+
+            if (locked.status === PaymentIntentStatus.succeeded) {
                 return { ok: true, idempotent: true };
+            }
+
+            if (!isSuccess) {
+                await tx.paymentIntent.update({
+                    where: { id: intent.id },
+                    data: {
+                        status: PaymentIntentStatus.failed,
+                        failedAt: new Date(),
+                        providerTxnId: String(payload['click_trans_id'] ?? ''),
+                        metadata: payload as Prisma.JsonObject,
+                    },
+                });
+
+                await tx.userAuditLog.create({
+                    data: {
+                        userId: intent.userId,
+                        action: 'deposit_failed',
+                        metadata: {
+                            intentId: intent.id,
+                            provider: 'click',
+                            payload,
+                        },
+                    },
+                });
+
+                return { ok: false, status: 'failed' as const };
+            }
+
+            const walletId = intent.walletId;
+            if (!walletId) {
+                throw new BadRequestException('Wallet missing for intent');
             }
 
             await this.recordWalletMovement({
                 tx,
-                walletId: wallet.id,
-                amount: normalizedAmount,
+                walletId,
+                amount: intent.amount,
                 type: LedgerType.credit,
                 reason: LedgerReason.deposit,
                 settlementStatus: 'non_settlement',
-                idempotencyKey,
-                actor: TransitionActor.system,
-                correlationId: `deposit:${userId}:${idempotencyKey}`,
+                idempotencyKey: `deposit_intent:${intent.id}`,
+                actor: TransitionActor.payment_provider,
+                correlationId: `deposit_intent:${intent.id}`,
+            });
+
+            await tx.paymentIntent.update({
+                where: { id: intent.id },
+                data: {
+                    status: PaymentIntentStatus.succeeded,
+                    succeededAt: new Date(),
+                    providerTxnId: String(payload['click_trans_id'] ?? ''),
+                    metadata: payload as Prisma.JsonObject,
+                },
             });
 
             await tx.userAuditLog.create({
                 data: {
-                    userId,
-                    action: 'wallet_deposit',
+                    userId: intent.userId,
+                    action: 'deposit_succeeded',
                     metadata: {
-                        amount: normalizedAmount.toFixed(2),
-                        idempotencyKey,
+                        intentId: intent.id,
+                        provider: 'click',
+                        payload,
                     },
                 },
             });
@@ -325,6 +473,319 @@ export class PaymentsService {
             return { ok: true };
         });
     }
+
+    async reconcileDepositIntent(intentId: string) {
+        const intent = await this.prisma.paymentIntent.findUnique({
+            where: { id: intentId },
+        });
+        if (!intent) {
+            throw new BadRequestException('Payment intent not found');
+        }
+
+        if (intent.status !== PaymentIntentStatus.pending) {
+            return { ok: true, status: intent.status };
+        }
+
+        const status = await this.clickPaymentService.getInvoiceStatus({
+            merchantTransId: intent.id,
+        });
+
+        if (status.status !== 'paid') {
+            return { ok: true, status: intent.status };
+        }
+
+        await this.finalizeDepositIntent({
+            payload: {
+                merchant_trans_id: intent.id,
+                click_trans_id: status.click_trans_id ?? '',
+                error: 0,
+                amount: intent.amount.toFixed(2),
+            },
+            verified: true,
+        });
+
+        return { ok: true, status: PaymentIntentStatus.succeeded };
+    }
+
+    async reconcilePendingDepositIntents(params: { olderThanMinutes: number }) {
+        const cutoff = new Date(Date.now() - params.olderThanMinutes * 60_000);
+        const intents = await this.prisma.paymentIntent.findMany({
+            where: {
+                status: PaymentIntentStatus.pending,
+                createdAt: { lt: cutoff },
+            },
+            orderBy: { createdAt: 'asc' },
+            take: 50,
+        });
+
+        if (intents.length) {
+            this.logger.warn(
+                {
+                    event: 'deposit_intent_backlog',
+                    count: intents.length,
+                    olderThanMinutes: params.olderThanMinutes,
+                },
+                'PaymentsService',
+            );
+        }
+
+        for (const intent of intents) {
+            try {
+                await this.reconcileDepositIntent(intent.id);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                this.logger.error(
+                    {
+                        event: 'deposit_intent_reconcile_failed',
+                        intentId: intent.id,
+                        error: message,
+                    },
+                    'PaymentsService',
+                );
+            }
+        }
+
+        return { ok: true, processed: intents.length };
+    }
+
+    async createWithdrawalIntent(params: {
+        userId: string;
+        amount: Prisma.Decimal;
+        idempotencyKey: string;
+    }) {
+        const { userId, amount, idempotencyKey } = params;
+        const normalizedAmount = this.normalizeDecimal(amount);
+        if (normalizedAmount.lte(0)) {
+            throw new BadRequestException('Withdrawal amount must be positive');
+        }
+
+        const enableWithdrawals = this.configService.get<boolean>(
+            'ENABLE_WITHDRAWALS',
+            false,
+        );
+        if (!enableWithdrawals) {
+            throw new ConflictException('Withdrawals are disabled');
+        }
+
+        return this.prisma.$transaction(async (tx) => {
+            const existing = await tx.withdrawalIntent.findUnique({
+                where: { idempotencyKey },
+            });
+            if (existing) {
+                return existing;
+            }
+
+            const wallet = await tx.wallet.findUnique({
+                where: { userId },
+            });
+            if (!wallet) {
+                throw new BadRequestException('Wallet not found');
+            }
+
+            if (wallet.balance.lt(normalizedAmount)) {
+                throw new BadRequestException('Insufficient balance');
+            }
+
+            return tx.withdrawalIntent.create({
+                data: {
+                    userId,
+                    walletId: wallet.id,
+                    amount: normalizedAmount,
+                    currency: wallet.currency,
+                    provider: 'click',
+                    status: WithdrawalIntentStatus.pending,
+                    idempotencyKey,
+                },
+            });
+        });
+    }
+
+    async finalizeWithdrawalIntent(params: {
+        payload: Record<string, string | number | null>;
+        verified: boolean;
+    }) {
+        const { payload, verified } = params;
+        if (!verified) {
+            this.logger.error(
+                {
+                    event: 'click_withdrawal_webhook_invalid_signature',
+                    payload,
+                },
+                'PaymentsService',
+            );
+            throw new BadRequestException('Click webhook signature invalid');
+        }
+
+        const intentId = String(payload['merchant_trans_id'] ?? '');
+        if (!intentId) {
+            throw new BadRequestException('Missing merchant_trans_id');
+        }
+
+        const intent = await this.prisma.withdrawalIntent.findUnique({
+            where: { id: intentId },
+        });
+
+        if (!intent) {
+            throw new BadRequestException('Withdrawal intent not found');
+        }
+
+        if (intent.status === WithdrawalIntentStatus.succeeded) {
+            return { ok: true, idempotent: true };
+        }
+
+        const errorCode = Number(payload['error'] ?? 0);
+        const isSuccess = errorCode === 0;
+
+        return this.prisma.$transaction(async (tx) => {
+            const locked = await tx.withdrawalIntent.findUnique({
+                where: { id: intent.id },
+            });
+
+            if (!locked) {
+                throw new BadRequestException('Withdrawal intent not found');
+            }
+
+            if (locked.status === WithdrawalIntentStatus.succeeded) {
+                return { ok: true, idempotent: true };
+            }
+
+            if (!isSuccess) {
+                await tx.withdrawalIntent.update({
+                    where: { id: intent.id },
+                    data: {
+                        status: WithdrawalIntentStatus.failed,
+                        failedAt: new Date(),
+                        providerTxnId: String(payload['click_trans_id'] ?? ''),
+                        metadata: payload as Prisma.JsonObject,
+                    },
+                });
+
+                await tx.userAuditLog.create({
+                    data: {
+                        userId: intent.userId,
+                        action: 'withdrawal_failed',
+                        metadata: {
+                            intentId: intent.id,
+                            provider: 'click',
+                            payload,
+                        },
+                    },
+                });
+
+                return { ok: false, status: 'failed' as const };
+            }
+
+            await this.recordWalletMovement({
+                tx,
+                walletId: intent.walletId,
+                amount: intent.amount,
+                type: LedgerType.debit,
+                reason: LedgerReason.withdrawal,
+                idempotencyKey: `withdrawal_intent:${intent.id}`,
+                actor: TransitionActor.payment_provider,
+                correlationId: `withdrawal_intent:${intent.id}`,
+            });
+
+            await tx.withdrawalIntent.update({
+                where: { id: intent.id },
+                data: {
+                    status: WithdrawalIntentStatus.succeeded,
+                    succeededAt: new Date(),
+                    providerTxnId: String(payload['click_trans_id'] ?? ''),
+                    metadata: payload as Prisma.JsonObject,
+                },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: intent.userId,
+                    action: 'withdrawal_succeeded',
+                    metadata: {
+                        intentId: intent.id,
+                        provider: 'click',
+                        payload,
+                    },
+                },
+            });
+
+            return { ok: true };
+        });
+    }
+
+    async reconcileWithdrawalIntent(intentId: string) {
+        const intent = await this.prisma.withdrawalIntent.findUnique({
+            where: { id: intentId },
+        });
+        if (!intent) {
+            throw new BadRequestException('Withdrawal intent not found');
+        }
+
+        if (intent.status !== WithdrawalIntentStatus.pending) {
+            return { ok: true, status: intent.status };
+        }
+
+        const status = await this.clickPaymentService.getInvoiceStatus({
+            merchantTransId: intent.id,
+        });
+
+        if (status.status !== 'paid') {
+            return { ok: true, status: intent.status };
+        }
+
+        await this.finalizeWithdrawalIntent({
+            payload: {
+                merchant_trans_id: intent.id,
+                click_trans_id: status.click_trans_id ?? '',
+                error: 0,
+                amount: intent.amount.toFixed(2),
+            },
+            verified: true,
+        });
+
+        return { ok: true, status: WithdrawalIntentStatus.succeeded };
+    }
+
+    async reconcilePendingWithdrawalIntents(params: { olderThanMinutes: number }) {
+        const cutoff = new Date(Date.now() - params.olderThanMinutes * 60_000);
+        const intents = await this.prisma.withdrawalIntent.findMany({
+            where: {
+                status: WithdrawalIntentStatus.pending,
+                createdAt: { lt: cutoff },
+            },
+            orderBy: { createdAt: 'asc' },
+            take: 50,
+        });
+
+        if (intents.length) {
+            this.logger.warn(
+                {
+                    event: 'withdrawal_intent_backlog',
+                    count: intents.length,
+                    olderThanMinutes: params.olderThanMinutes,
+                },
+                'PaymentsService',
+            );
+        }
+
+        for (const intent of intents) {
+            try {
+                await this.reconcileWithdrawalIntent(intent.id);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                this.logger.error(
+                    {
+                        event: 'withdrawal_intent_reconcile_failed',
+                        intentId: intent.id,
+                        error: message,
+                    },
+                    'PaymentsService',
+                );
+            }
+        }
+
+        return { ok: true, processed: intents.length };
+    }
+
 
 
     /**

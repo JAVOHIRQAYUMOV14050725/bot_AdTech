@@ -5,16 +5,14 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { addChannelOptions, publisherHome, verifyPrivateChannelKeyboard } from '../keyboards';
 import { PrismaService } from '@/prisma/prisma.service';
-import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usecase';
-import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.usecase';
-import { SettleAdDealUseCase } from '@/modules/application/addeal/settle-addeal.usecase';
-import { TransitionActor, UserRole } from '@/modules/domain/contracts';
+import { UserRole } from '@/modules/domain/contracts';
 import { Logger } from '@nestjs/common';
 import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
 import { ChannelsService } from '@/modules/channels/channels.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
 import { ChannelStatus } from '@prisma/client';
+import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 @Update()
 export class PublisherHandler {
     private readonly logger = new Logger(PublisherHandler.name);
@@ -25,9 +23,7 @@ export class PublisherHandler {
         private readonly channelsService: ChannelsService,
         private readonly telegramService: TelegramService,
         private readonly identityResolver: IdentityResolverService,
-        private readonly acceptDeal: AcceptDealUseCase,
-        private readonly submitProof: SubmitProofUseCase,
-        private readonly settleAdDeal: SettleAdDealUseCase,
+        private readonly backendClient: TelegramBackendClient,
     ) { }
 
     @Action('ROLE_PUBLISHER')
@@ -161,10 +157,7 @@ export class PublisherHandler {
                     return ctx.reply('❌ AdDeal not found for publisher');
                 }
 
-                await this.acceptDeal.execute({
-                    adDealId,
-                    actor: TransitionActor.publisher,
-                });
+                await this.backendClient.acceptAdDeal(adDealId);
 
                 return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
             } catch (err) {
@@ -264,10 +257,9 @@ export class PublisherHandler {
                 return ctx.reply('❌ AdDeal not found for publisher');
             }
 
-            await this.submitProof.execute({
+            await this.backendClient.submitProof({
                 adDealId,
-                proofPayload: { text: proofText },
-                actor: TransitionActor.publisher,
+                proofText,
             });
 
             this.logger.log({
@@ -276,10 +268,7 @@ export class PublisherHandler {
                 publisherId: publisher.user.id,
             });
 
-            await this.settleAdDeal.execute({
-                adDealId,
-                actor: TransitionActor.system,
-            });
+            await this.backendClient.settleAdDeal(adDealId);
 
             this.logger.log({
                 event: 'settlement_completed',

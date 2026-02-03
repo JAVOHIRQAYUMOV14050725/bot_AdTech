@@ -5,6 +5,7 @@ import { OutboxService } from '@/modules/outbox/outbox.service';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { CronStatusService } from './cron-status.service';
 import { RequestContext, runWithCronContext } from '@/common/context/request-context';
+import { PaymentsService } from '@/modules/payments/payments.service';
 
 @Injectable()
 export class SchedulerService {
@@ -13,6 +14,7 @@ export class SchedulerService {
         private readonly killSwitchService: KillSwitchService,
         private readonly cronStatusService: CronStatusService,
         private readonly outboxService: OutboxService,
+        private readonly paymentsService: PaymentsService,
         @Inject('LOGGER') private readonly logger: LoggerService,
 
     ) { }
@@ -325,6 +327,56 @@ export class SchedulerService {
                         event: 'revenue_reconciliation_failed',
                         error: message,
                         enabled,
+                    },
+                    'SchedulerService',
+                );
+                throw err;
+            }
+        });
+    }
+
+    /**
+     * =========================================================
+     * 🧾 PAYMENT INTENT RECONCILIATION
+     * =========================================================
+     */
+    @Cron(CronExpression.EVERY_10_MINUTES)
+    async paymentIntentReconciliation() {
+        return runWithCronContext('payment_intent_reconciliation', async () => {
+            const enabled = await this.killSwitchService.isEnabled(
+                'worker_reconciliation',
+            );
+            if (!enabled) {
+                await this.cronStatusService.recordRun({
+                    name: 'payment_intent_reconciliation',
+                    result: 'skipped',
+                    error: 'kill_switch_disabled',
+                });
+                return;
+            }
+
+            try {
+                await this.paymentsService.reconcilePendingDepositIntents({
+                    olderThanMinutes: 10,
+                });
+                await this.paymentsService.reconcilePendingWithdrawalIntents({
+                    olderThanMinutes: 10,
+                });
+                await this.cronStatusService.recordRun({
+                    name: 'payment_intent_reconciliation',
+                    result: 'success',
+                });
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                await this.cronStatusService.recordRun({
+                    name: 'payment_intent_reconciliation',
+                    result: 'failed',
+                    error: message,
+                });
+                this.logger.error(
+                    {
+                        event: 'payment_intent_reconciliation_failed',
+                        error: message,
                     },
                     'SchedulerService',
                 );

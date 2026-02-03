@@ -66,7 +66,9 @@ export class InternalAdDealController {
     submit(@Param('id') id: string, @Body() dto: SubmitProofDto) {
         return this.submitProof.execute({
             adDealId: id,
-            proofText: dto.proofText,
+            proofPayload: {
+                text: dto.proofText,
+            },
             actor: TransitionActor.publisher,
         });
     }

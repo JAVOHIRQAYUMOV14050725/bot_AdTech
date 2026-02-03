@@ -1,15 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ApiValidationErrorDetailDto {
-    @ApiProperty({ example: 'telegramId' })
+    @ApiProperty({ example: 'identifier' })
     field!: string;
 
     @ApiProperty({
-        example: { isTelegramIdString: 'telegramId must be a digits-only telegram id string' },
+        example: { isNotEmpty: 'identifier should not be empty' },
     })
     constraints!: Record<string, string>;
 
-    @ApiPropertyOptional({ example: '1234567890' })
+    @ApiPropertyOptional({ example: '@example' })
     value?: unknown;
 }
 

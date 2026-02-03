@@ -17,13 +17,13 @@ type ChannelIdentity = {
     telegramChannelId: string;
     title: string;
     username?: string;
-    source: 'public_username' | 'private_signal' | 'telegram_channel_id';
+    source: 'public_username' | 'private_signal' | 'database';
 };
 
 type UserIdentity = {
     telegramId: string;
     username?: string;
-    source: 'public_username' | 'telegram_id';
+    source: 'public_username' | 'database';
 };
 
 @Injectable()
@@ -62,7 +62,8 @@ export class IdentityResolverService {
             const lowered = path.toLowerCase();
             if (lowered === 'c' || lowered === 'joinchat' || path.startsWith('+')) {
                 return {
-                    error: 'Invite links are not supported. Please send a public @username or t.me/username.',
+                    error:
+                        'Invite links cannot be verified here. For private channels, add the bot as ADMIN and use the private verification flow, or send a public @username.',
                 };
             }
             if (!usernameRegex.test(path)) {
@@ -100,7 +101,7 @@ export class IdentityResolverService {
 
     async resolveChannelIdentifier(
         identifier: string,
-        options?: { allowTelegramId?: boolean; actorId?: string },
+        options?: { actorId?: string },
     ): Promise<IdentityResolutionResult<ChannelIdentity>> {
         this.logStart('identity_resolution_started', {
             type: 'channel',
@@ -109,17 +110,6 @@ export class IdentityResolverService {
         });
 
         const trimmed = identifier.trim();
-        if (options?.allowTelegramId && /^-100\d{5,}$/.test(trimmed)) {
-            return {
-                ok: true,
-                value: {
-                    telegramChannelId: trimmed,
-                    title: 'Unknown Channel',
-                    source: 'telegram_channel_id',
-                },
-            };
-        }
-
         const parsed = this.parseIdentifier(trimmed);
         if (!parsed) {
             return {
@@ -130,6 +120,27 @@ export class IdentityResolverService {
         }
         if ('error' in parsed) {
             return { ok: false, reason: 'invalid_identifier', message: parsed.error };
+        }
+
+        const channelByUsername = await this.prisma.channel.findFirst({
+            where: { username: { equals: parsed.username, mode: 'insensitive' } },
+        });
+        if (channelByUsername) {
+            this.logStart('identity_resolved', {
+                type: 'channel',
+                actorId: options?.actorId ?? null,
+                telegramChannelId: channelByUsername.telegramChannelId.toString(),
+                source: 'database',
+            });
+            return {
+                ok: true,
+                value: {
+                    telegramChannelId: channelByUsername.telegramChannelId.toString(),
+                    title: channelByUsername.title,
+                    username: channelByUsername.username ?? undefined,
+                    source: 'database',
+                },
+            };
         }
 
         const resolved = await this.getTelegramAdapter().resolvePublicChannel(parsed.username);
@@ -146,6 +157,14 @@ export class IdentityResolverService {
                 telegramError: resolved.telegramError,
             };
         }
+
+        await this.prisma.channel.updateMany({
+            where: { telegramChannelId: BigInt(resolved.telegramChannelId) },
+            data: {
+                title: resolved.title,
+                username: resolved.username ?? undefined,
+            },
+        });
 
         this.logStart('identity_resolved', {
             type: 'channel',
@@ -237,7 +256,7 @@ export class IdentityResolverService {
 
     async resolveUserIdentifier(
         identifier: string,
-        options?: { allowTelegramId?: boolean; actorId?: string },
+        options?: { actorId?: string },
     ): Promise<IdentityResolutionResult<UserIdentity>> {
         this.logStart('identity_resolution_started', {
             type: 'user',
@@ -246,16 +265,6 @@ export class IdentityResolverService {
         });
 
         const trimmed = identifier.trim();
-        if (options?.allowTelegramId && /^\d+$/.test(trimmed)) {
-            return {
-                ok: true,
-                value: {
-                    telegramId: trimmed,
-                    source: 'telegram_id',
-                },
-            };
-        }
-
         const parsed = this.parseIdentifier(trimmed);
         if (!parsed) {
             return {
@@ -266,6 +275,26 @@ export class IdentityResolverService {
         }
         if ('error' in parsed) {
             return { ok: false, reason: 'invalid_identifier', message: parsed.error };
+        }
+
+        const userByUsername = await this.prisma.user.findFirst({
+            where: { username: { equals: parsed.username, mode: 'insensitive' } },
+        });
+        if (userByUsername) {
+            this.logStart('identity_resolved', {
+                type: 'user',
+                actorId: options?.actorId ?? null,
+                telegramId: userByUsername.telegramId.toString(),
+                source: 'database',
+            });
+            return {
+                ok: true,
+                value: {
+                    telegramId: userByUsername.telegramId.toString(),
+                    username: userByUsername.username ?? undefined,
+                    source: 'database',
+                },
+            };
         }
 
         const resolved = await this.getTelegramAdapter().resolvePublicUser(parsed.username);
@@ -283,6 +312,13 @@ export class IdentityResolverService {
                     '@username is not reachable by the bot. Ask the user to start the bot or provide a public username.',
                 telegramError: resolved.telegramError,
             };
+        }
+
+        if (resolved.username) {
+            await this.prisma.user.updateMany({
+                where: { telegramId: BigInt(resolved.telegramId) },
+                data: { username: resolved.username },
+            });
         }
 
         this.logStart('identity_resolved', {

@@ -5,10 +5,8 @@ import {
     IsString,
     MaxLength,
     MinLength,
-    ValidateIf,
 } from 'class-validator';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
-import { IsTelegramChannelIdString, TELEGRAM_CHANNEL_ID_EXAMPLE } from '@/common/validators/telegram-channel-id-string.decorator';
 import { IsTelegramUsername, USERNAME_EXAMPLE } from '@/common/validators/telegram-username.decorator';
 import { IsDecimalString } from '@/common/validators/decimal-string.decorator';
 
@@ -17,23 +15,10 @@ export class CreateChannelDto {
         example: '@mychannel',
         description: 'Public @username or t.me/username for the channel.',
     })
-    @ValidateIf((o) => !o.telegramChannelId)
     @TrimString()
     @IsString()
     @IsNotEmpty()
-    channelIdentifier?: string;
-
-    @ApiPropertyOptional({
-        example: TELEGRAM_CHANNEL_ID_EXAMPLE,
-        description: 'Internal-use only. Real Telegram channel id (not @username or invite link), starting with -100.',
-        pattern: '^-100\\d{5,}$',
-    })
-    @ValidateIf((o) => !o.channelIdentifier)
-    @TrimString()
-    @IsString()
-    @IsNotEmpty()
-    @IsTelegramChannelIdString()
-    telegramChannelId?: string;
+    channelIdentifier!: string;
 
     @ApiPropertyOptional({
         example: 'My Channel',

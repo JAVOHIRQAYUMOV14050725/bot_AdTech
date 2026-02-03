@@ -400,10 +400,13 @@ export class PublisherHandler {
         }
 
         try {
-            const channel = await this.channelsService.createChannel(publisherId, {
-                telegramChannelId,
-                title,
-                username,
+            const channel = await this.channelsService.createChannelFromResolved({
+                ownerId: publisherId,
+                resolved: {
+                    telegramChannelId,
+                    title,
+                    username,
+                },
             });
 
             this.logger.log({

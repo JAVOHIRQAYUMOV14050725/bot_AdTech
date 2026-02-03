@@ -16,7 +16,7 @@ import { VerificationService } from './verification.service';
 import { AuditService } from '@/modules/audit/audit.service';
 import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { TELEGRAM_CHANNEL_ID_REGEX } from '@/common/validators/telegram-channel-id-string.decorator';
-import { TelegramCheckReason, TelegramCheckResult } from '@/modules/telegram/telegram.types';
+import { TelegramCheckResult } from '@/modules/telegram/telegram.types';
 import { AppConfig, appConfig } from '@/config/app.config';
 import { ConfigType } from '@nestjs/config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
@@ -46,31 +46,12 @@ export class ChannelsService {
         }
     }
 
-    private parseTelegramUserId(value: string): bigint {
-        if (!/^\d+$/.test(value)) {
-            throw new BadRequestException('Invalid ownerTelegramId format');
-        }
-        try {
-            return BigInt(value);
-        } catch {
-            throw new BadRequestException('Invalid ownerTelegramId format');
-        }
-    }
-
-    private async resolveChannelId(dto: { channelIdentifier?: string; telegramChannelId?: string }, actorId?: string) {
-        if (dto.telegramChannelId) {
-            return {
-                telegramChannelId: this.parseTelegramId(dto.telegramChannelId).toString(),
-                title: 'Unknown Channel',
-                username: undefined as string | undefined,
-            };
-        }
-
-        if (!dto.channelIdentifier) {
+    private async resolveChannelId(channelIdentifier: string, actorId?: string) {
+        if (!channelIdentifier) {
             throw new BadRequestException('Missing channel identifier. Provide a Telegram @username or t.me link.');
         }
 
-        const resolved = await this.identityResolver.resolveChannelIdentifier(dto.channelIdentifier, {
+        const resolved = await this.identityResolver.resolveChannelIdentifier(channelIdentifier, {
             actorId,
         });
         if (!resolved.ok) {
@@ -145,7 +126,7 @@ export class ChannelsService {
 
         await this.getUserOr404(userId, { id: true });
 
-        const resolved = await this.resolveChannelId(dto, userId);
+        const resolved = await this.resolveChannelId(dto.channelIdentifier, userId);
         const telegramChannelId = this.parseTelegramId(resolved.telegramChannelId);
         const cpm = this.parseCpm(dto.cpm);
 
@@ -179,16 +160,58 @@ export class ChannelsService {
         }
     }
 
+    async createChannelFromResolved(params: {
+        ownerId: string;
+        resolved: { telegramChannelId: string; title: string; username?: string };
+        overrides?: { title?: string; username?: string; cpm?: string };
+    }) {
+        const { ownerId, resolved, overrides } = params;
+        await this.getUserOr404(ownerId, { id: true });
+
+        const telegramChannelId = this.parseTelegramId(resolved.telegramChannelId);
+        const cpm = this.parseCpm(overrides?.cpm);
+
+        try {
+            const channel = await this.prisma.channel.create({
+                data: {
+                    telegramChannelId,
+                    title: overrides?.title ?? resolved.title,
+                    username: overrides?.username ?? resolved.username,
+                    ownerId,
+                    status: ChannelStatus.pending,
+                    cpm,
+                },
+            });
+
+            await this.auditService.log({
+                userId: ownerId,
+                action: 'channel_created',
+                metadata: {
+                    channelId: channel.id,
+                    telegramChannelId: resolved.telegramChannelId,
+                    flow: 'resolved_identity',
+                },
+            });
+
+            return this.mapChannel(channel);
+        } catch (e) {
+            if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+                throw new ConflictException('Channel already exists with this telegramChannelId');
+            }
+            throw e;
+        }
+    }
+
 
     async createChannelForOwner(actor: Actor, dto: AdminCreateChannelDto) {
         if (actor.role !== UserRole.admin && actor.role !== UserRole.super_admin) {
             throw new ForbiddenException('Only admin or super_admin can create channel for owner');
         }
 
-        if (dto.ownerId && (dto.ownerTelegramId || dto.ownerIdentifier)) {
+        if (dto.ownerId && dto.ownerIdentifier) {
             throw new BadRequestException('Provide only one owner identifier');
         }
-        if (!dto.ownerId && !dto.ownerTelegramId && !dto.ownerIdentifier) {
+        if (!dto.ownerId && !dto.ownerIdentifier) {
             throw new BadRequestException('Owner identifier is required');
         }
 
@@ -197,31 +220,26 @@ export class ChannelsService {
                 where: { id: dto.ownerId },
                 select: { id: true, role: true },
             })
-            : dto.ownerTelegramId
-                ? await this.prisma.user.findUnique({
-                    where: { telegramId: this.parseTelegramUserId(dto.ownerTelegramId) },
+            : await (async () => {
+                const resolved = await this.identityResolver.resolveUserIdentifier(
+                    dto.ownerIdentifier ?? '',
+                    { actorId: actor.id },
+                );
+                if (!resolved.ok) {
+                    throw new BadRequestException(resolved.message);
+                }
+                return this.prisma.user.findUnique({
+                    where: { telegramId: BigInt(resolved.value.telegramId) },
                     select: { id: true, role: true },
-                })
-                : await (async () => {
-                    const resolved = await this.identityResolver.resolveUserIdentifier(
-                        dto.ownerIdentifier ?? '',
-                        { actorId: actor.id },
-                    );
-                    if (!resolved.ok) {
-                        throw new BadRequestException(resolved.message);
-                    }
-                    return this.prisma.user.findUnique({
-                        where: { telegramId: BigInt(resolved.value.telegramId) },
-                        select: { id: true, role: true },
-                    });
-                })();
+                });
+            })();
 
         if (!owner) throw new NotFoundException('Owner not found');
         if (owner.role !== UserRole.publisher) {
             throw new BadRequestException('Owner must be a publisher');
         }
 
-        const resolved = await this.resolveChannelId(dto, actor.id);
+        const resolved = await this.resolveChannelId(dto.channelIdentifier, actor.id);
         const telegramChannelId = this.parseTelegramId(resolved.telegramChannelId);
 
 

@@ -190,9 +190,21 @@ export class PublisherHandler {
                 actor: TransitionActor.publisher,
             });
 
+            this.logger.log({
+                event: 'proof_submitted',
+                adDealId,
+                publisherId: publisher.user.id,
+            });
+
             await this.settleAdDeal.execute({
                 adDealId,
                 actor: TransitionActor.system,
+            });
+
+            this.logger.log({
+                event: 'settlement_completed',
+                adDealId,
+                publisherId: publisher.user.id,
             });
 
             return ctx.reply(`✅ Proof submitted & settled\nID: ${adDealId}`);

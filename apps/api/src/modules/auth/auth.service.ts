@@ -11,6 +11,8 @@ import { AuthConfig, authConfig } from '@/config/auth.config';
 import { JwtConfig, jwtConfig } from '@/config/jwt.config';
 import { ConfigType } from '@nestjs/config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
+import { createHash, randomBytes } from 'crypto';
+import { assertInviteTokenUsable } from './invite-token.util';
 
 @Injectable()
 export class AuthService {
@@ -40,6 +42,19 @@ export class AuthService {
     private async hashToken(token: string) {
         const rounds = this.authConfig.bcryptSaltRounds;
         return bcrypt.hash(token, rounds);
+    }
+
+    private hashInviteToken(token: string) {
+        return createHash('sha256').update(token).digest('hex');
+    }
+
+    private getInviteExpiry() {
+        const ttlHours = this.authConfig.inviteTokenTtlHours;
+        return new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+    }
+
+    private generateInviteToken() {
+        return randomBytes(32).toString('hex');
     }
 
     private signAccessToken(user: { id: string; role: UserRole }) {
@@ -97,12 +112,21 @@ export class AuthService {
             throw new BadRequestException('Only publisher invites can be created here.');
         }
 
-        const user = await this.prisma.$transaction(async (tx) => {
+        const { user, inviteToken } = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
                 data: {
                     telegramId: null,
                     role,
                     status: UserStatus.pending_telegram_link,
+                },
+            });
+
+            const token = this.generateInviteToken();
+            await tx.userInvite.create({
+                data: {
+                    userId: created.id,
+                    tokenHash: this.hashInviteToken(token),
+                    expiresAt: this.getInviteExpiry(),
                 },
             });
 
@@ -118,7 +142,7 @@ export class AuthService {
                 },
             });
 
-            return created;
+            return { user: created, inviteToken: token };
         });
 
         return {
@@ -128,6 +152,7 @@ export class AuthService {
                 role: user.role,
                 username: user.username,
             },
+            inviteToken,
         };
     }
 
@@ -196,6 +221,168 @@ export class AuthService {
                 role: user.role,
                 username: user.username,
             },
+        };
+    }
+
+    async consumeInviteToken(params: {
+        token: string;
+        telegramId: string;
+        username?: string | null;
+    }) {
+        const { token, telegramId, username } = params;
+        if (!token) {
+            throw new BadRequestException('Invite token is required');
+        }
+
+        const tokenHash = this.hashInviteToken(token);
+        const now = new Date();
+
+        return this.prisma.$transaction(async (tx) => {
+            const invite = await tx.userInvite.findUnique({
+                where: { tokenHash },
+                include: { user: true },
+            });
+
+            if (!invite) {
+                throw new BadRequestException('Invite token is invalid');
+            }
+
+            assertInviteTokenUsable({
+                usedAt: invite.usedAt,
+                expiresAt: invite.expiresAt,
+            });
+
+            if (invite.user.role !== UserRole.publisher) {
+                throw new BadRequestException('Invite token role invalid');
+            }
+
+            const existing = await tx.user.findUnique({
+                where: { telegramId: BigInt(telegramId) },
+                select: { id: true },
+            });
+            if (existing) {
+                throw new BadRequestException('Telegram account already linked');
+            }
+
+            const user = await tx.user.update({
+                where: { id: invite.userId },
+                data: {
+                    telegramId: BigInt(telegramId),
+                    username: username ?? invite.user.username,
+                    status: UserStatus.active,
+                },
+            });
+
+            await tx.userInvite.update({
+                where: { id: invite.id },
+                data: { usedAt: now },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: invite.userId,
+                    action: 'invite_consumed',
+                    metadata: {
+                        telegramId,
+                        tokenHash,
+                    },
+                },
+            });
+
+            return user;
+        });
+    }
+
+    async handleTelegramStart(params: {
+        telegramId: string;
+        username?: string | null;
+        startPayload?: string | null;
+    }) {
+        const { telegramId, username, startPayload } = params;
+        if (!telegramId) {
+            throw new BadRequestException('Missing telegramId');
+        }
+
+        if (startPayload) {
+            const user = await this.consumeInviteToken({
+                token: startPayload,
+                telegramId,
+                username,
+            });
+
+            return {
+                user: {
+                    id: user.id,
+                    telegramId: user.telegramId?.toString() ?? null,
+                    role: user.role,
+                    username: user.username,
+                    status: user.status,
+                },
+                created: false,
+                linkedInvite: true,
+            };
+        }
+
+        const existing = await this.prisma.user.findUnique({
+            where: { telegramId: BigInt(telegramId) },
+        });
+
+        if (existing) {
+            if (existing.status !== UserStatus.active) {
+                await this.prisma.user.update({
+                    where: { id: existing.id },
+                    data: { status: UserStatus.active },
+                });
+            }
+
+            return {
+                user: {
+                    id: existing.id,
+                    telegramId: existing.telegramId?.toString() ?? null,
+                    role: existing.role,
+                    username: existing.username,
+                    status: UserStatus.active,
+                },
+                created: false,
+                linkedInvite: false,
+            };
+        }
+
+        const created = await this.prisma.$transaction(async (tx) => {
+            const user = await tx.user.create({
+                data: {
+                    telegramId: BigInt(telegramId),
+                    username,
+                    role: UserRole.advertiser,
+                    status: UserStatus.active,
+                },
+            });
+
+            await tx.wallet.create({
+                data: { userId: user.id, balance: 0, currency: 'USD' },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: user.id,
+                    action: 'user_created_from_telegram',
+                    metadata: { role: user.role },
+                },
+            });
+
+            return user;
+        });
+
+        return {
+            user: {
+                id: created.id,
+                telegramId: created.telegramId?.toString() ?? null,
+                role: created.role,
+                username: created.username,
+                status: created.status,
+            },
+            created: true,
+            linkedInvite: false,
         };
     }
 

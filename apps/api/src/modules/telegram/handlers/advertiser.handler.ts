@@ -4,9 +4,7 @@ import { Context } from 'telegraf';
 import { TelegramFSMService } from '../../application/telegram/telegram-fsm.service';
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome } from '../keyboards';
-import { PrismaService } from '@/prisma/prisma.service';
-import { ChannelStatus, Prisma } from '@prisma/client';
-import { UserRole } from '@/modules/domain/contracts';
+import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
 import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
@@ -17,7 +15,6 @@ export class AdvertiserHandler {
 
     constructor(
         private readonly fsm: TelegramFSMService,
-        private readonly prisma: PrismaService,
         private readonly backendClient: TelegramBackendClient,
     ) { }
 
@@ -92,11 +89,9 @@ export class AdvertiserHandler {
             }
             const fsm = context.fsm;
             try {
-                const adDeal = await this.prisma.adDeal.findUnique({
-                    where: { id: adDealId },
-                });
+                const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
 
-                if (!adDeal || adDeal.advertiserId !== context.user.id) {
+                if (adDeal.adDeal.advertiserId !== context.user.id) {
                     return ctx.reply('❌ AdDeal not found for advertiser');
                 }
 
@@ -105,7 +100,7 @@ export class AdvertiserHandler {
                         adDealId,
                         provider: 'wallet_balance',
                         providerReference: `telegram:${userId}:${adDealId}`,
-                        amount: adDeal.amount.toFixed(2),
+                        amount: adDeal.adDeal.amount,
                     });
                     return ctx.reply(`✅ AdDeal funded\nID: ${adDealId}`);
                 }
@@ -129,7 +124,7 @@ export class AdvertiserHandler {
             }
         }
 
-        const publisherResolution = await this.resolvePublisherInput(text, userId);
+        const publisherResolution = await this.resolvePublisherInput(text);
         if (publisherResolution) {
             if (!publisherResolution.ok) {
                 return ctx.reply(`❌ ${publisherResolution.reason}`);
@@ -181,7 +176,7 @@ export class AdvertiserHandler {
             if (!/^\d+(\.\d{1,2})?$/.test(amountText)) {
                 return ctx.reply('❌ Invalid amount');
             }
-            const amount = new Prisma.Decimal(amountText);
+            const amount = new Decimal(amountText);
             if (amount.lte(0)) {
                 return ctx.reply('❌ Invalid amount');
             }
@@ -238,22 +233,11 @@ export class AdvertiserHandler {
                 return ctx.reply('❌ Invalid amount');
             }
 
-            if (new Prisma.Decimal(amountText).lte(0)) {
+            if (new Decimal(amountText).lte(0)) {
                 return ctx.reply('❌ Invalid amount');
             }
 
             try {
-                const wallet = await this.prisma.wallet.findUnique({
-                    where: { userId: context.user.id },
-                });
-
-                const requiredAmount = new Prisma.Decimal(amountText);
-                if (!wallet || wallet.balance.lt(requiredAmount)) {
-                    return ctx.reply(
-                        `❌ Insufficient balance. Deposit at least $${requiredAmount.toFixed(2)} before creating a deal.`,
-                    );
-                }
-
                 const adDeal = await this.backendClient.createAdDeal({
                     advertiserId: context.user.id,
                     publisherId: fsm.payload.publisherId,
@@ -319,116 +303,13 @@ export class AdvertiserHandler {
         return undefined;
     }
 
-    private async resolvePublisherInput(value: string, advertiserTelegramId?: number) {
+    private async resolvePublisherInput(value: string) {
         const trimmed = value.trim();
-        const parsed = this.parsePublisherIdentifier(trimmed);
-        if (!parsed) {
+        if (!trimmed) {
             return null;
         }
 
-        if ('error' in parsed) {
-            return { ok: false as const, reason: parsed.error };
-        }
-
-        const username = parsed.username;
-
-        const publisherByUsername = await this.prisma.user.findFirst({
-            where: {
-                username: { equals: username, mode: 'insensitive' },
-            },
-        });
-
-        if (publisherByUsername) {
-            if (publisherByUsername.role !== UserRole.publisher) {
-                return {
-                    ok: false as const,
-                    reason: `@${publisherByUsername.username ?? username} is not registered as a publisher.`,
-                };
-            }
-            return {
-                ok: true as const,
-                publisher: publisherByUsername,
-                source: parsed.source,
-            };
-        }
-
-        const channel = await this.prisma.channel.findFirst({
-            where: {
-                username: { equals: username, mode: 'insensitive' },
-            },
-            include: { owner: true },
-        });
-
-        if (channel) {
-            if (channel.status !== ChannelStatus.approved) {
-                return {
-                    ok: false as const,
-                    reason: `Channel ${channel.title} is not approved in the marketplace yet.`,
-                };
-            }
-            if (channel.owner.role !== UserRole.publisher) {
-                return {
-                    ok: false as const,
-                    reason: `Channel ${channel.title} is not owned by a publisher account.`,
-                };
-            }
-            return {
-                ok: true as const,
-                publisher: channel.owner,
-                source: parsed.source,
-                channel,
-            };
-        }
-
-        this.logger.warn({
-            event: 'publisher_not_registered',
-            advertiserTelegramId: advertiserTelegramId ?? null,
-            identifier: value,
-        });
-
-        return {
-            ok: false as const,
-            reason: 'Publisher not found. Send a valid @username or a public channel/group link.',
-        };
-    }
-
-    private parsePublisherIdentifier(value: string) {
-        const usernameRegex = /^(?=.{5,32}$)(?=.*[A-Za-z])[A-Za-z0-9_]+$/;
-        if (!value) {
-            return null;
-        }
-
-        if (value.startsWith('@')) {
-            const username = value.slice(1);
-            if (!usernameRegex.test(username)) {
-                return { error: 'That @username does not look valid.' };
-            }
-            return { username, source: 'username' as const };
-        }
-
-        const linkMatch = value.match(
-            /^(?:https?:\/\/)?t\.me\/([^?\s/]+)(?:\/.*)?$/i,
-        );
-        if (linkMatch) {
-            const path = linkMatch[1];
-            const lowered = path.toLowerCase();
-            if (lowered === 'c' || lowered === 'joinchat' || path.startsWith('+')) {
-                return {
-                    error:
-                        'Invite links cannot be used for publisher lookup. Please send a public @username or t.me/username.',
-                };
-            }
-            if (!usernameRegex.test(path)) {
-                return { error: 'That t.me link does not look like a public username.' };
-            }
-            return { username: path, source: 'link' as const };
-        }
-
-        if (usernameRegex.test(value)) {
-            return { username: value, source: 'username' as const };
-        }
-
-        return null;
+        return this.backendClient.resolvePublisher({ identifier: trimmed });
     }
 
     private async ensureAdvertiser(ctx: Context) {
@@ -438,27 +319,18 @@ export class AdvertiserHandler {
             return null;
         }
 
-        const user = await this.prisma.user.findUnique({
-            where: { telegramId: BigInt(userId) },
-        });
-
-        if (!user) {
-            await ctx.reply('❌ Advertiser account not found.');
-            return null;
-        }
-
-        if (user.role !== UserRole.advertiser) {
-            this.logger.warn({
-                event: 'telegram_role_block',
-                action: 'advertiser_access',
-                userId,
-                role: user.role,
+        let userResponse;
+        try {
+            userResponse = await this.backendClient.ensureAdvertiser({
+                telegramId: userId.toString(),
             });
-            await ctx.reply(
-                `⛔ Not allowed. Your account role is ${user.role}.`,
-            );
+        } catch (err) {
+            const message = formatTelegramError(err);
+            await ctx.reply(`❌ ${message}`);
             return null;
         }
+
+        const user = userResponse.user;
 
         const fsm = await this.fsm.get(userId);
         const syncedFsm =

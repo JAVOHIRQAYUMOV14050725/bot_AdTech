@@ -54,10 +54,7 @@ export class PaymentsController {
     })
     @ApiStandardErrorResponses()
     async handleClickWebhook(@Body() payload: Record<string, string | number | null>) {
-        return this.paymentsService.finalizeDepositIntent({
-            payload,
-            verified: this.paymentsService.verifyClickSignature(payload),
-        });
+        return this.paymentsService.finalizeDepositIntent({ payload });
     }
 
     @Post('deposit-intents/:id/reconcile')
@@ -101,10 +98,7 @@ export class PaymentsController {
     })
     @ApiStandardErrorResponses()
     async handleWithdrawalWebhook(@Body() payload: Record<string, string | number | null>) {
-        return this.paymentsService.finalizeWithdrawalIntent({
-            payload,
-            verified: this.paymentsService.verifyClickSignature(payload),
-        });
+        return this.paymentsService.finalizeWithdrawalIntent({ payload });
     }
 
     @Post('withdraw-intents/:id/reconcile')

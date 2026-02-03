@@ -261,6 +261,18 @@ model ChannelVerification {
   admin   User?   @relation(fields: [verifiedBy], references: [id])
 }
 
+model TelegramChannelSignal {
+  id                String   @id @default(uuid())
+  telegramChannelId BigInt   @unique
+  title             String?
+  username          String?
+  source            String
+  receivedAt        DateTime @default(now())
+
+  @@index([receivedAt])
+  @@map("telegram_channel_signals")
+}
+
 
 //////////////////////
 // CAMPAIGNS

@@ -280,7 +280,7 @@ export class IdentityResolverService {
         const userByUsername = await this.prisma.user.findFirst({
             where: { username: { equals: parsed.username, mode: 'insensitive' } },
         });
-        if (userByUsername) {
+        if (userByUsername?.telegramId) {
             this.logStart('identity_resolved', {
                 type: 'user',
                 actorId: options?.actorId ?? null,
@@ -297,44 +297,17 @@ export class IdentityResolverService {
             };
         }
 
-        const resolved = await this.getTelegramAdapter().resolvePublicUser(parsed.username);
-        if (!resolved.ok) {
-            const reason = resolved.reason ?? TelegramCheckReason.CHAT_NOT_FOUND;
-            this.logWarn('identity_resolution_failed', {
-                type: 'user',
-                actorId: options?.actorId ?? null,
-                reason,
-            });
-            return {
-                ok: false,
-                reason,
-                message:
-                    '@username is not reachable by the bot. Ask the user to start the bot or provide a public username.',
-                telegramError: resolved.telegramError,
-            };
-        }
-
-        if (resolved.username) {
-            await this.prisma.user.updateMany({
-                where: { telegramId: BigInt(resolved.telegramId) },
-                data: { username: resolved.username },
-            });
-        }
-
-        this.logStart('identity_resolved', {
+        this.logWarn('identity_resolution_failed', {
             type: 'user',
             actorId: options?.actorId ?? null,
-            telegramId: resolved.telegramId,
-            source: 'public_username',
+            reason: 'user_not_started_bot',
         });
 
         return {
-            ok: true,
-            value: {
-                telegramId: resolved.telegramId,
-                username: resolved.username,
-                source: 'public_username',
-            },
+            ok: false,
+            reason: TelegramCheckReason.CHAT_NOT_FOUND,
+            message:
+                'This user has not started the bot yet. Ask them to press /start in the Telegram bot first.',
         };
     }
 

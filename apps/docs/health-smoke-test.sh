@@ -9,19 +9,15 @@ echo
 curl -sS "${API_URL}/health/ready"
 echo
 
-echo "== Register publisher + advertiser"
-PUBLISHER_TOKEN="$(
-  curl -sS -X POST "${API_URL}/auth/register" \
-    -H "Content-Type: application/json" \
-    -d '{"telegramId":"10001","password":"publisher-pass","role":"publisher","username":"publisher1"}' \
-  | jq -r '.token'
-)"
-ADVERTISER_TOKEN="$(
-  curl -sS -X POST "${API_URL}/auth/register" \
-    -H "Content-Type: application/json" \
-    -d '{"telegramId":"10002","password":"advertiser-pass","role":"advertiser","username":"advertiser1"}' \
-  | jq -r '.token'
-)"
+echo "== Auth tokens (set env vars after Telegram /start + admin provisioning)"
+if [[ -z "${PUBLISHER_TOKEN:-}" ]]; then
+  echo "Set PUBLISHER_TOKEN to a publisher JWT before running the smoke test."
+  exit 1
+fi
+if [[ -z "${ADVERTISER_TOKEN:-}" ]]; then
+  echo "Set ADVERTISER_TOKEN to an advertiser JWT before running the smoke test."
+  exit 1
+fi
 
 echo "== Auth me"
 curl -sS "${API_URL}/auth/me" -H "Authorization: Bearer ${PUBLISHER_TOKEN}"
@@ -35,7 +31,7 @@ CHANNEL_ID="$(
   curl -sS -X POST "${API_URL}/channels" \
     -H "Authorization: Bearer ${PUBLISHER_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"telegramChannelId":"-1000000001","title":"SmokeTest Channel","username":"smoketest"}' \
+    -d '{"channelIdentifier":"@smoketest","title":"SmokeTest Channel","username":"smoketest"}' \
   | jq -r '.id'
 )"
 curl -sS -X POST "${API_URL}/channels/${CHANNEL_ID}/request-verification" \

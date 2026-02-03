@@ -6,6 +6,7 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { UserRole } from '@/modules/domain/contracts';
+import { UserStatus } from '@prisma/client';
 import { advertiserHome, publisherHome } from '../keyboards';
 
 @Update()
@@ -20,6 +21,7 @@ export class StartHandler {
     @Start()
     async start(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
+        const username = ctx.from?.username ?? null;
 
         const existing = await this.prisma.user.findUnique({
             where: { telegramId: BigInt(userId) },
@@ -68,18 +70,43 @@ export class StartHandler {
             return;
         }
 
-        await this.fsm.set(userId, null, TelegramState.SELECT_ROLE);
+        const created = await this.prisma.$transaction(async (tx) => {
+            const user = await tx.user.create({
+                data: {
+                    telegramId: BigInt(userId),
+                    username,
+                    role: UserRole.advertiser,
+                    status: UserStatus.active,
+                },
+                select: { id: true, role: true },
+            });
+
+            await tx.wallet.create({
+                data: { userId: user.id, balance: 0, currency: 'USD' },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: user.id,
+                    action: 'user_created_from_telegram',
+                    metadata: { role: user.role },
+                },
+            });
+
+            return user;
+        });
+
+        await this.fsm.set(userId, 'advertiser', TelegramState.ADV_DASHBOARD);
+        this.logger.log({
+            event: 'user_created_from_telegram',
+            userId: created.id,
+            telegramUserId: userId,
+            role: created.role,
+        });
 
         await ctx.reply(
-            `👋 Welcome to AdTech\n\nWho are you?`,
-            {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🧑‍💼 Advertiser', callback_data: 'ROLE_ADVERTISER' }],
-                        [{ text: '📣 Publisher', callback_data: 'ROLE_PUBLISHER' }],
-                    ],
-                },
-            },
+            `👋 Welcome to AdTech!\n\n🧑‍💼 Advertiser Panel\n\n💰 Balance: $0\n📊 Active campaigns: 0`,
+            advertiserHome,
         );
     }
 }

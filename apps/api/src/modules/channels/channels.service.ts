@@ -208,31 +208,22 @@ export class ChannelsService {
             throw new ForbiddenException('Only admin or super_admin can create channel for owner');
         }
 
-        if (dto.ownerId && dto.ownerIdentifier) {
-            throw new BadRequestException('Provide only one owner identifier');
-        }
-        if (!dto.ownerId && !dto.ownerIdentifier) {
+        if (!dto.ownerIdentifier) {
             throw new BadRequestException('Owner identifier is required');
         }
 
-        const owner = dto.ownerId
-            ? await this.prisma.user.findUnique({
-                where: { id: dto.ownerId },
-                select: { id: true, role: true },
-            })
-            : await (async () => {
-                const resolved = await this.identityResolver.resolveUserIdentifier(
-                    dto.ownerIdentifier ?? '',
-                    { actorId: actor.id },
-                );
-                if (!resolved.ok) {
-                    throw new BadRequestException(resolved.message);
-                }
-                return this.prisma.user.findUnique({
-                    where: { telegramId: BigInt(resolved.value.telegramId) },
-                    select: { id: true, role: true },
-                });
-            })();
+        const resolved = await this.identityResolver.resolveUserIdentifier(
+            dto.ownerIdentifier,
+            { actorId: actor.id },
+        );
+        if (!resolved.ok) {
+            throw new BadRequestException(resolved.message);
+        }
+
+        const owner = await this.prisma.user.findUnique({
+            where: { telegramId: BigInt(resolved.value.telegramId) },
+            select: { id: true, role: true },
+        });
 
         if (!owner) throw new NotFoundException('Owner not found');
         if (owner.role !== UserRole.publisher) {

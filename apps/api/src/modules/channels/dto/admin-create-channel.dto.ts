@@ -3,7 +3,6 @@ import {
     IsNotEmpty,
     IsOptional,
     IsString,
-    IsUUID,
     MaxLength,
     MinLength,
 } from 'class-validator';
@@ -46,21 +45,12 @@ export class AdminCreateChannelDto {
     @IsTelegramUsername()
     username?: string;
 
-    @ApiPropertyOptional({
-        example: '4c56e3b8-7d2b-4db8-9b03-2d8b8f4b9f6c',
-        description: 'Publisher user ID (UUID). Required when ownerIdentifier is not provided.',
-        format: 'uuid',
-    })
-    @IsUUID()
-    @IsNotEmpty()
-    ownerId?: string;
-
-    @ApiPropertyOptional({
+    @ApiProperty({
         example: '@publishername',
         description: 'Publisher @username or t.me link for identity resolution.',
     })
     @TrimString()
     @IsString()
     @IsNotEmpty()
-    ownerIdentifier?: string;
+    ownerIdentifier!: string;
 }

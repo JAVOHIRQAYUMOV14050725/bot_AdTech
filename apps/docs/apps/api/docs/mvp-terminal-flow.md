@@ -4,8 +4,9 @@ This document summarizes the API path for an end-to-end MVP run using the curren
 
 ## Required high-level steps
 
-1. Register publisher + advertiser accounts with `/api/auth/register` .
-2. Register a third account and promote to `super_admin` in SQL for admin actions.
+1. Users must start the Telegram bot (`/start`) to create their accounts. This is the only supported user creation flow.
+2. (Optional) Invite publisher accounts via `/api/auth/register` (admin-only) which creates a pending Telegram link.
+3. Register a third account and promote to `super_admin` in SQL for admin actions.
 3. Publisher creates a channel and requests verification (bot must be admin in the channel).
 4. Admin approves the channel.
 5. Advertiser creates a campaign, adds a creative, and adds a target.

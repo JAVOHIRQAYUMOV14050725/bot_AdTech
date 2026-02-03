@@ -88,26 +88,21 @@ export class AuthService {
     }
 
     async register(dto: RegisterDto) {
+        if (!dto.invite) {
+            throw new BadRequestException('Registration is invite-only. Admins must set invite=true.');
+        }
+
         const role = dto.role ?? UserRole.publisher;
-        if (!PUBLIC_ROLES.includes(role)) throw new BadRequestException('Invalid role for registration');
-
-        const resolvedIdentity = await this.resolveTelegramIdentity(dto.identifier);
-        const telegramId = resolvedIdentity.telegramId;
-
-        const existing = await this.prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
-        if (existing) throw new BadRequestException('User already exists');
-
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        if (!PUBLIC_ROLES.includes(role)) {
+            throw new BadRequestException('Only publisher invites can be created here.');
+        }
 
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
                 data: {
-                    telegramId: BigInt(telegramId),
-                    username: dto.username ?? resolvedIdentity.username,
+                    telegramId: null,
                     role,
-                    status: UserStatus.active,
-                    passwordHash,
-                    passwordUpdatedAt: new Date(),
+                    status: UserStatus.pending_telegram_link,
                 },
             });
 
@@ -116,17 +111,20 @@ export class AuthService {
             });
 
             await tx.userAuditLog.create({
-                data: { userId: created.id, action: 'user_registered', metadata: { role } },
+                data: {
+                    userId: created.id,
+                    action: 'user_invited',
+                    metadata: { role, status: UserStatus.pending_telegram_link },
+                },
             });
 
             return created;
         });
 
-
         return {
             user: {
                 id: user.id,
-                telegramId: user.telegramId.toString(),
+                telegramId: user.telegramId?.toString() ?? null,
                 role: user.role,
                 username: user.username,
             },
@@ -194,7 +192,7 @@ export class AuthService {
         return {
             user: {
                 id: user.id,
-                telegramId: user.telegramId.toString(),
+                telegramId: user.telegramId?.toString() ?? null,
                 role: user.role,
                 username: user.username,
             },
@@ -220,7 +218,7 @@ export class AuthService {
             refreshToken,
             user: {
                 id: user.id,
-                telegramId: user.telegramId.toString(),
+                telegramId: user.telegramId?.toString() ?? null,
                 role: user.role,
                 username: user.username,
             },
@@ -293,7 +291,7 @@ export class AuthService {
 
         return {
             id: user.id,
-            telegramId: user.telegramId.toString(),
+            telegramId: user.telegramId?.toString() ?? null,
             username: user.username,
             role: user.role,
             status: user.status,

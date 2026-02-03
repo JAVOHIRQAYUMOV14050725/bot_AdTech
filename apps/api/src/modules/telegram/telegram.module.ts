@@ -15,6 +15,7 @@ import { AdvertiserHandler } from './handlers/advertiser.handler';
 import { ChannelsModule } from '../channels/channels.module';
 import { PublisherHandler } from './handlers/publisher.handler';
 import { AdDealModule } from '../application/addeal/addeal.module';
+import { IdentityModule } from '@/modules/identity/identity.module';
 
 const env = loadEnv()
 const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN
@@ -28,6 +29,7 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
         OpsModule,
         RedisModule,
         AdDealModule,
+        forwardRef(() => IdentityModule),
         forwardRef(() => ChannelsModule),
     ],
     providers: [

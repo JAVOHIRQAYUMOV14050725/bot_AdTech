@@ -7,9 +7,10 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { TelegramModule } from '@/modules/telegram/telegram.module';
 import { AuditModule } from '@/modules/audit/audit.module';
 import { AuthModule } from '@/modules/auth/auth.module';
+import { IdentityModule } from '@/modules/identity/identity.module';
 
 @Module({
-    imports: [PrismaModule, forwardRef(() => TelegramModule), AuditModule, AuthModule],
+    imports: [PrismaModule, forwardRef(() => TelegramModule), AuditModule, AuthModule, IdentityModule],
     controllers: [ChannelsController, ChannelsAdminController],
     providers: [ChannelsService, VerificationService],
     exports: [ChannelsService],

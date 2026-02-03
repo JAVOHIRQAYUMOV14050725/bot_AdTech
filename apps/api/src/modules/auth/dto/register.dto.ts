@@ -7,6 +7,7 @@ import {
     IsString,
     MaxLength,
     MinLength,
+    ValidateIf,
 } from 'class-validator';
 import { UserRole } from '@/modules/domain/contracts';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
@@ -21,15 +22,26 @@ export type PublicRole = (typeof PUBLIC_ROLES)[number];
 
 export class RegisterDto {
     @ApiProperty({
+        example: '@username',
+        description: 'Telegram @username or t.me link.',
+    })
+    @ValidateIf((o) => !o.telegramId)
+    @TrimString()
+    @IsString()
+    @IsNotEmpty()
+    identifier!: string;
+
+    @ApiPropertyOptional({
         example: TELEGRAM_ID_EXAMPLE,
-        description: 'Telegram user ID as digits-only string.',
+        description: 'Internal-use only. Telegram user ID as digits-only string.',
         pattern: '^\\d+$',
     })
+    @ValidateIf((o) => !o.identifier)
     @TrimString()
     @IsString()
     @IsNotEmpty()
     @IsTelegramIdString()
-    telegramId!: string;
+    telegramId?: string;
 
     @ApiProperty({
         example: 'StrongPassw0rd!',

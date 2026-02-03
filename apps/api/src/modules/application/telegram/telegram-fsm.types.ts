@@ -21,7 +21,6 @@ export enum TelegramState {
 }
 
 export interface FSMContext {
-    role: TelegramRole;
     state: TelegramState;
     payload: Record<string, any>;
 }

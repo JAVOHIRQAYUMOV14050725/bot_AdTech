@@ -151,13 +151,29 @@ export class FundAdDealUseCase {
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
             const funded = domain.fund(receivedAt).toSnapshot();
 
-            return tx.adDeal.update({
+            const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
                     status: funded.status,
                     fundedAt: funded.fundedAt,
                 },
             });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.advertiserId,
+                    action: 'addeal_funded',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        amount: fundingAmount.toFixed(2),
+                        provider,
+                        providerReference: params.providerReference,
+                        fundedAt: funded.fundedAt,
+                    },
+                },
+            });
+
+            return updated;
         });
     }
 }

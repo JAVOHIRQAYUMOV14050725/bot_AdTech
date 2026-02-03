@@ -57,13 +57,27 @@ export class AcceptDealUseCase {
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
             const accepted = domain.accept(params.acceptedAt).toSnapshot();
 
-            return tx.adDeal.update({
+            const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
                     status: accepted.status,
                     acceptedAt: accepted.acceptedAt,
                 },
             });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.publisherId,
+                    action: 'addeal_accepted',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        status: accepted.status,
+                        acceptedAt: accepted.acceptedAt,
+                    },
+                },
+            });
+
+            return updated;
         });
     }
 }

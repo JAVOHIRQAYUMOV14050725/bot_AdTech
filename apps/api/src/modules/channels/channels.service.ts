@@ -212,16 +212,16 @@ export class ChannelsService {
             throw new BadRequestException('Owner identifier is required');
         }
 
-        const resolved = await this.identityResolver.resolveUserIdentifier(
+        const ownerResolved = await this.identityResolver.resolveUserIdentifier(
             dto.ownerIdentifier,
             { actorId: actor.id },
         );
-        if (!resolved.ok) {
-            throw new BadRequestException(resolved.message);
+        if (!ownerResolved.ok) {
+            throw new BadRequestException(ownerResolved.message);
         }
 
         const owner = await this.prisma.user.findUnique({
-            where: { telegramId: BigInt(resolved.value.telegramId) },
+            where: { telegramId: BigInt(ownerResolved.value.telegramId) },
             select: { id: true, role: true },
         });
 
@@ -230,8 +230,8 @@ export class ChannelsService {
             throw new BadRequestException('Owner must be a publisher');
         }
 
-        const resolved = await this.resolveChannelId(dto.channelIdentifier, actor.id);
-        const telegramChannelId = this.parseTelegramId(resolved.telegramChannelId);
+        const channelResolved = await this.resolveChannelId(dto.channelIdentifier, actor.id);
+        const telegramChannelId = this.parseTelegramId(channelResolved.telegramChannelId);
 
 
 
@@ -239,8 +239,8 @@ export class ChannelsService {
             const channel = await this.prisma.channel.create({
                 data: {
                     telegramChannelId,
-                    title: dto.title ?? resolved.title,
-                    username: dto.username ?? resolved.username,
+                    title: dto.title ?? channelResolved.title,
+                    username: dto.username ?? channelResolved.username,
                     ownerId: owner.id,
                     status: ChannelStatus.pending,
 
@@ -253,7 +253,7 @@ export class ChannelsService {
                 metadata: {
                     channelId: channel.id,
                     ownerId: owner.id,
-                    telegramChannelId: resolved.telegramChannelId,
+                    telegramChannelId: channelResolved.telegramChannelId,
                 },
             });
 

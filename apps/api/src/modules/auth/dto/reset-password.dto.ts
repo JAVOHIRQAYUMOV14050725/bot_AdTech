@@ -3,7 +3,11 @@ import { IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
 
 export class ResetPasswordDto {
-    @ApiProperty({ example: '@username', description: 'Telegram @username or t.me link.' })
+    @ApiProperty({
+        example: '@username',
+        description:
+            'Telegram @username or t.me link. The user must have started the Telegram bot with /start first.',
+    })
     @TrimString()
     @IsString()
     @IsNotEmpty()

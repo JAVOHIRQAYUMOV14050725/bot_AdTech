@@ -22,7 +22,14 @@ export class AuthController {
     constructor(private readonly authService: AuthService) { }
 
     @Post('register')
-    @ApiOperation({ summary: 'Register new user' })
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.admin, UserRole.super_admin)
+    @ApiBearerAuth()
+    @ApiOperation({
+        summary: 'Admin/Ops: Invite publisher (pending Telegram link)',
+        description:
+            'Invite-only. Creates a pending publisher account. Users must start the Telegram bot with /start to complete registration.',
+    })
     @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
     register(@Body() dto: RegisterDto) {

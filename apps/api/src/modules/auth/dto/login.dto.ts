@@ -10,7 +10,8 @@ import { TrimString } from '@/common/transformers/trim-string.transformer';
 export class LoginDto {
     @ApiProperty({
         example: '@username',
-        description: 'Telegram @username or t.me link.',
+        description:
+            'Telegram @username or t.me link. The user must have started the Telegram bot with /start first.',
     })
     @TrimString()
     @IsString()

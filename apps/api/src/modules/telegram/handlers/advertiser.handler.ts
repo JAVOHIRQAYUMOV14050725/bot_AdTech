@@ -140,7 +140,7 @@ export class AdvertiserHandler {
             }
         }
 
-        const publisherResolution = await this.resolvePublisherInput(text);
+        const publisherResolution = await this.resolvePublisherInput(text, userId);
         if (publisherResolution) {
             if (!publisherResolution.ok) {
                 return ctx.reply(`❌ ${publisherResolution.reason}`);
@@ -342,7 +342,7 @@ export class AdvertiserHandler {
         return undefined;
     }
 
-    private async resolvePublisherInput(value: string) {
+    private async resolvePublisherInput(value: string, advertiserTelegramId?: number) {
         const trimmed = value.trim();
         const parsed = this.parsePublisherIdentifier(trimmed);
         if (!parsed) {
@@ -403,6 +403,12 @@ export class AdvertiserHandler {
             };
         }
 
+        this.logger.warn({
+            event: 'publisher_not_registered',
+            advertiserTelegramId: advertiserTelegramId ?? null,
+            identifier: value,
+        });
+
         return {
             ok: false as const,
             reason: 'Publisher not found. Send a valid @username or a public channel/group link.',
@@ -431,7 +437,8 @@ export class AdvertiserHandler {
             const lowered = path.toLowerCase();
             if (lowered === 'c' || lowered === 'joinchat' || path.startsWith('+')) {
                 return {
-                    error: 'Invite links are not supported. Please send a public @username or t.me/username.',
+                    error:
+                        'Invite links cannot be used for publisher lookup. Please send a public @username or t.me/username.',
                 };
             }
             if (!usernameRegex.test(path)) {

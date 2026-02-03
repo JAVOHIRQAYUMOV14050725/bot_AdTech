@@ -288,6 +288,16 @@ Who are you?`,
                 },
                 'TelegramService',
             );
+            this.logger.log(
+                {
+                    event: 'channel_signal_detected',
+                    telegramChannelId: chat.id,
+                    channelTitle: chat.title ?? null,
+                    username: chat.username ?? null,
+                    source,
+                },
+                'TelegramService',
+            );
         } catch (err) {
             this.logger.warn(
                 {

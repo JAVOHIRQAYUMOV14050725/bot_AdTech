@@ -29,7 +29,7 @@ export class ChannelsAdminController {
     @Post()
     @ApiOperation({
         summary: 'Admin-only: create channel for a publisher (ops)',
-        description: 'Create a new channel for a publisher by ownerId or ownerTelegramId.',
+        description: 'Create a new channel for a publisher by ownerId or ownerIdentifier.',
     })
     @ApiCreatedResponse({ type: ChannelResponseDto })
     @ApiStandardErrorResponses()

@@ -76,11 +76,8 @@ export class AuthController {
     @UseGuards(JwtAuthGuard, RolesGuard)
     @Roles(UserRole.super_admin)
     @ApiBearerAuth()
-    @ApiOperation({ summary: 'Admin: Reset password by Telegram identifier' })
+    @ApiOperation({ summary: 'Admin: Reset password by external identifier' })
     resetPassword(@Body() dto: ResetPasswordDto) {
-        return this.authService.resetPasswordByIdentifier(
-            { telegramId: dto.telegramId, identifier: dto.identifier },
-            dto.newPassword,
-        );
+        return this.authService.resetPasswordByIdentifier(dto.identifier, dto.newPassword);
     }
 }

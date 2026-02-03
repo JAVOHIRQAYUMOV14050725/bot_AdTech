@@ -73,49 +73,15 @@ export class ChannelsController {
         type: ApiErrorResponseDto,
         schema: {
             examples: {
-                invalidTelegramChannelId: {
-                    summary: 'Invalid telegramChannelId format',
-                    value: {
-                        statusCode: 400,
-                        timestamp: '2024-01-01T00:00:00.000Z',
-                        path: '/api/channels/uuid/request-verification',
-                        correlationId: 'c0a8012e-4c5b-4c4f-8f3d-1234567890ab',
-                        error: {
-                            message: 'Validation failed',
-                            details: [
-                                {
-                                    field: 'telegramChannelId',
-                                    constraints: {
-                                        isTelegramChannelIdString:
-                                            'telegramChannelId must start with -100 and contain at least 5 digits',
-                                    },
-                                    value: 'channel_handle',
-                                },
-                            ],
-                        },
-                    },
-                },
                 chatNotFound: {
-                    summary: 'Telegram chat not found or bot has no access',
+                    summary: 'Channel verification failed',
                     value: {
                         statusCode: 400,
                         timestamp: '2024-01-01T00:00:00.000Z',
                         path: '/api/channels/uuid/request-verification',
                         correlationId: 'c0a8012e-4c5b-4c4f-8f3d-1234567890ab',
                         error: {
-                            message:
-                                'Telegram channel not found or bot has no access. Add bot to the channel (as admin) and use correct -100... id.',
-                            details: {
-                                telegramChannelId: '-1001987654321',
-                                hintSteps: [
-                                    'Ensure telegramChannelId is the REAL channel id in the format -100...',
-                                    'Add the bot to the channel',
-                                    'Promote the bot to Administrator',
-                                    'Post a test message to the channel',
-                                    'Confirm bot receives a channel_post update; copy channel_post.chat.id as telegramChannelId',
-                                ],
-                                telegramError: 'Bad Request: chat not found',
-                            },
+                            message: 'Channel verification failed',
                         },
                     },
                 },
@@ -127,17 +93,7 @@ export class ChannelsController {
                         path: '/api/channels/uuid/request-verification',
                         correlationId: 'c0a8012e-4c5b-4c4f-8f3d-1234567890ab',
                         error: {
-                            message: 'Bot is not admin of channel',
-                            details: {
-                                telegramChannelId: '-1001987654321',
-                                requiredPermissions: [
-                                    'can_manage_chat',
-                                    'can_post_messages',
-                                    'can_edit_messages',
-                                    'can_delete_messages',
-                                ],
-                                telegramError: 'Forbidden: not enough rights to get admin list',
-                            },
+                            message: 'Channel verification failed',
                         },
                     },
                 },

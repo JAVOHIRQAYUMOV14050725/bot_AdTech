@@ -10,16 +10,18 @@ curl -sS "${API_URL}/health/ready"
 echo
 
 echo "== Register publisher + advertiser"
+PUBLISHER_IDENTIFIER="${PUBLISHER_IDENTIFIER:-@publisher1}"
+ADVERTISER_IDENTIFIER="${ADVERTISER_IDENTIFIER:-@advertiser1}"
 PUBLISHER_TOKEN="$(
   curl -sS -X POST "${API_URL}/auth/register" \
     -H "Content-Type: application/json" \
-    -d '{"telegramId":"10001","password":"publisher-pass","role":"publisher","username":"publisher1"}' \
+    -d "{\"identifier\":\"${PUBLISHER_IDENTIFIER}\",\"password\":\"publisher-pass\",\"role\":\"publisher\",\"username\":\"publisher1\"}" \
   | jq -r '.token'
 )"
 ADVERTISER_TOKEN="$(
   curl -sS -X POST "${API_URL}/auth/register" \
     -H "Content-Type: application/json" \
-    -d '{"telegramId":"10002","password":"advertiser-pass","role":"advertiser","username":"advertiser1"}' \
+    -d "{\"identifier\":\"${ADVERTISER_IDENTIFIER}\",\"password\":\"advertiser-pass\",\"role\":\"advertiser\",\"username\":\"advertiser1\"}" \
   | jq -r '.token'
 )"
 
@@ -31,11 +33,12 @@ echo "== RBAC guard (should be 401/403)"
 curl -sS -o /dev/null -w "%{http_code}\n" "${API_URL}/admin/moderation/pending"
 
 echo "== Channel create + verification request"
+CHANNEL_IDENTIFIER="${CHANNEL_IDENTIFIER:-@smoketest}"
 CHANNEL_ID="$(
   curl -sS -X POST "${API_URL}/channels" \
     -H "Authorization: Bearer ${PUBLISHER_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"telegramChannelId":"-1000000001","title":"SmokeTest Channel","username":"smoketest"}' \
+    -d "{\"channelIdentifier\":\"${CHANNEL_IDENTIFIER}\",\"title\":\"SmokeTest Channel\"}" \
   | jq -r '.id'
 )"
 curl -sS -X POST "${API_URL}/channels/${CHANNEL_ID}/request-verification" \

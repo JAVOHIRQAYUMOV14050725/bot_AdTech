@@ -1,5 +1,5 @@
 
-import { PaymentsModule } from '@/modules/payments/payments.module';
+import { PaymentsCoreModule } from '@/modules/payments/payments-core.module';
 import { Module, forwardRef } from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { AdminHandler } from './handlers/admin.handler';
@@ -25,7 +25,7 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
     imports: [
         TelegrafModule.forRoot({ token: TELEGRAM_BOT_TOKEN }),
         PrismaModule,
-        PaymentsModule,
+        PaymentsCoreModule,
         OpsModule,
         RedisModule,
         AdDealModule,

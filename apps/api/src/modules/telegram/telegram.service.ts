@@ -13,6 +13,7 @@ import { TelegramConfig, telegramConfig } from '@/config/telegram.config';
 import { AppConfig, appConfig } from '@/config/app.config';
 import CircuitBreaker from 'opossum';
 import { TelegramTimeoutError, withTelegramTimeout } from './telegram-timeout';
+import { TelegramIdentityAdapter } from '@/modules/identity/telegram-identity.adapter';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
     const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
@@ -49,7 +50,7 @@ function isTelegramFailure(
 
 
 @Injectable()
-export class TelegramService implements OnModuleInit, OnModuleDestroy {
+export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramIdentityAdapter {
     private readonly bot: Telegraf<Context>;
     private started = true;
     private botId?: number;

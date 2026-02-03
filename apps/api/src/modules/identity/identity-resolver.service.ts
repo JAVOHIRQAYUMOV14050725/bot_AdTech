@@ -1,7 +1,8 @@
-import { Injectable, LoggerService, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, LoggerService, BadRequestException, Inject, ServiceUnavailableException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '@/prisma/prisma.service';
-import { TelegramService } from '@/modules/telegram/telegram.service';
 import { TelegramCheckReason } from '@/modules/telegram/telegram.types';
+import { TELEGRAM_IDENTITY_ADAPTER, TelegramIdentityAdapter } from './telegram-identity.adapter';
 
 type ParsedIdentifier =
     | { username: string }
@@ -29,9 +30,17 @@ type UserIdentity = {
 export class IdentityResolverService {
     constructor(
         private readonly prisma: PrismaService,
-        private readonly telegramService: TelegramService,
+        private readonly moduleRef: ModuleRef,
         @Inject('LOGGER') private readonly logger: LoggerService,
     ) { }
+
+    private getTelegramAdapter(): TelegramIdentityAdapter {
+        const adapter = this.moduleRef.get<TelegramIdentityAdapter>(TELEGRAM_IDENTITY_ADAPTER, { strict: false });
+        if (!adapter) {
+            throw new ServiceUnavailableException('Telegram adapter is not configured.');
+        }
+        return adapter;
+    }
 
     private parseIdentifier(value: string): ParsedIdentifier {
         const trimmed = value.trim();
@@ -123,7 +132,7 @@ export class IdentityResolverService {
             return { ok: false, reason: 'invalid_identifier', message: parsed.error };
         }
 
-        const resolved = await this.telegramService.resolvePublicChannel(parsed.username);
+        const resolved = await this.getTelegramAdapter().resolvePublicChannel(parsed.username);
         if (!resolved.ok) {
             this.logWarn('identity_resolution_failed', {
                 type: 'channel',
@@ -181,12 +190,12 @@ export class IdentityResolverService {
 
         for (const signal of recentSignals) {
             const channelId = signal.telegramChannelId.toString();
-            const botAdmin = await this.telegramService.checkBotAdmin(channelId);
+            const botAdmin = await this.getTelegramAdapter().checkBotAdmin(channelId);
             if (!botAdmin.isAdmin) {
                 continue;
             }
 
-            const userAdmin = await this.telegramService.checkUserAdmin(
+            const userAdmin = await this.getTelegramAdapter().checkUserAdmin(
                 channelId,
                 params.telegramUserId,
             );
@@ -259,7 +268,7 @@ export class IdentityResolverService {
             return { ok: false, reason: 'invalid_identifier', message: parsed.error };
         }
 
-        const resolved = await this.telegramService.resolvePublicUser(parsed.username);
+        const resolved = await this.getTelegramAdapter().resolvePublicUser(parsed.username);
         if (!resolved.ok) {
             const reason = resolved.reason ?? TelegramCheckReason.CHAT_NOT_FOUND;
             this.logWarn('identity_resolution_failed', {

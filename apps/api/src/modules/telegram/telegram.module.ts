@@ -16,6 +16,7 @@ import { ChannelsModule } from '../channels/channels.module';
 import { PublisherHandler } from './handlers/publisher.handler';
 import { AdDealModule } from '../application/addeal/addeal.module';
 import { IdentityModule } from '@/modules/identity/identity.module';
+import { TELEGRAM_IDENTITY_ADAPTER } from '@/modules/identity/telegram-identity.adapter';
 
 const env = loadEnv()
 const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN
@@ -38,8 +39,12 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
         AdvertiserHandler,
         PublisherHandler,
         AdminHandler,
+        {
+            provide: TELEGRAM_IDENTITY_ADAPTER,
+            useExisting: TelegramService,
+        },
         TelegramService,
     ],
-    exports: [TelegramService],
+    exports: [TelegramService, TELEGRAM_IDENTITY_ADAPTER],
 })
 export class TelegramModule { }

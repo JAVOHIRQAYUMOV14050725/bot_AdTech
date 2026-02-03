@@ -9,7 +9,7 @@ import { CreateAdDealUseCase } from '@/modules/application/addeal/create-addeal.
 import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usecase';
 import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
 import { PaymentsService } from '@/modules/payments/payments.service';
-import { Prisma } from '@prisma/client';
+import { ChannelStatus, Prisma } from '@prisma/client';
 import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 import { randomUUID } from 'crypto';
 import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
@@ -77,7 +77,9 @@ export class AdvertiserHandler {
             TelegramState.ADV_ADDEAL_PUBLISHER,
         );
 
-        await ctx.reply('🤝 Enter publisher Telegram ID:');
+        await ctx.reply(
+            '🤝 Send the publisher @username or a public channel/group link (t.me/...).',
+        );
     }
 
     @On('text')
@@ -87,14 +89,14 @@ export class AdvertiserHandler {
         if (!text) return;
 
         const userId = ctx.from!.id;
-        const context = await this.ensureAdvertiser(ctx);
-        if (!context) {
-            return;
-        }
-        const fsm = context.fsm;
         const commandMatch = text.match(/^\/(fund_addeal|lock_addeal)\s+(\S+)/);
         if (commandMatch) {
             const [, command, adDealId] = commandMatch;
+            const context = await this.ensureAdvertiser(ctx);
+            if (!context) {
+                return;
+            }
+            const fsm = context.fsm;
             try {
                 const adDeal = await this.prisma.adDeal.findUnique({
                     where: { id: adDealId },
@@ -137,6 +139,53 @@ export class AdvertiserHandler {
                 return ctx.reply(`❌ ${message}`);
             }
         }
+
+        const publisherResolution = await this.resolvePublisherInput(text);
+        if (publisherResolution) {
+            if (!publisherResolution.ok) {
+                return ctx.reply(`❌ ${publisherResolution.reason}`);
+            }
+
+            const context = await this.ensureAdvertiser(ctx);
+            if (!context) {
+                return;
+            }
+
+            const publisher = publisherResolution.publisher;
+            if (publisher.id === context.user.id) {
+                return ctx.reply('❌ You cannot create a deal with yourself.');
+            }
+
+            this.logger.log({
+                event: 'publisher_resolved',
+                advertiserId: context.user.id,
+                publisherId: publisher.id,
+                publisherTelegramId: publisher.telegramId?.toString(),
+                source: publisherResolution.source,
+                channelId: publisherResolution.channel?.id ?? null,
+            });
+
+            await this.fsm.transition(
+                userId,
+                TelegramState.ADV_ADDEAL_AMOUNT,
+                { publisherId: publisher.id },
+            );
+
+            const publisherLabel =
+                publisher.username
+                    ? `@${publisher.username}`
+                    : publisherResolution.channel?.title ?? 'publisher';
+
+            return ctx.reply(
+                `✅ Publisher selected: ${publisherLabel}\n💵 Enter deal amount (USD):`,
+            );
+        }
+
+        const context = await this.ensureAdvertiser(ctx);
+        if (!context) {
+            return;
+        }
+        const fsm = context.fsm;
 
         if (fsm.state === TelegramState.ADV_ADD_BALANCE_AMOUNT) {
             const amountText = text.trim();
@@ -186,36 +235,19 @@ export class AdvertiserHandler {
         }
 
         if (fsm.state === TelegramState.ADV_ADDEAL_PUBLISHER) {
-            const publisherTelegramId = this.parseTelegramId(text);
-            if (!publisherTelegramId) {
-                return ctx.reply('❌ Invalid Telegram ID');
-            }
-
-            const publisher = await this.prisma.user.findUnique({
-                where: { telegramId: publisherTelegramId },
-            });
-
-            if (!publisher) {
-                return ctx.reply('❌ Publisher not found');
-            }
-
-            await this.fsm.transition(
-                userId,
-                TelegramState.ADV_ADDEAL_AMOUNT,
-                { publisherId: publisher.id },
+            return ctx.reply(
+                '❌ Please send a publisher @username or a public channel/group link (t.me/...).',
             );
-
-            return ctx.reply('💵 Enter deal amount (USD):');
         }
 
         if (fsm.state === TelegramState.ADV_ADDEAL_AMOUNT) {
             if (!fsm.payload.publisherId) {
                 await this.fsm.transition(
                     userId,
-                    TelegramState.ADV_DASHBOARD,
+                    TelegramState.ADV_ADDEAL_PUBLISHER,
                 );
                 return ctx.reply(
-                    '⚠️ Session expired. Please restart deal creation with "Create AdDeal".',
+                    '⚠️ Please select a publisher first by sending @username or a public channel/group link (t.me/...).',
                 );
             }
 
@@ -246,6 +278,14 @@ export class AdvertiserHandler {
                     amount: amountText,
                 });
 
+                this.logger.log({
+                    event: 'addeal_created',
+                    adDealId: adDeal.id,
+                    advertiserId: context.user.id,
+                    publisherId: fsm.payload.publisherId,
+                    amount: amountText,
+                });
+
                 await this.fundAdDeal.execute({
                     adDealId: adDeal.id,
                     provider: 'wallet_balance',
@@ -258,6 +298,13 @@ export class AdvertiserHandler {
                 await this.lockEscrow.execute({
                     adDealId: adDeal.id,
                     actor: TransitionActor.advertiser,
+                });
+
+                this.logger.log({
+                    event: 'escrow_locked',
+                    adDealId: adDeal.id,
+                    advertiserId: context.user.id,
+                    publisherId: fsm.payload.publisherId,
                 });
 
                 await this.fsm.transition(
@@ -295,16 +342,109 @@ export class AdvertiserHandler {
         return undefined;
     }
 
-    private parseTelegramId(value: string): bigint | null {
+    private async resolvePublisherInput(value: string) {
         const trimmed = value.trim();
-        if (!/^\d+$/.test(trimmed)) {
+        const parsed = this.parsePublisherIdentifier(trimmed);
+        if (!parsed) {
             return null;
         }
-        try {
-            return BigInt(trimmed);
-        } catch {
+
+        if ('error' in parsed) {
+            return { ok: false as const, reason: parsed.error };
+        }
+
+        const username = parsed.username;
+
+        const publisherByUsername = await this.prisma.user.findFirst({
+            where: {
+                username: { equals: username, mode: 'insensitive' },
+            },
+        });
+
+        if (publisherByUsername) {
+            if (publisherByUsername.role !== UserRole.publisher) {
+                return {
+                    ok: false as const,
+                    reason: `@${publisherByUsername.username ?? username} is not registered as a publisher.`,
+                };
+            }
+            return {
+                ok: true as const,
+                publisher: publisherByUsername,
+                source: parsed.source,
+            };
+        }
+
+        const channel = await this.prisma.channel.findFirst({
+            where: {
+                username: { equals: username, mode: 'insensitive' },
+            },
+            include: { owner: true },
+        });
+
+        if (channel) {
+            if (channel.status !== ChannelStatus.approved) {
+                return {
+                    ok: false as const,
+                    reason: `Channel ${channel.title} is not approved in the marketplace yet.`,
+                };
+            }
+            if (channel.owner.role !== UserRole.publisher) {
+                return {
+                    ok: false as const,
+                    reason: `Channel ${channel.title} is not owned by a publisher account.`,
+                };
+            }
+            return {
+                ok: true as const,
+                publisher: channel.owner,
+                source: parsed.source,
+                channel,
+            };
+        }
+
+        return {
+            ok: false as const,
+            reason: 'Publisher not found. Send a valid @username or a public channel/group link.',
+        };
+    }
+
+    private parsePublisherIdentifier(value: string) {
+        const usernameRegex = /^(?=.{5,32}$)(?=.*[A-Za-z])[A-Za-z0-9_]+$/;
+        if (!value) {
             return null;
         }
+
+        if (value.startsWith('@')) {
+            const username = value.slice(1);
+            if (!usernameRegex.test(username)) {
+                return { error: 'That @username does not look valid.' };
+            }
+            return { username, source: 'username' as const };
+        }
+
+        const linkMatch = value.match(
+            /^(?:https?:\/\/)?t\.me\/([^?\s/]+)(?:\/.*)?$/i,
+        );
+        if (linkMatch) {
+            const path = linkMatch[1];
+            const lowered = path.toLowerCase();
+            if (lowered === 'c' || lowered === 'joinchat' || path.startsWith('+')) {
+                return {
+                    error: 'Invite links are not supported. Please send a public @username or t.me/username.',
+                };
+            }
+            if (!usernameRegex.test(path)) {
+                return { error: 'That t.me link does not look like a public username.' };
+            }
+            return { username: path, source: 'link' as const };
+        }
+
+        if (usernameRegex.test(value)) {
+            return { username: value, source: 'username' as const };
+        }
+
+        return null;
     }
 
     private async ensureAdvertiser(ctx: Context) {

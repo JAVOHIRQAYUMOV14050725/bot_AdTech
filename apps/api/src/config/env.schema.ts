@@ -30,6 +30,8 @@ export const envSchema = z.object({
     ENABLE_DEBUG: booleanString.default('false'),
     ENABLE_SWAGGER: booleanString.default('false'),
     ENABLE_LEDGER_INVARIANT_CHECK:booleanString.default('true'),
+    ENABLE_CLICK_PAYMENTS: booleanString.default('false'),
+    ENABLE_WITHDRAWALS: booleanString.default('false'),
     AUTH_RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(5),
     AUTH_RATE_LIMIT_TTL_MS: z.coerce.number().int().positive().default(60000),
     BCRYPT_SALT_ROUNDS: z.coerce.number().int().positive().default(10),
@@ -43,6 +45,12 @@ export const envSchema = z.object({
     SUPER_ADMIN_BOOTSTRAP_SECRET: z.string().optional(),
     LOG_LEVEL: z.string().optional(),
     LOG_HTTP_HEALTH: booleanString.default('true'),
+    INTERNAL_API_TOKEN: z.string().optional(),
+    TELEGRAM_BACKEND_URL: z.string().optional(),
+    CLICK_API_BASE_URL: z.string().optional(),
+    CLICK_SERVICE_ID: z.string().optional(),
+    CLICK_MERCHANT_ID: z.string().optional(),
+    CLICK_SECRET_KEY: z.string().optional(),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;    

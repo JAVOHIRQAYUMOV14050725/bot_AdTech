@@ -6,6 +6,8 @@
     import { KillSwitchService } from '@/modules/ops/kill-switch.service';
     import { ConfigService } from '@nestjs/config';
     import { LoggerService } from '@nestjs/common';
+    import { ClickPaymentService } from '@/modules/infrastructure/payments/click-payment.service';
+    import { TransitionActor } from '@/modules/domain/contracts';
 
     import {
         createCampaignTargetScenario,
@@ -25,12 +27,29 @@
                     KillSwitchService,
                     PaymentsService,
                     EscrowService,
+                    {
+                        provide: ClickPaymentService,
+                        useValue: {
+                            createInvoice: jest.fn().mockResolvedValue({
+                                invoice_id: 'invoice-1',
+                                payment_url: 'https://click.uz/pay/1',
+                            }),
+                            getInvoiceStatus: jest.fn().mockResolvedValue({
+                                status: 'paid',
+                                click_trans_id: 'click-1',
+                            }),
+                            verifyWebhookSignature: jest.fn().mockReturnValue(true),
+                        },
+                    },
 
                     // 🔧 REQUIRED INFRA
                     {
                         provide: ConfigService,
                         useValue: {
-                            get: jest.fn(),
+                            get: jest.fn((key: string) => {
+                                if (key === 'ENABLE_CLICK_PAYMENTS') return true;
+                                return false;
+                            }),
                         },
                     },
                     {
@@ -80,11 +99,21 @@
                 },
             });
 
-            await paymentsService.deposit(
-                user.id,
-                new Prisma.Decimal(50),
-                'test-deposit',
-            );
+            const intent = await paymentsService.createDepositIntent({
+                userId: user.id,
+                amount: new Prisma.Decimal(50),
+                idempotencyKey: 'test-deposit',
+            });
+
+            await paymentsService.finalizeDepositIntent({
+                payload: {
+                    merchant_trans_id: intent.id,
+                    click_trans_id: 'click-1',
+                    error: 0,
+                    amount: '50.00',
+                },
+                verified: true,
+            });
 
             const dbWallet = await prisma.wallet.findUnique({
                 where: { id: wallet.id },
@@ -100,6 +129,89 @@
             expect(
                 new Prisma.Decimal(ledgerSum._sum.amount ?? 0).toString(),
             ).toBe('50');
+        });
+
+        it('does not double-credit on duplicate webhook', async () => {
+            const user = await prisma.user.create({
+                data: {
+                    telegramId: BigInt(7002),
+                    role: 'advertiser',
+                    status: 'active',
+                },
+            });
+
+            const wallet = await prisma.wallet.create({
+                data: {
+                    userId: user.id,
+                    balance: new Prisma.Decimal(0),
+                    currency: 'USD',
+                },
+            });
+
+            const intent = await paymentsService.createDepositIntent({
+                userId: user.id,
+                amount: new Prisma.Decimal(25),
+                idempotencyKey: 'test-deposit-dup',
+            });
+
+            const payload = {
+                merchant_trans_id: intent.id,
+                click_trans_id: 'click-dup',
+                error: 0,
+                amount: '25.00',
+            };
+
+            await paymentsService.finalizeDepositIntent({
+                payload,
+                verified: true,
+            });
+
+            await paymentsService.finalizeDepositIntent({
+                payload,
+                verified: true,
+            });
+
+            const ledgerEntries = await prisma.ledgerEntry.findMany({
+                where: { walletId: wallet.id, reason: 'deposit' },
+            });
+
+            expect(ledgerEntries).toHaveLength(1);
+        });
+
+        it('rejects unverified webhook payloads', async () => {
+            const user = await prisma.user.create({
+                data: {
+                    telegramId: BigInt(7003),
+                    role: 'advertiser',
+                    status: 'active',
+                },
+            });
+
+            await prisma.wallet.create({
+                data: {
+                    userId: user.id,
+                    balance: new Prisma.Decimal(0),
+                    currency: 'USD',
+                },
+            });
+
+            const intent = await paymentsService.createDepositIntent({
+                userId: user.id,
+                amount: new Prisma.Decimal(10),
+                idempotencyKey: 'test-deposit-verify',
+            });
+
+            await expect(
+                paymentsService.finalizeDepositIntent({
+                    payload: {
+                        merchant_trans_id: intent.id,
+                        click_trans_id: 'click-bad',
+                        error: 0,
+                        amount: '10.00',
+                    },
+                    verified: false,
+                }),
+            ).rejects.toThrow('Click webhook signature invalid');
         });
 
         // ─────────────────────────────────────────────
@@ -163,7 +275,7 @@
             });
 
             await escrowService.release(scenario.target.id, {
-                actor: 'worker',
+                actor: TransitionActor.worker,
             });
 
             const escrow = await prisma.escrow.findUnique({
@@ -214,7 +326,7 @@
             });
 
             await escrowService.refund(scenario.target.id, {
-                actor: 'worker',
+                actor: TransitionActor.worker,
             });
 
             const escrow = await prisma.escrow.findUnique({

@@ -34,6 +34,7 @@ import { workerConfig } from '@/config/worker.config';
 import { campaignConfig } from '@/config/campaign.config';
 import { ConfigType } from '@nestjs/config';
 import { AdDealModule } from './modules/application/addeal/addeal.module';
+import { InternalApiModule } from './modules/internal/internal-api.module';
 import { APP_GUARD } from '@nestjs/core';
 
 
@@ -79,6 +80,7 @@ import { APP_GUARD } from '@nestjs/core';
         ModerationModule,
         PaymentsModule,
         AdDealModule,
+        InternalApiModule,
         TelegramModule,
         SchedulerModule,
         SystemModule,

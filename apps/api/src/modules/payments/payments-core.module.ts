@@ -4,9 +4,10 @@ import { LedgerService } from './ledger.service';
 import { WalletService } from './wallet.service';
 import { PaymentsService } from './payments.service';
 import { OpsModule } from '@/modules/ops/ops.module';
+import { InfrastructurePaymentsModule } from '@/modules/infrastructure/payments/payments.module';
 
 @Module({
-    imports: [OpsModule],
+    imports: [OpsModule, InfrastructurePaymentsModule],
     providers: [
         EscrowService,
         LedgerService,

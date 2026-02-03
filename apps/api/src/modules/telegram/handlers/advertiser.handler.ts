@@ -5,14 +5,11 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome } from '../keyboards';
 import { PrismaService } from '@/prisma/prisma.service';
-import { CreateAdDealUseCase } from '@/modules/application/addeal/create-addeal.usecase';
-import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usecase';
-import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
-import { PaymentsService } from '@/modules/payments/payments.service';
 import { ChannelStatus, Prisma } from '@prisma/client';
-import { TransitionActor, UserRole } from '@/modules/domain/contracts';
+import { UserRole } from '@/modules/domain/contracts';
 import { randomUUID } from 'crypto';
 import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
+import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 
 @Update()
 export class AdvertiserHandler {
@@ -21,10 +18,7 @@ export class AdvertiserHandler {
     constructor(
         private readonly fsm: TelegramFSMService,
         private readonly prisma: PrismaService,
-        private readonly createAdDeal: CreateAdDealUseCase,
-        private readonly fundAdDeal: FundAdDealUseCase,
-        private readonly lockEscrow: LockEscrowUseCase,
-        private readonly paymentsService: PaymentsService,
+        private readonly backendClient: TelegramBackendClient,
     ) { }
 
     @Action('ROLE_ADVERTISER')
@@ -107,22 +101,17 @@ export class AdvertiserHandler {
                 }
 
                 if (command === 'fund_addeal') {
-                    await this.fundAdDeal.execute({
+                    await this.backendClient.fundAdDeal({
                         adDealId,
                         provider: 'wallet_balance',
                         providerReference: `telegram:${userId}:${adDealId}`,
                         amount: adDeal.amount.toFixed(2),
-                        verified: true,
-                        actor: TransitionActor.system,
                     });
                     return ctx.reply(`✅ AdDeal funded\nID: ${adDealId}`);
                 }
 
                 if (command === 'lock_addeal') {
-                    await this.lockEscrow.execute({
-                        adDealId,
-                        actor: TransitionActor.advertiser,
-                    });
+                    await this.backendClient.lockAdDeal(adDealId);
                     return ctx.reply(`🔒 Escrow locked\nID: ${adDealId}`);
                 }
             } catch (err) {
@@ -199,14 +188,10 @@ export class AdvertiserHandler {
 
             try {
                 const idempotencyKey = `telegram:deposit:${userId}:${randomUUID()}`;
-                await this.paymentsService.deposit(
-                    context.user.id,
-                    amount,
+                const intent = await this.backendClient.createDepositIntent({
+                    userId: context.user.id,
+                    amount: amount.toFixed(2),
                     idempotencyKey,
-                );
-
-                const wallet = await this.prisma.wallet.findUnique({
-                    where: { userId: context.user.id },
                 });
 
                 await this.fsm.transition(
@@ -215,11 +200,8 @@ export class AdvertiserHandler {
                     { amount: amount.toFixed(2) },
                 );
 
-                const balanceText = wallet?.balance
-                    ? wallet.balance.toFixed(2)
-                    : amount.toFixed(2);
                 return ctx.reply(
-                    `✅ Deposit completed\nAmount: $${amount.toFixed(2)}\nBalance: $${balanceText}`,
+                    `✅ Deposit intent created\nAmount: $${amount.toFixed(2)}\nPay here: ${intent.paymentUrl ?? 'pending'}`,
                 );
             } catch (err) {
                 const message = formatTelegramError(err);
@@ -272,7 +254,7 @@ export class AdvertiserHandler {
                     );
                 }
 
-                const adDeal = await this.createAdDeal.execute({
+                const adDeal = await this.backendClient.createAdDeal({
                     advertiserId: context.user.id,
                     publisherId: fsm.payload.publisherId,
                     amount: amountText,
@@ -286,19 +268,14 @@ export class AdvertiserHandler {
                     amount: amountText,
                 });
 
-                await this.fundAdDeal.execute({
+                await this.backendClient.fundAdDeal({
                     adDealId: adDeal.id,
                     provider: 'wallet_balance',
                     providerReference: `telegram:${userId}:${adDeal.id}`,
                     amount: amountText,
-                    verified: true,
-                    actor: TransitionActor.system,
                 });
 
-                await this.lockEscrow.execute({
-                    adDealId: adDeal.id,
-                    actor: TransitionActor.advertiser,
-                });
+                await this.backendClient.lockAdDeal(adDeal.id);
 
                 this.logger.log({
                     event: 'escrow_locked',

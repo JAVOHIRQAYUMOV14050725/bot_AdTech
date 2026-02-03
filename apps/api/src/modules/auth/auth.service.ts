@@ -10,23 +10,46 @@ import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
 import { AuthConfig, authConfig } from '@/config/auth.config';
 import { JwtConfig, jwtConfig } from '@/config/jwt.config';
 import { ConfigType } from '@nestjs/config';
+import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
 
 @Injectable()
 export class AuthService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
+        private readonly identityResolver: IdentityResolverService,
         @Inject(jwtConfig.KEY)
         private readonly jwtConfig: JwtConfig,
         @Inject(authConfig.KEY) private readonly authConfig: AuthConfig,
     ) { }
 
     private parseTelegramId(value: string): bigint {
+        if (!/^\d+$/.test(value)) {
+            throw new BadRequestException('Invalid Telegram identifier format.');
+        }
         try {
             return BigInt(value);
         } catch {
-            throw new BadRequestException('Invalid telegramId');
+            throw new BadRequestException('Invalid Telegram identifier format.');
         }
+    }
+
+    private async resolveTelegramId(params: { telegramId?: string; identifier?: string }, actorId?: string) {
+        if (params.telegramId) {
+            return this.parseTelegramId(params.telegramId).toString();
+        }
+
+        if (!params.identifier) {
+            throw new BadRequestException('Missing identifier. Provide a Telegram @username or t.me link.');
+        }
+
+        const resolved = await this.identityResolver.resolveUserIdentifier(params.identifier, {
+            actorId,
+        });
+        if (!resolved.ok) {
+            throw new BadRequestException(resolved.message);
+        }
+        return resolved.value.telegramId;
     }
 
     private async hashToken(token: string) {
@@ -83,9 +106,9 @@ export class AuthService {
         const role = dto.role ?? UserRole.publisher;
         if (!PUBLIC_ROLES.includes(role)) throw new BadRequestException('Invalid role for registration');
 
-        const telegramId = this.parseTelegramId(dto.telegramId);
+        const telegramId = await this.resolveTelegramId(dto);
 
-        const existing = await this.prisma.user.findUnique({ where: { telegramId } });
+        const existing = await this.prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
         if (existing) throw new BadRequestException('User already exists');
 
         const passwordHash = await bcrypt.hash(dto.password, 10);
@@ -93,7 +116,7 @@ export class AuthService {
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
                 data: {
-                    telegramId,
+                    telegramId: BigInt(telegramId),
                     username: dto.username,
                     role,
                     status: UserStatus.active,
@@ -143,9 +166,9 @@ export class AuthService {
             throw new BadRequestException('Super admin already exists');
         }
 
-        const telegramId = this.parseTelegramId(dto.telegramId);
+        const telegramId = await this.resolveTelegramId(dto);
         const existing = await this.prisma.user.findUnique({
-            where: { telegramId },
+            where: { telegramId: BigInt(telegramId) },
             select: { id: true },
         });
         if (existing) {
@@ -157,7 +180,7 @@ export class AuthService {
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
                 data: {
-                    telegramId,
+                    telegramId: BigInt(telegramId),
                     username: dto.username,
                     role: UserRole.super_admin,
                     status: UserStatus.active,
@@ -192,9 +215,9 @@ export class AuthService {
     }
 
     async login(dto: LoginDto) {
-        const telegramId = this.parseTelegramId(dto.telegramId);
+        const telegramId = await this.resolveTelegramId(dto);
 
-        const user = await this.prisma.user.findUnique({ where: { telegramId } });
+        const user = await this.prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
         if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
 
         const matches = await bcrypt.compare(dto.password, user.passwordHash);
@@ -292,9 +315,9 @@ export class AuthService {
     }
 
     // ⚠️ DEV/ADMIN reset (password esdan chiqqanda)
-    async resetPasswordByTelegramId(telegramIdStr: string, newPassword: string) {
-        const telegramId = this.parseTelegramId(telegramIdStr);
-        const user = await this.prisma.user.findUnique({ where: { telegramId } });
+    async resetPasswordByIdentifier(params: { telegramId?: string; identifier?: string }, newPassword: string) {
+        const telegramId = await this.resolveTelegramId(params);
+        const user = await this.prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
         if (!user) throw new BadRequestException('User not found');
 
         const passwordHash = await bcrypt.hash(newPassword, 10);

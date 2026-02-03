@@ -18,15 +18,26 @@ export class AdminCreateChannelDto {
         throw new Error('Method not implemented.');
     }
     @ApiProperty({
+        example: '@mychannel',
+        description: 'Public @username or t.me/username for the channel.',
+    })
+    @ValidateIf((o) => !o.telegramChannelId)
+    @TrimString()
+    @IsString()
+    @IsNotEmpty()
+    channelIdentifier!: string;
+
+    @ApiPropertyOptional({
         example: TELEGRAM_CHANNEL_ID_EXAMPLE,
-        description: 'This must be the REAL Telegram channel id (not @username or invite link), starting with -100.',
+        description: 'Internal-use only. Real Telegram channel id (not @username or invite link), starting with -100.',
         pattern: '^-100\\d{5,}$',
     })
+    @ValidateIf((o) => !o.channelIdentifier)
     @TrimString()
     @IsString()
     @IsNotEmpty()
     @IsTelegramChannelIdString()
-    telegramChannelId!: string;
+    telegramChannelId?: string;
 
     @ApiProperty({
         example: 'My Channel',
@@ -34,11 +45,11 @@ export class AdminCreateChannelDto {
         maxLength: 120,
     })
     @TrimString()
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
     @MinLength(2)
     @MaxLength(120)
-    title!: string;
+    title?: string;
 
     @ApiPropertyOptional({
         example: USERNAME_EXAMPLE,
@@ -53,23 +64,33 @@ export class AdminCreateChannelDto {
 
     @ApiPropertyOptional({
         example: '4c56e3b8-7d2b-4db8-9b03-2d8b8f4b9f6c',
-        description: 'Publisher user ID (UUID). Required when ownerTelegramId is not provided.',
+        description: 'Publisher user ID (UUID). Required when ownerTelegramId/ownerIdentifier is not provided.',
         format: 'uuid',
     })
-    @ValidateIf((o) => !o.ownerTelegramId)
+    @ValidateIf((o) => !o.ownerTelegramId && !o.ownerIdentifier)
     @IsUUID()
     @IsNotEmpty()
     ownerId?: string;
 
     @ApiPropertyOptional({
         example: TELEGRAM_ID_EXAMPLE,
-        description: 'Publisher telegram ID as digits-only string. Required when ownerId is not provided.',
+        description: 'Internal-use only. Publisher telegram ID as digits-only string. Required when ownerId is not provided.',
         pattern: '^\\d+$',
     })
-    @ValidateIf((o) => !o.ownerId)
+    @ValidateIf((o) => !o.ownerId && !o.ownerIdentifier)
     @TrimString()
     @IsString()
     @IsNotEmpty()
     @IsTelegramIdString()
     ownerTelegramId?: string;
+
+    @ApiPropertyOptional({
+        example: '@publishername',
+        description: 'Publisher @username or t.me link for identity resolution.',
+    })
+    @ValidateIf((o) => !o.ownerId && !o.ownerTelegramId)
+    @TrimString()
+    @IsString()
+    @IsNotEmpty()
+    ownerIdentifier?: string;
 }

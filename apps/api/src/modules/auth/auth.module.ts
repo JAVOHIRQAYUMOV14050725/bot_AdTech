@@ -9,6 +9,7 @@ import { jwtConfig } from '@/config/jwt.config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { loadEnv } from '@/config/env';
 import { LoggingModule } from '@/common/logging/logging.module';
+import { IdentityModule } from '@/modules/identity/identity.module';
 @Module({
     imports: [
         PrismaModule,
@@ -34,8 +35,9 @@ import { LoggingModule } from '@/common/logging/logging.module';
                 },
             }),
         }),
-        LoggingModule
-        
+        LoggingModule,
+        IdentityModule
+
     ],
     controllers: [AuthController],
     providers: [AuthService, JwtAuthGuard],

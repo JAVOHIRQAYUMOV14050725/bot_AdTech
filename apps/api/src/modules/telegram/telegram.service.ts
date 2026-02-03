@@ -329,6 +329,35 @@ Who are you?`,
         }
     }
 
+    async resolvePublicUser(username: string): Promise<{ ok: true; telegramId: string; username?: string } | { ok: false; reason: TelegramCheckReason; telegramError?: string }> {
+        try {
+            const chat = await this.withTelegramRetry(
+                'getChat',
+                () => this.bot.telegram.getChat(`@${username}`),
+            );
+
+            if (!chat || chat.type !== 'private') {
+                return {
+                    ok: false,
+                    reason: TelegramCheckReason.CHAT_NOT_FOUND,
+                };
+            }
+
+            return {
+                ok: true,
+                telegramId: chat.id.toString(),
+                username: chat.username ?? username,
+            };
+        } catch (err) {
+            const result = this.classifyTelegramError(err);
+            return {
+                ok: false,
+                reason: result.reason,
+                telegramError: result.telegramError,
+            };
+        }
+    }
+
     async checkUserAdmin(channelId: string, userId: number): Promise<TelegramCheckResult> {
         try {
             const admins = await this.withTelegramRetry(

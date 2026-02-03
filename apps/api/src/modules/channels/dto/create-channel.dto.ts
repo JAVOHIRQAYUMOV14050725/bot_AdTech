@@ -21,7 +21,7 @@ export class CreateChannelDto {
     @TrimString()
     @IsString()
     @IsNotEmpty()
-    channelIdentifier!: string;
+    channelIdentifier?: string;
 
     @ApiPropertyOptional({
         example: TELEGRAM_CHANNEL_ID_EXAMPLE,

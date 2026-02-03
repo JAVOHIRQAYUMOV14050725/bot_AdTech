@@ -1,6 +1,6 @@
 
 import { PaymentsModule } from '@/modules/payments/payments.module';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { AdminHandler } from './handlers/admin.handler';
 import { PrismaModule } from '@/prisma/prisma.module';
@@ -28,6 +28,7 @@ console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
         OpsModule,
         RedisModule,
         AdDealModule,
+        forwardRef(() => ChannelsModule),
     ],
     providers: [
         TelegramFSMService,

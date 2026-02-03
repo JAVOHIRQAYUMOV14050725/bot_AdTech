@@ -215,20 +215,17 @@ Who are you?`,
     private async startBot() {
         if (this.started) return;
 
-        // ✅ Debug: real channel id ni olish (dev-only)
-        if (this.appConfig.nodeEnv !== 'production' || this.appConfig.enableDebug) {
-            this.bot.on('channel_post', (ctx) => {
-                const chat: any = ctx.chat;
-                this.logger.warn({
-                    event: 'telegram_channel_post_received',
-                    channelId: chat.id,
-                    channelTitle: chat.title,
-                    chatType: chat.type,
-                },
-                    'TelegramService'
-                );
-            });
-        }
+        this.bot.on('channel_post', async (ctx) => {
+            await this.recordChannelSignal(ctx.chat, 'channel_post');
+        });
+
+        this.bot.on('my_chat_member', async (ctx) => {
+            const chat = ctx.update?.my_chat_member?.chat;
+            const newStatus = ctx.update?.my_chat_member?.new_chat_member?.status;
+            if (newStatus === 'administrator' || newStatus === 'creator') {
+                await this.recordChannelSignal(chat, 'my_chat_member');
+            }
+        });
 
         try {
             this.logger.log({
@@ -250,6 +247,111 @@ Who are you?`,
                 error: e instanceof Error ? e.message : String(e),
             },
                 'TelegramService');
+        }
+    }
+
+    private async recordChannelSignal(
+        chat: { id?: number; title?: string; username?: string; type?: string } | undefined,
+        source: 'channel_post' | 'my_chat_member',
+    ) {
+        if (!chat?.id) {
+            return;
+        }
+
+        try {
+            await this.prisma.telegramChannelSignal.upsert({
+                where: { telegramChannelId: BigInt(chat.id) },
+                update: {
+                    title: typeof chat.title === 'string' ? chat.title : null,
+                    username: typeof chat.username === 'string' ? chat.username : null,
+                    source,
+                    receivedAt: new Date(),
+                },
+                create: {
+                    telegramChannelId: BigInt(chat.id),
+                    title: typeof chat.title === 'string' ? chat.title : null,
+                    username: typeof chat.username === 'string' ? chat.username : null,
+                    source,
+                    receivedAt: new Date(),
+                },
+            });
+
+            this.logger.log(
+                {
+                    event: 'telegram_channel_signal_received',
+                    telegramChannelId: chat.id,
+                    channelTitle: chat.title ?? null,
+                    username: chat.username ?? null,
+                    source,
+                    chatType: chat.type ?? null,
+                },
+                'TelegramService',
+            );
+        } catch (err) {
+            this.logger.warn(
+                {
+                    event: 'telegram_channel_signal_store_failed',
+                    source,
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                'TelegramService',
+            );
+        }
+    }
+
+    async resolvePublicChannel(username: string) {
+        try {
+            const chat = await this.withTelegramRetry(
+                'getChat',
+                () => this.bot.telegram.getChat(`@${username}`),
+            );
+
+            if (!chat || chat.type !== 'channel') {
+                return {
+                    ok: false as const,
+                    reason: TelegramCheckReason.CHAT_NOT_FOUND,
+                };
+            }
+
+            return {
+                ok: true as const,
+                telegramChannelId: chat.id.toString(),
+                title: chat.title ?? username,
+                username: chat.username ?? username,
+            };
+        } catch (err) {
+            const result = this.classifyTelegramError(err);
+            return {
+                ok: false as const,
+                reason: result.reason,
+                telegramError: result.telegramError,
+            };
+        }
+    }
+
+    async checkUserAdmin(channelId: string, userId: number): Promise<TelegramCheckResult> {
+        try {
+            const admins = await this.withTelegramRetry(
+                'getChatAdministrators',
+                () => this.bot.telegram.getChatAdministrators(channelId),
+            );
+            const userAdmin = admins.find((admin) => admin.user.id === userId);
+
+            if (!userAdmin) {
+                return {
+                    canAccessChat: true,
+                    isAdmin: false,
+                    reason: TelegramCheckReason.USER_NOT_ADMIN,
+                };
+            }
+
+            return {
+                canAccessChat: true,
+                isAdmin: true,
+                reason: TelegramCheckReason.UNKNOWN,
+            };
+        } catch (err) {
+            return this.classifyTelegramError(err);
         }
     }
 

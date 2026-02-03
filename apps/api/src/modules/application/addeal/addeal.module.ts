@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 
 import { PrismaModule } from '@/prisma/prisma.module';
-import { PaymentsModule } from '@/modules/payments/payments.module';
 
 import { CreateAdDealUseCase } from './create-addeal.usecase';
 import { FundAdDealUseCase } from './fund-addeal.usecase';
@@ -12,9 +11,10 @@ import { SettleAdDealUseCase } from './settle-addeal.usecase';
 import { RefundAdDealUseCase } from './refund-addeal.usecase';
 import { OpenDisputeUseCase } from './open-dispute.usecase';
 import { ResolveDisputeUseCase } from './resolve-dispute.usecase';
+import { PaymentsCoreModule } from '@/modules/payments/payments-core.module';
 
 @Module({
-    imports: [PrismaModule, PaymentsModule],
+    imports: [PrismaModule, PaymentsCoreModule],
     providers: [
         CreateAdDealUseCase,
         FundAdDealUseCase,

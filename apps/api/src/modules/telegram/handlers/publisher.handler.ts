@@ -8,8 +8,9 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usecase';
 import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.usecase';
 import { SettleAdDealUseCase } from '@/modules/application/addeal/settle-addeal.usecase';
-import { TransitionActor } from '@/modules/domain/contracts';
+import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 import { Logger } from '@nestjs/common';
+import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
 @Update()
 export class PublisherHandler {
     private readonly logger = new Logger(PublisherHandler.name);
@@ -25,6 +26,10 @@ export class PublisherHandler {
     @Action('ROLE_PUBLISHER')
     async enter(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
+        const context = await this.ensurePublisher(ctx);
+        if (!context) {
+            return;
+        }
 
         await this.fsm.set(
             userId,
@@ -41,17 +46,8 @@ export class PublisherHandler {
     @Action('PUB_ADD_CHANNEL')
     async addChannel(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
-        const fsm = await this.fsm.get(userId);
-
-        if (fsm.role !== 'publisher') {
-            this.logger.warn({
-                event: 'telegram_role_block',
-                action: 'add_channel',
-                userId,
-                role: fsm.role,
-                state: fsm.state,
-            });
-            await ctx.reply('⛔ Not allowed yet. Switch to publisher role.');
+        const context = await this.ensurePublisher(ctx);
+        if (!context) {
             return;
         }
 
@@ -70,37 +66,21 @@ export class PublisherHandler {
         if (!text) return;
 
         const userId = ctx.from!.id;
-        const fsm = await this.fsm.get(userId);
-
-        if (fsm.role !== 'publisher') {
-            this.logger.warn({
-                event: 'telegram_role_block',
-                action: 'publisher_text',
-                userId,
-                role: fsm.role,
-                state: fsm.state,
-            });
-            await ctx.reply('⛔ Not allowed yet. Switch to publisher role.');
+        const context = await this.ensurePublisher(ctx);
+        if (!context) {
             return;
         }
+        const fsm = context.fsm;
 
         const acceptMatch = text.match(/^\/(accept_addeal)\s+(\S+)/);
         if (acceptMatch) {
             const adDealId = acceptMatch[2];
             try {
-                const publisher = await this.prisma.user.findUnique({
-                    where: { telegramId: BigInt(userId) },
-                });
-
-                if (!publisher) {
-                    return ctx.reply('❌ Publisher not found');
-                }
-
                 const adDeal = await this.prisma.adDeal.findUnique({
                     where: { id: adDealId },
                 });
 
-                if (!adDeal || adDeal.publisherId !== publisher.id) {
+                if (!adDeal || adDeal.publisherId !== context.user.id) {
                     return ctx.reply('❌ AdDeal not found for publisher');
                 }
 
@@ -111,7 +91,7 @@ export class PublisherHandler {
 
                 return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
             } catch (err) {
-                const message = this.formatError(err);
+                const message = formatTelegramError(err);
                 this.logger.error({
                     event: 'telegram_accept_failed',
                     adDealId,
@@ -155,11 +135,28 @@ export class PublisherHandler {
 
         if (fsm.state === TelegramState.PUB_ADDEAL_PROOF) {
             const adDealId = fsm.payload.adDealId;
+            if (!adDealId) {
+                await this.fsm.transition(
+                    userId,
+                    TelegramState.PUB_DASHBOARD,
+                );
+                return ctx.reply(
+                    '⚠️ Session expired. Please restart proof submission with /submit_proof.',
+                );
+            }
             await this.fsm.transition(
                 userId,
                 TelegramState.PUB_DASHBOARD,
             );
             return this.handleProofSubmission(ctx, adDealId, text);
+        }
+
+        if (
+            fsm.state === TelegramState.IDLE
+            || fsm.state === TelegramState.SELECT_ROLE
+        ) {
+            await ctx.reply('ℹ️ Session expired. Use /start to choose your role.');
+            return;
         }
 
         return undefined;
@@ -174,19 +171,16 @@ export class PublisherHandler {
         const fsm = await this.fsm.get(userId);
 
         try {
-            const publisher = await this.prisma.user.findUnique({
-                where: { telegramId: BigInt(userId) },
-            });
-
+            const publisher = await this.ensurePublisher(ctx);
             if (!publisher) {
-                return ctx.reply('❌ Publisher not found');
+                return;
             }
 
             const adDeal = await this.prisma.adDeal.findUnique({
                 where: { id: adDealId },
             });
 
-            if (!adDeal || adDeal.publisherId !== publisher.id) {
+            if (!adDeal || adDeal.publisherId !== publisher.user.id) {
                 return ctx.reply('❌ AdDeal not found for publisher');
             }
 
@@ -203,7 +197,7 @@ export class PublisherHandler {
 
             return ctx.reply(`✅ Proof submitted & settled\nID: ${adDealId}`);
         } catch (err) {
-            const message = this.formatError(err);
+            const message = formatTelegramError(err);
             this.logger.error({
                 event: 'telegram_proof_failed',
                 adDealId,
@@ -216,10 +210,41 @@ export class PublisherHandler {
         }
     }
 
-    private formatError(err: unknown) {
-        if (err instanceof Error) {
-            return err.message;
+    private async ensurePublisher(ctx: Context) {
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await ctx.reply('❌ Telegram user not found.');
+            return null;
         }
-        return String(err);
+
+        const user = await this.prisma.user.findUnique({
+            where: { telegramId: BigInt(userId) },
+        });
+
+        if (!user) {
+            await ctx.reply('❌ Publisher account not found.');
+            return null;
+        }
+
+        if (user.role !== UserRole.publisher) {
+            this.logger.warn({
+                event: 'telegram_role_block',
+                action: 'publisher_access',
+                userId,
+                role: user.role,
+            });
+            await ctx.reply(
+                `⛔ Not allowed. Your account role is ${user.role}.`,
+            );
+            return null;
+        }
+
+        const fsm = await this.fsm.get(userId);
+        const syncedFsm =
+            fsm.role !== 'publisher'
+                ? await this.fsm.updateRole(userId, 'publisher')
+                : fsm;
+
+        return { user, fsm: syncedFsm };
     }
 }

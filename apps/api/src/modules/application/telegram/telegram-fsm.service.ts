@@ -36,8 +36,6 @@ export class TelegramFSMService {
         await this.redis.getClient().set(
             this.key(userId),
             JSON.stringify({ role, state, payload }),
-            'EX',
-            3600,
         );
     }
 
@@ -57,5 +55,11 @@ export class TelegramFSMService {
 
     async reset(userId: number) {
         await this.redis.getClient().del(this.key(userId));
+    }
+
+    async updateRole(userId: number, role: TelegramRole) {
+        const ctx = await this.get(userId);
+        await this.set(userId, role, ctx.state, ctx.payload);
+        return { ...ctx, role };
     }
 }

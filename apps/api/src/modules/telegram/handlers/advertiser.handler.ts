@@ -10,8 +10,9 @@ import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usec
 import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { Prisma } from '@prisma/client';
-import { TransitionActor } from '@/modules/domain/contracts';
+import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 import { randomUUID } from 'crypto';
+import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
 
 @Update()
 export class AdvertiserHandler {
@@ -29,6 +30,11 @@ export class AdvertiserHandler {
     @Action('ROLE_ADVERTISER')
     async enter(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
+        const context = await this.ensureAdvertiser(ctx);
+
+        if (!context) {
+            return;
+        }
 
         await this.fsm.set(
             userId,
@@ -45,17 +51,8 @@ export class AdvertiserHandler {
     @Action('ADD_BALANCE')
     async addBalance(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
-        const fsm = await this.fsm.get(userId);
-
-        if (fsm.role !== 'advertiser') {
-            this.logger.warn({
-                event: 'telegram_role_block',
-                action: 'add_balance',
-                userId,
-                role: fsm.role,
-                state: fsm.state,
-            });
-            await ctx.reply('⛔ Not allowed yet. Switch to advertiser role.');
+        const context = await this.ensureAdvertiser(ctx);
+        if (!context) {
             return;
         }
 
@@ -70,17 +67,8 @@ export class AdvertiserHandler {
     @Action('CREATE_ADDEAL')
     async beginCreateAdDeal(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
-        const fsm = await this.fsm.get(userId);
-
-        if (fsm.role !== 'advertiser') {
-            this.logger.warn({
-                event: 'telegram_role_block',
-                action: 'create_addeal',
-                userId,
-                role: fsm.role,
-                state: fsm.state,
-            });
-            await ctx.reply('⛔ Not allowed yet. Switch to advertiser role.');
+        const context = await this.ensureAdvertiser(ctx);
+        if (!context) {
             return;
         }
 
@@ -99,36 +87,20 @@ export class AdvertiserHandler {
         if (!text) return;
 
         const userId = ctx.from!.id;
-        const fsm = await this.fsm.get(userId);
-
-        if (fsm.role !== 'advertiser') {
-            this.logger.warn({
-                event: 'telegram_role_block',
-                action: 'advertiser_text',
-                userId,
-                role: fsm.role,
-                state: fsm.state,
-            });
-            await ctx.reply('⛔ Not allowed yet. Switch to advertiser role.');
+        const context = await this.ensureAdvertiser(ctx);
+        if (!context) {
             return;
         }
+        const fsm = context.fsm;
         const commandMatch = text.match(/^\/(fund_addeal|lock_addeal)\s+(\S+)/);
         if (commandMatch) {
             const [, command, adDealId] = commandMatch;
             try {
-                const user = await this.prisma.user.findUnique({
-                    where: { telegramId: BigInt(userId) },
-                });
-
-                if (!user) {
-                    return ctx.reply('❌ Advertiser account not found');
-                }
-
                 const adDeal = await this.prisma.adDeal.findUnique({
                     where: { id: adDealId },
                 });
 
-                if (!adDeal || adDeal.advertiserId !== user.id) {
+                if (!adDeal || adDeal.advertiserId !== context.user.id) {
                     return ctx.reply('❌ AdDeal not found for advertiser');
                 }
 
@@ -152,7 +124,7 @@ export class AdvertiserHandler {
                     return ctx.reply(`🔒 Escrow locked\nID: ${adDealId}`);
                 }
             } catch (err) {
-                const message = this.formatError(err);
+                const message = formatTelegramError(err);
                 this.logger.error({
                     event: 'telegram_addeal_command_failed',
                     command,
@@ -177,23 +149,15 @@ export class AdvertiserHandler {
             }
 
             try {
-                const user = await this.prisma.user.findUnique({
-                    where: { telegramId: BigInt(userId) },
-                });
-
-                if (!user) {
-                    return ctx.reply('❌ Advertiser account not found');
-                }
-
                 const idempotencyKey = `telegram:deposit:${userId}:${randomUUID()}`;
                 await this.paymentsService.deposit(
-                    user.id,
+                    context.user.id,
                     amount,
                     idempotencyKey,
                 );
 
                 const wallet = await this.prisma.wallet.findUnique({
-                    where: { userId: user.id },
+                    where: { userId: context.user.id },
                 });
 
                 await this.fsm.transition(
@@ -209,7 +173,7 @@ export class AdvertiserHandler {
                     `✅ Deposit completed\nAmount: $${amount.toFixed(2)}\nBalance: $${balanceText}`,
                 );
             } catch (err) {
-                const message = this.formatError(err);
+                const message = formatTelegramError(err);
                 this.logger.error({
                     event: 'telegram_deposit_failed',
                     userId,
@@ -245,6 +209,16 @@ export class AdvertiserHandler {
         }
 
         if (fsm.state === TelegramState.ADV_ADDEAL_AMOUNT) {
+            if (!fsm.payload.publisherId) {
+                await this.fsm.transition(
+                    userId,
+                    TelegramState.ADV_DASHBOARD,
+                );
+                return ctx.reply(
+                    '⚠️ Session expired. Please restart deal creation with "Create AdDeal".',
+                );
+            }
+
             const amountText = text.trim();
             if (!/^\d+(\.\d{1,2})?$/.test(amountText)) {
                 return ctx.reply('❌ Invalid amount');
@@ -255,16 +229,8 @@ export class AdvertiserHandler {
             }
 
             try {
-                const advertiser = await this.prisma.user.findUnique({
-                    where: { telegramId: BigInt(userId) },
-                });
-
-                if (!advertiser) {
-                    return ctx.reply('❌ Advertiser not found');
-                }
-
                 const wallet = await this.prisma.wallet.findUnique({
-                    where: { userId: advertiser.id },
+                    where: { userId: context.user.id },
                 });
 
                 const requiredAmount = new Prisma.Decimal(amountText);
@@ -275,7 +241,7 @@ export class AdvertiserHandler {
                 }
 
                 const adDeal = await this.createAdDeal.execute({
-                    advertiserId: advertiser.id,
+                    advertiserId: context.user.id,
                     publisherId: fsm.payload.publisherId,
                     amount: amountText,
                 });
@@ -306,7 +272,7 @@ export class AdvertiserHandler {
                     `• Publisher: /submit_proof ${adDeal.id} <proof>`,
                 );
             } catch (err) {
-                const message = this.formatError(err);
+                const message = formatTelegramError(err);
                 this.logger.error({
                     event: 'telegram_addeal_create_failed',
                     userId,
@@ -316,6 +282,14 @@ export class AdvertiserHandler {
                 });
                 return ctx.reply(`❌ ${message}`);
             }
+        }
+
+        if (
+            fsm.state === TelegramState.IDLE
+            || fsm.state === TelegramState.SELECT_ROLE
+        ) {
+            await ctx.reply('ℹ️ Session expired. Use /start to choose your role.');
+            return;
         }
 
         return undefined;
@@ -333,10 +307,41 @@ export class AdvertiserHandler {
         }
     }
 
-    private formatError(err: unknown) {
-        if (err instanceof Error) {
-            return err.message;
+    private async ensureAdvertiser(ctx: Context) {
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await ctx.reply('❌ Telegram user not found.');
+            return null;
         }
-        return String(err);
+
+        const user = await this.prisma.user.findUnique({
+            where: { telegramId: BigInt(userId) },
+        });
+
+        if (!user) {
+            await ctx.reply('❌ Advertiser account not found.');
+            return null;
+        }
+
+        if (user.role !== UserRole.advertiser) {
+            this.logger.warn({
+                event: 'telegram_role_block',
+                action: 'advertiser_access',
+                userId,
+                role: user.role,
+            });
+            await ctx.reply(
+                `⛔ Not allowed. Your account role is ${user.role}.`,
+            );
+            return null;
+        }
+
+        const fsm = await this.fsm.get(userId);
+        const syncedFsm =
+            fsm.role !== 'advertiser'
+                ? await this.fsm.updateRole(userId, 'advertiser')
+                : fsm;
+
+        return { user, fsm: syncedFsm };
     }
 }

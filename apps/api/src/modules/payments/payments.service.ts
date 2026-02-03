@@ -311,6 +311,17 @@ export class PaymentsService {
                 correlationId: `deposit:${userId}:${idempotencyKey}`,
             });
 
+            await tx.userAuditLog.create({
+                data: {
+                    userId,
+                    action: 'wallet_deposit',
+                    metadata: {
+                        amount: normalizedAmount.toFixed(2),
+                        idempotencyKey,
+                    },
+                },
+            });
+
             return { ok: true };
         });
     }

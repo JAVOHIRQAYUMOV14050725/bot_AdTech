@@ -152,7 +152,7 @@ export class SettleAdDealUseCase {
                 },
             });
 
-            return tx.adDeal.update({
+            const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
                     status: settled.status,
@@ -160,6 +160,34 @@ export class SettleAdDealUseCase {
                     commissionAmount: commissionAmount,
                 },
             });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.publisherId,
+                    action: 'addeal_settled',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        settledAt: settled.settledAt,
+                        payoutAmount: payoutAmount.toFixed(2),
+                        commissionAmount: commissionAmount.toFixed(2),
+                    },
+                },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.advertiserId,
+                    action: 'addeal_settled',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        settledAt: settled.settledAt,
+                        payoutAmount: payoutAmount.toFixed(2),
+                        commissionAmount: commissionAmount.toFixed(2),
+                    },
+                },
+            });
+
+            return updated;
         };
 
         if (params.transaction) {

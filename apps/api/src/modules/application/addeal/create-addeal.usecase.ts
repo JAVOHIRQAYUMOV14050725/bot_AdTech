@@ -48,17 +48,35 @@ export class CreateAdDealUseCase {
 
         const snapshot = deal.toSnapshot();
 
-        return this.prisma.adDeal.create({
-            data: {
-                id: snapshot.id,
-                advertiserId: snapshot.advertiserId,
-                publisherId: snapshot.publisherId,
-                amount: new Prisma.Decimal(snapshot.amount),
-                currency: snapshot.currency,
-                status: snapshot.status,
-                createdAt: snapshot.createdAt,
-                commissionPercentage,
-            },
+        return this.prisma.$transaction(async (tx) => {
+            const adDeal = await tx.adDeal.create({
+                data: {
+                    id: snapshot.id,
+                    advertiserId: snapshot.advertiserId,
+                    publisherId: snapshot.publisherId,
+                    amount: new Prisma.Decimal(snapshot.amount),
+                    currency: snapshot.currency,
+                    status: snapshot.status,
+                    createdAt: snapshot.createdAt,
+                    commissionPercentage,
+                },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.advertiserId,
+                    action: 'addeal_created',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        publisherId: adDeal.publisherId,
+                        amount: adDeal.amount.toFixed(2),
+                        currency: adDeal.currency,
+                        commissionPercentage: commissionPercentage?.toFixed(2) ?? null,
+                    },
+                },
+            });
+
+            return adDeal;
         });
     }
 }

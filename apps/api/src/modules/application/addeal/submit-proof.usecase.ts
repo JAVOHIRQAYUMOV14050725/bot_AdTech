@@ -60,7 +60,7 @@ export class SubmitProofUseCase {
                 .submitProof(params.submittedAt)
                 .toSnapshot();
 
-            return tx.adDeal.update({
+            const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
                     status: proofed.status,
@@ -68,6 +68,19 @@ export class SubmitProofUseCase {
                     proofPayload: params.proofPayload,
                 },
             });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.publisherId,
+                    action: 'addeal_proof_submitted',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        proofSubmittedAt: proofed.proofSubmittedAt,
+                    },
+                },
+            });
+
+            return updated;
         });
     }
 }

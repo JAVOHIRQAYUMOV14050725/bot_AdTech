@@ -114,13 +114,26 @@ export class LockEscrowUseCase {
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
             const locked = domain.lockEscrow().toSnapshot();
 
-            return tx.adDeal.update({
+            const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
                     status: locked.status,
                     lockedAt: locked.lockedAt,
                 },
             });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.advertiserId,
+                    action: 'addeal_escrow_locked',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        lockedAt: locked.lockedAt,
+                    },
+                },
+            });
+
+            return updated;
         });
     }
 }

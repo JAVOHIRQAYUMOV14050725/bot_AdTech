@@ -41,6 +41,7 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
                         inviteTokenTtlHours: 1,
                         allowPublicAdvertisers: true,
                         telegramBotUsername: 'adtech_bot',
+                        telegramInternalToken: 'internal-token',
                     },
                 },
                 { provide: 'LOGGER', useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
@@ -83,6 +84,8 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
 
         expect(result.user.role).toBe(UserRole.super_admin);
         expect(result.user.telegramId).toBeNull();
+        expect(result.deepLink).toContain('adtech_bot');
+        expect(result.deepLink).toContain('BOOTSTRAP');
         expect(identityResolver.resolveUserIdentifier).not.toHaveBeenCalled();
 
         const gate = await prisma.bootstrapState.findUnique({ where: { id: 1 } });
@@ -271,18 +274,18 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         const users = await prisma.user.findMany({ where: { telegramId: BigInt(9401) } });
         const usedInvite = await prisma.userInvite.findFirst({ where: { intendedUsernameNormalized: 'repeat_user' } });
 
-        expect(firstInvite.inviteToken).not.toBe(secondInvite.inviteToken);
+        expect(firstInvite.inviteToken).toBe(secondInvite.inviteToken);
         expect(firstLink.idempotent).toBe(false);
         expect(secondLink.idempotent).toBe(true);
         expect(users).toHaveLength(1);
         expect(usedInvite?.usedAt).not.toBeNull();
     });
 
-    it('normalizes usernames with @ and casing', async () => {
+    it('normalizes usernames with @, casing, and t.me links', async () => {
         if (!dbAvailable) {
             return;
         }
-        const invite = await authService.invitePublisher({ username: ' @TeSt_User ' });
+        const invite = await authService.invitePublisher({ username: ' https://t.me/TeSt_User ' });
         const inviteRow = await prisma.userInvite.findUnique({ where: { id: invite.invite.id } });
 
         expect(invite.inviteToken).toBeDefined();
@@ -296,5 +299,26 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
 
         const user = await prisma.user.findUnique({ where: { telegramId: BigInt(9501) } });
         expect(user?.username).toBe('test_user');
+    });
+
+    it('links super admin on BOOTSTRAP start', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const bootstrap = await authService.bootstrapSuperAdmin({
+            username: 'rootadmin',
+            password: 'StrongPassw0rd!',
+            bootstrapSecret: 'bootstrap-token',
+        });
+
+        const linked = await authService.handleTelegramStart({
+            telegramId: '9601',
+            username: '@root_admin',
+            startPayload: 'BOOTSTRAP',
+        });
+
+        const user = await prisma.user.findUnique({ where: { id: bootstrap.user.id } });
+        expect(linked.user.role).toBe(UserRole.super_admin);
+        expect(user?.telegramId?.toString()).toBe('9601');
     });
 });

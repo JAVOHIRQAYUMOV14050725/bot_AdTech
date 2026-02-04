@@ -2,6 +2,7 @@ import { Injectable, LoggerService, BadRequestException, Inject, ServiceUnavaila
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '@/prisma/prisma.service';
 import { TelegramCheckReason } from '@/modules/telegram/telegram.types';
+import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
 import { TELEGRAM_IDENTITY_ADAPTER, TelegramIdentityAdapter } from './telegram-identity.adapter';
 
 type ParsedIdentifier =
@@ -47,15 +48,6 @@ export class IdentityResolverService {
         if (!trimmed) return null;
 
         const usernameRegex = /^[A-Za-z0-9_]{5,32}$/;
-
-        if (trimmed.startsWith('@')) {
-            const username = trimmed.slice(1);
-            if (!usernameRegex.test(username)) {
-                return { error: 'That @username format is invalid. Please send a public @username.' };
-            }
-            return { username };
-        }
-
         const linkMatch = trimmed.match(/^(?:https?:\/\/)?t\.me\/([^?\s/]+)(?:\/.*)?$/i);
         if (linkMatch) {
             const path = linkMatch[1];
@@ -66,17 +58,18 @@ export class IdentityResolverService {
                         'Invite links cannot be verified here. For private channels, add the bot as ADMIN and use the private verification flow, or send a public @username.',
                 };
             }
-            if (!usernameRegex.test(path)) {
-                return { error: 'That t.me link does not look like a public username.' };
-            }
-            return { username: path };
         }
 
-        if (usernameRegex.test(trimmed)) {
-            return { username: trimmed };
+        const normalized = normalizeTelegramUsername(trimmed);
+        if (!normalized) {
+            return null;
         }
 
-        return null;
+        if (!usernameRegex.test(normalized)) {
+            return { error: 'That @username format is invalid. Please send a public @username.' };
+        }
+
+        return { username: normalized };
     }
 
     private logStart(event: string, data: Record<string, unknown>) {

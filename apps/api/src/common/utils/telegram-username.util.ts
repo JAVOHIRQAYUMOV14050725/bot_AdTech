@@ -8,7 +8,10 @@ export function normalizeTelegramUsername(input?: string | null): string | null 
         return null;
     }
 
-    const withoutAt = trimmed.replace(/^@+/, '').trim();
+    const linkMatch = trimmed.match(/^(?:https?:\/\/)?t\.me\/([^?\s/]+)(?:\/.*)?$/i);
+    const candidate = linkMatch ? linkMatch[1] : trimmed;
+
+    const withoutAt = candidate.replace(/^@+/, '').trim();
     if (!withoutAt) {
         return null;
     }

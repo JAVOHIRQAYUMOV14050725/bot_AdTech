@@ -17,11 +17,11 @@ import bcrypt from 'bcrypt';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
 import { AuthConfig, authConfig } from '@/config/auth.config';
 import { JwtConfig, jwtConfig } from '@/config/jwt.config';
-import { ConfigType } from '@nestjs/config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { assertInviteTokenUsable } from './invite-token.util';
 import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { RequestContext } from '@/common/context/request-context';
 
 @Injectable()
 export class AuthService {
@@ -72,13 +72,41 @@ export class AuthService {
         return new Date(Date.now() + ttlHours * 60 * 60 * 1000);
     }
 
-    private generateInviteToken() {
-        return randomBytes(32).toString('hex');
+    private constantTimeEqual(left: string, right: string) {
+        const leftHash = createHash('sha256').update(left).digest();
+        const rightHash = createHash('sha256').update(right).digest();
+        return timingSafeEqual(leftHash, rightHash);
+    }
+
+    private getBotUsername() {
+        const raw = this.authConfig.telegramBotUsername;
+        if (!raw) {
+            throw new Error('TELEGRAM_BOT_USERNAME is required');
+        }
+        const cleaned = raw.replace(/^@+/, '').trim();
+        if (!cleaned || cleaned.toLowerCase() === 'change_me_bot') {
+            throw new Error('TELEGRAM_BOT_USERNAME is not configured');
+        }
+        return cleaned;
+    }
+
+    private buildInviteToken(inviteId: string) {
+        const tokenKey = this.authConfig.telegramInternalToken;
+        if (!tokenKey) {
+            throw new Error('TELEGRAM_INTERNAL_TOKEN is required to mint invite tokens');
+        }
+        return createHmac('sha256', tokenKey).update(inviteId).digest('hex');
     }
 
     private buildInviteDeepLink(inviteToken: string) {
-        const botUsername = this.authConfig.telegramBotUsername.replace(/^@+/, '');
+        const botUsername = this.getBotUsername();
         return `https://t.me/${botUsername}?start=${inviteToken}`;
+    }
+
+    private buildBootstrapDeepLink() {
+        const botUsername = this.getBotUsername();
+        return `https://t.me/${botUsername}?start=BOOTSTRAP`;
+    }
     }
 
     private extractRoles(user: { role: UserRole; roleGrants?: Array<{ role: UserRole }> }) {
@@ -163,8 +191,6 @@ export class AuthService {
         const now = new Date();
 
         const { invite, inviteToken } = await this.prisma.$transaction(async (tx) => {
-            const token = this.generateInviteToken();
-            const tokenHash = this.hashInviteToken(token);
             const expiresAt = this.getInviteExpiry();
 
             const existingInvite = normalizedUsername
@@ -179,23 +205,36 @@ export class AuthService {
                 })
                 : null;
 
-            const invite = existingInvite
-                ? await tx.userInvite.update({
-                    where: { id: existingInvite.id },
-                    data: {
-                        tokenHash,
-                        expiresAt,
-                        intendedUsernameNormalized: normalizedUsername,
-                    },
-                })
-                : await tx.userInvite.create({
-                    data: {
-                        tokenHash,
-                        expiresAt,
-                        intendedRole: UserRole.publisher,
-                        intendedUsernameNormalized: normalizedUsername,
-                    },
-                });
+            // Idempotent behavior: if an unexpired, unused invite exists for the same username,
+            // return the existing invite (do not rotate its expiry) and reuse its token.
+            if (existingInvite) {
+                const existingToken = this.buildInviteToken(existingInvite.id);
+                const expectedHash = this.hashInviteToken(existingToken);
+                const invite = existingInvite.tokenHash === expectedHash
+                    ? existingInvite
+                    : await tx.userInvite.update({
+                        where: { id: existingInvite.id },
+                        data: {
+                            tokenHash: expectedHash,
+                            intendedUsernameNormalized: normalizedUsername,
+                        },
+                    });
+                return { invite, inviteToken: existingToken };
+            }
+
+            const inviteId = randomUUID();
+            const token = this.buildInviteToken(inviteId);
+            const tokenHash = this.hashInviteToken(token);
+
+            const invite = await tx.userInvite.create({
+                data: {
+                    id: inviteId,
+                    tokenHash,
+                    expiresAt,
+                    intendedRole: UserRole.publisher,
+                    intendedUsernameNormalized: normalizedUsername,
+                },
+            });
 
             return { invite, inviteToken: token };
         });
@@ -218,31 +257,30 @@ export class AuthService {
             throw new BadRequestException('Bootstrap token not configured');
         }
 
-        const providedHash = this.hashBootstrapToken(dto.bootstrapSecret);
-        const expectedHash = this.hashBootstrapToken(bootstrapToken);
-        if (providedHash !== expectedHash) {
+        if (!this.constantTimeEqual(dto.bootstrapSecret, bootstrapToken)) {
             throw new ForbiddenException('Invalid bootstrap token');
         }
 
-        const existingState = await this.prisma.bootstrapState.findUnique({
-            where: { id: 1 },
-        });
-        if (existingState) {
-            throw new ConflictException('Super admin already bootstrapped');
-        }
-
-        const existingSuperAdmin = await this.prisma.user.findFirst({
-            where: { superAdminKey: 'super_admin' },
-            select: { id: true },
-        });
-
-        if (existingSuperAdmin) {
-            throw new ConflictException('Super admin already exists');
-        }
-
         const passwordHash = await this.hashPassword(dto.password);
+        const expectedHash = this.hashBootstrapToken(bootstrapToken);
 
         const user = await this.prisma.$transaction(async (tx) => {
+            const existingState = await tx.bootstrapState.findUnique({
+                where: { id: 1 },
+            });
+            if (existingState) {
+                throw new ConflictException('Super admin already bootstrapped');
+            }
+
+            const existingSuperAdmin = await tx.user.findFirst({
+                where: { superAdminKey: 'super_admin' },
+                select: { id: true },
+            });
+
+            if (existingSuperAdmin) {
+                throw new ConflictException('Super admin already exists');
+            }
+
             const created = await tx.user.create({
                 data: {
                     telegramId: null,
@@ -289,6 +327,7 @@ export class AuthService {
                 roles: [user.role],
                 username: user.username,
             },
+            deepLink: this.buildBootstrapDeepLink(),
         };
     }
 
@@ -296,19 +335,30 @@ export class AuthService {
         telegramId: string;
         username?: string | null;
         startPayload?: string | null;
+        updateId?: string | null;
     }) {
-        const { telegramId, username, startPayload } = params;
+        const { telegramId, username, startPayload, updateId } = params;
         if (!telegramId) {
             throw new BadRequestException('Missing telegramId');
         }
         const normalizedUsername = normalizeTelegramUsername(username);
+        const correlationId = RequestContext.getCorrelationId() ?? null;
+        const payloadType =
+            startPayload === 'BOOTSTRAP'
+                ? 'bootstrap'
+                : startPayload
+                    ? 'invite'
+                    : 'none';
 
         this.logger.log(
             {
                 event: 'telegram_start_received',
                 context: AuthService.name,
                 data: {
+                    correlationId,
                     telegramId,
+                    updateId: updateId ?? null,
+                    payloadType,
                     hasStartPayload: Boolean(startPayload),
                     usernameProvided: Boolean(normalizedUsername),
                 },
@@ -316,12 +366,126 @@ export class AuthService {
             AuthService.name,
         );
 
+        if (startPayload === 'BOOTSTRAP') {
+            try {
+                const { user, idempotent } = await this.prisma.$transaction(async (tx) => {
+                    const existing = await tx.user.findUnique({
+                        where: { telegramId: BigInt(telegramId) },
+                        include: { roleGrants: { select: { role: true } } },
+                    });
+
+                    const bootstrapState = await tx.bootstrapState.findUnique({
+                        where: { id: 1 },
+                    });
+                    if (!bootstrapState) {
+                        throw new ConflictException('Super admin is not bootstrapped yet');
+                    }
+
+                    const superAdmin = await tx.user.findUnique({
+                        where: { id: bootstrapState.superAdminUserId },
+                        include: { roleGrants: { select: { role: true } } },
+                    });
+
+                    if (!superAdmin) {
+                        throw new ConflictException('Super admin not found');
+                    }
+
+                    if (existing && existing.id !== superAdmin.id) {
+                        throw new ConflictException('Telegram account already linked');
+                    }
+
+                    if (superAdmin.telegramId && superAdmin.telegramId !== BigInt(telegramId)) {
+                        throw new ConflictException('Super admin already linked to another Telegram account');
+                    }
+
+                    const updateData: Prisma.UserUpdateInput = {
+                        telegramId: BigInt(telegramId),
+                        status: UserStatus.active,
+                    };
+                    if (!superAdmin.username && normalizedUsername) {
+                        updateData.username = normalizedUsername;
+                    }
+
+                    const updated = superAdmin.telegramId
+                        ? superAdmin
+                        : await tx.user.update({
+                            where: { id: superAdmin.id },
+                            data: updateData,
+                            include: { roleGrants: { select: { role: true } } },
+                        });
+
+                    if (!superAdmin.telegramId) {
+                        await tx.userAuditLog.create({
+                            data: {
+                                userId: superAdmin.id,
+                                action: 'super_admin_linked_to_telegram',
+                                metadata: {
+                                    telegramId,
+                                    updateId: updateId ?? null,
+                                },
+                            },
+                        });
+                    }
+
+                    await this.ensureRoleGrant(tx, superAdmin.id, UserRole.super_admin);
+
+                    return { user: updated, idempotent: Boolean(superAdmin.telegramId) };
+                });
+
+                this.logger.log(
+                    {
+                        event: 'telegram_start_completed',
+                        context: AuthService.name,
+                        data: {
+                            correlationId,
+                            telegramId,
+                            payloadType,
+                            result: 'linked',
+                            userId: user.id,
+                            idempotent,
+                        },
+                    },
+                    AuthService.name,
+                );
+
+                return {
+                    ok: true,
+                    idempotent,
+                    user: {
+                        id: user.id,
+                        telegramId: user.telegramId?.toString() ?? null,
+                        role: user.role,
+                        roles: this.extractRoles(user),
+                        username: user.username,
+                        status: user.status,
+                    },
+                    created: false,
+                    linkedInvite: false,
+                };
+            } catch (err) {
+                this.logger.warn(
+                    {
+                        event: 'telegram_start_rejected',
+                        context: AuthService.name,
+                        data: {
+                            correlationId,
+                            telegramId,
+                            payloadType,
+                            reason: err instanceof Error ? err.message : 'bootstrap_link_failed',
+                        },
+                    },
+                    AuthService.name,
+                );
+                throw err;
+            }
+        }
+
         if (startPayload) {
             const tokenHash = this.hashInviteToken(startPayload);
             const now = new Date();
 
             try {
-                const { user, idempotent } = await this.prisma.$transaction(async (tx) => {
+                const { user, idempotent, linkedInvite } = await this.prisma.$transaction(async (tx) => {
                     const invite = await tx.userInvite.findUnique({
                         where: { tokenHash },
                     });
@@ -357,7 +521,7 @@ export class AuthService {
                             }
 
                             await this.ensureRoleGrant(tx, existingUser.id, UserRole.publisher);
-                            return { user: existingUser, idempotent: true };
+                            return { user: existingUser, idempotent: true, linkedInvite: true };
                         }
 
                         this.logger.warn(
@@ -434,16 +598,17 @@ export class AuthService {
                     await tx.userAuditLog.create({
                         data: {
                             userId: userId,
-                            action: 'telegram_linked_from_invite',
+                            action: 'user_linked_from_invite',
                             metadata: {
                                 inviteId: invite.id,
                                 telegramId,
                                 username: normalizedUsername,
+                                updateId: updateId ?? null,
                             },
                         },
                     });
 
-                    return { user: userWithRoles, idempotent: false };
+                    return { user: userWithRoles, idempotent: false, linkedInvite: true };
                 });
 
                 this.logger.log(
@@ -451,7 +616,23 @@ export class AuthService {
                         event: 'telegram_invite_link_success',
                         context: AuthService.name,
                         data: {
+                            correlationId,
                             telegramId,
+                            userId: user.id,
+                            idempotent,
+                        },
+                    },
+                    AuthService.name,
+                );
+                this.logger.log(
+                    {
+                        event: 'telegram_start_completed',
+                        context: AuthService.name,
+                        data: {
+                            correlationId,
+                            telegramId,
+                            payloadType,
+                            result: 'linked',
                             userId: user.id,
                             idempotent,
                         },
@@ -471,8 +652,9 @@ export class AuthService {
                         status: user.status,
                     },
                     created: false,
-                    linkedInvite: true,
+                    linkedInvite,
                 };
+
             } catch (err) {
                 if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
                     this.logger.warn(
@@ -485,6 +667,19 @@ export class AuthService {
                     );
                     throw new ConflictException('Telegram account already linked');
                 }
+                this.logger.warn(
+                    {
+                        event: 'telegram_start_rejected',
+                        context: AuthService.name,
+                        data: {
+                            correlationId,
+                            telegramId,
+                            payloadType,
+                            reason: err instanceof Error ? err.message : 'invite_link_failed',
+                        },
+                    },
+                    AuthService.name,
+                );
                 throw err;
             }
         }
@@ -513,6 +708,22 @@ export class AuthService {
                 });
             }
 
+            this.logger.log(
+                {
+                    event: 'telegram_start_completed',
+                    context: AuthService.name,
+                    data: {
+                        correlationId,
+                        telegramId,
+                        payloadType,
+                        result: 'ensured',
+                        userId: existing.id,
+                        idempotent: true,
+                    },
+                },
+                AuthService.name,
+            );
+
             return {
                 ok: true,
                 idempotent: true,
@@ -530,6 +741,19 @@ export class AuthService {
         }
 
         if (!this.authConfig.allowPublicAdvertisers) {
+            this.logger.warn(
+                {
+                    event: 'telegram_start_rejected',
+                    context: AuthService.name,
+                    data: {
+                        correlationId,
+                        telegramId,
+                        payloadType,
+                        reason: 'public_advertisers_disabled',
+                    },
+                },
+                AuthService.name,
+            );
             throw new ForbiddenException('Public advertiser signups are disabled. Please request an invite.');
         }
 
@@ -554,12 +778,27 @@ export class AuthService {
                     data: {
                         userId: user.id,
                         action: 'user_created_from_telegram',
-                        metadata: { role: user.role },
+                        metadata: { role: user.role, updateId: updateId ?? null },
                     },
                 });
 
                 return user;
             });
+
+            this.logger.log(
+                {
+                    event: 'telegram_start_completed',
+                    context: AuthService.name,
+                    data: {
+                        correlationId,
+                        telegramId,
+                        payloadType,
+                        result: 'ensured',
+                        userId: created.id,
+                    },
+                },
+                AuthService.name,
+            );
 
             return {
                 ok: true,
@@ -582,6 +821,21 @@ export class AuthService {
                     include: { roleGrants: { select: { role: true } } },
                 });
                 if (existingUser) {
+                    this.logger.log(
+                        {
+                            event: 'telegram_start_completed',
+                            context: AuthService.name,
+                            data: {
+                                correlationId,
+                                telegramId,
+                                payloadType,
+                                result: 'ensured',
+                                userId: existingUser.id,
+                                idempotent: true,
+                            },
+                        },
+                        AuthService.name,
+                    );
                     return {
                         ok: true,
                         idempotent: true,
@@ -599,6 +853,19 @@ export class AuthService {
                 }
                 throw new ConflictException('Telegram account already linked');
             }
+            this.logger.warn(
+                {
+                    event: 'telegram_start_rejected',
+                    context: AuthService.name,
+                    data: {
+                        correlationId,
+                        telegramId,
+                        payloadType: 'none',
+                        reason: err instanceof Error ? err.message : 'telegram_start_failed',
+                    },
+                },
+                AuthService.name,
+            );
             throw err;
         }
     }

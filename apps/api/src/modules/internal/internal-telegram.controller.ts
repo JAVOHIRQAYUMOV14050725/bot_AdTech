@@ -17,6 +17,7 @@ import { assertCampaignTransition, assertPostJobTransition } from '@/modules/lif
 import { InternalTelegramAdminForceDto } from './dto/internal-telegram-admin-force.dto';
 import { InternalTelegramAdminPostDto } from './dto/internal-telegram-admin-post.dto';
 import { InternalTelegramAdminCampaignDto } from './dto/internal-telegram-admin-campaign.dto';
+import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
 
 @ApiTags('Internal')
 @UseGuards(InternalTokenGuard)
@@ -36,6 +37,7 @@ export class InternalTelegramController {
             telegramId: dto.telegramId,
             username: dto.username ?? null,
             startPayload: dto.startPayload ?? null,
+            updateId: dto.updateId ?? null,
         });
     }
 
@@ -318,17 +320,7 @@ export class InternalTelegramController {
             return null;
         }
 
-        if (value.startsWith('@')) {
-            const username = value.slice(1);
-            if (!usernameRegex.test(username)) {
-                return { error: 'That @username does not look valid.' };
-            }
-            return { username, source: 'username' as const };
-        }
-
         const linkMatch = value.match(/^(?:https?:\/\/)?t\.me\/([^?\s/]+)(?:\/.*)?$/i);
-
-
         if (linkMatch) {
             const path = linkMatch[1];
             const lowered = path.toLowerCase();
@@ -338,17 +330,18 @@ export class InternalTelegramController {
                         'Invite links cannot be used for publisher lookup. Please send a public @username or t.me/username.',
                 };
             }
-            if (!usernameRegex.test(path)) {
-                return { error: 'That t.me link does not look like a public username.' };
-            }
-            return { username: path, source: 'link' as const };
         }
 
-        if (usernameRegex.test(value)) {
-            return { username: value, source: 'username' as const };
+        const normalized = normalizeTelegramUsername(value);
+        if (!normalized) {
+            return null;
         }
 
-        return null;
+        if (!usernameRegex.test(normalized)) {
+            return { error: 'That @username does not look valid.' };
+        }
+
+        return { username: normalized, source: linkMatch ? 'link' as const : 'username' as const };
     }
 
     @Post('admin/force-release')

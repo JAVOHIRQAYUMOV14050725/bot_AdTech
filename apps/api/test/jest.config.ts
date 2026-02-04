@@ -25,6 +25,7 @@ const config: Config = {
       },
     ],
   },
+  setupFiles: ['<rootDir>/test/setup-env.ts'],
 };
 
 export default config;

@@ -10,6 +10,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { loadEnv } from '@/config/env';
 import { LoggingModule } from '@/common/logging/logging.module';
 import { IdentityModule } from '@/modules/identity/identity.module';
+import { TelegramInternalTokenGuard } from './guards/telegram-internal-token.guard';
 @Module({
     imports: [
         PrismaModule,
@@ -40,7 +41,7 @@ import { IdentityModule } from '@/modules/identity/identity.module';
 
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtAuthGuard],
+    providers: [AuthService, JwtAuthGuard, TelegramInternalTokenGuard],
     exports: [AuthService, JwtModule, JwtAuthGuard],
 })
 export class AuthModule { }

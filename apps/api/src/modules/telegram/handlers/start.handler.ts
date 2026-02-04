@@ -20,7 +20,10 @@ export class StartHandler {
     @Start()
     async start(@Ctx() ctx: Context) {
         const userId = ctx.from!.id;
-        const username = ctx.from?.username ?? null;
+        const rawUsername = ctx.from?.username ?? null;
+        const username = rawUsername
+            ? `@${rawUsername.replace(/^@+/, '')}`
+            : null;
         const payload =
             ctx.message && 'text' in ctx.message
                 ? ctx.message.text?.split(' ').slice(1).join(' ')

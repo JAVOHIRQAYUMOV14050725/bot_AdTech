@@ -40,6 +40,7 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
                         bootstrapToken: 'bootstrap-token',
                         inviteTokenTtlHours: 1,
                         allowPublicAdvertisers: true,
+                        telegramBotUsername: 'adtech_bot',
                     },
                 },
                 { provide: 'LOGGER', useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
@@ -138,34 +139,74 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         }
         const invite = await authService.invitePublisher({ username: 'publisher1' });
 
+        expect(invite.deepLink).toContain('adtech_bot');
+        expect(invite.deepLink).toContain(invite.inviteToken);
+
+        const before = await prisma.user.findUnique({ where: { id: invite.user.id } });
+        expect(before?.status).toBe(UserStatus.pending_telegram_link);
+        expect(before?.telegramId).toBeNull();
+
         const linked = await authService.handleTelegramStart({
             telegramId: '9001',
-            username: 'pub_tg',
+            username: '@pub_tg',
             startPayload: invite.inviteToken,
+        });
+
+        const after = await prisma.user.findUnique({ where: { id: invite.user.id } });
+        const inviteRow = await prisma.userInvite.findFirst({
+            where: { userId: invite.user.id },
         });
 
         expect(linked.user.role).toBe(UserRole.publisher);
         expect(linked.user.status).toBe(UserStatus.active);
+        expect(after?.telegramId?.toString()).toBe('9001');
+        expect(inviteRow?.usedAt).not.toBeNull();
     });
 
     it('is idempotent for repeated telegram start', async () => {
         if (!dbAvailable) {
             return;
         }
+        const invite = await authService.invitePublisher({ username: 'publisher2' });
+
         const first = await authService.handleTelegramStart({
             telegramId: '9101',
-            username: 'adv',
-            startPayload: null,
+            username: '@pub2',
+            startPayload: invite.inviteToken,
         });
 
         const second = await authService.handleTelegramStart({
             telegramId: '9101',
-            username: 'adv',
+            username: '@pub2',
+            startPayload: invite.inviteToken,
+        });
+
+        const invites = await prisma.userInvite.findMany({ where: { userId: invite.user.id } });
+
+        expect(first.user.id).toBe(second.user.id);
+        expect(first.idempotent).toBe(false);
+        expect(second.idempotent).toBe(true);
+        expect(invites).toHaveLength(1);
+    });
+
+    it('rejects duplicate telegramId for another invite', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        await authService.handleTelegramStart({
+            telegramId: '9201',
+            username: '@pub3',
             startPayload: null,
         });
 
-        expect(first.user.id).toBe(second.user.id);
-        expect(first.created).toBe(true);
-        expect(second.created).toBe(false);
+        const invite = await authService.invitePublisher({ username: 'publisher3' });
+
+        await expect(
+            authService.handleTelegramStart({
+                telegramId: '9201',
+                username: '@pub3',
+                startPayload: invite.inviteToken,
+            }),
+        ).rejects.toThrow(ConflictException);
     });
 });

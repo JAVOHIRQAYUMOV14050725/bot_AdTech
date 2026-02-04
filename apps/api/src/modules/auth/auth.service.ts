@@ -5,12 +5,13 @@ import {
     ForbiddenException,
     Inject,
     ConflictException,
+    LoggerService,
 } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { PUBLIC_ROLES, RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
-import { UserStatus } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 import { UserRole } from '@/modules/domain/contracts';
 import bcrypt from 'bcrypt';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
@@ -30,6 +31,7 @@ export class AuthService {
         @Inject(jwtConfig.KEY)
         private readonly jwtConfig: JwtConfig,
         @Inject(authConfig.KEY) private readonly authConfig: AuthConfig,
+        @Inject('LOGGER') private readonly logger: LoggerService,
     ) { }
 
     private async resolveTelegramIdentity(identifier: string, actorId?: string) {
@@ -71,6 +73,11 @@ export class AuthService {
 
     private generateInviteToken() {
         return randomBytes(32).toString('hex');
+    }
+
+    private buildInviteDeepLink(inviteToken: string) {
+        const botUsername = this.authConfig.telegramBotUsername.replace(/^@+/, '');
+        return `https://t.me/${botUsername}?start=${inviteToken}`;
     }
 
     private signAccessToken(user: { id: string; role: UserRole }) {
@@ -176,6 +183,7 @@ export class AuthService {
                 username: user.username,
             },
             inviteToken,
+            deepLink: this.buildInviteDeepLink(inviteToken),
         };
     }
 
@@ -256,75 +264,6 @@ export class AuthService {
         };
     }
 
-    async consumeInviteToken(params: {
-        token: string;
-        telegramId: string;
-        username?: string | null;
-    }) {
-        const { token, telegramId, username } = params;
-        if (!token) {
-            throw new BadRequestException('Invite token is required');
-        }
-
-        const tokenHash = this.hashInviteToken(token);
-        const now = new Date();
-
-        return this.prisma.$transaction(async (tx) => {
-            const invite = await tx.userInvite.findUnique({
-                where: { tokenHash },
-                include: { user: true },
-            });
-
-            if (!invite) {
-                throw new BadRequestException('Invite token is invalid');
-            }
-
-            assertInviteTokenUsable({
-                usedAt: invite.usedAt,
-                expiresAt: invite.expiresAt,
-            });
-
-            if (invite.user.role !== UserRole.publisher) {
-                throw new BadRequestException('Invite token role invalid');
-            }
-
-            const existing = await tx.user.findUnique({
-                where: { telegramId: BigInt(telegramId) },
-                select: { id: true },
-            });
-            if (existing) {
-                throw new BadRequestException('Telegram account already linked');
-            }
-
-            const user = await tx.user.update({
-                where: { id: invite.userId },
-                data: {
-                    telegramId: BigInt(telegramId),
-                    username: username ?? invite.user.username,
-                    status: UserStatus.active,
-                },
-            });
-
-            await tx.userInvite.update({
-                where: { id: invite.id },
-                data: { usedAt: now },
-            });
-
-            await tx.userAuditLog.create({
-                data: {
-                    userId: invite.userId,
-                    action: 'invite_consumed',
-                    metadata: {
-                        telegramId,
-                        tokenHash,
-                    },
-                },
-            });
-
-            return user;
-        });
-    }
-
     async handleTelegramStart(params: {
         telegramId: string;
         username?: string | null;
@@ -334,25 +273,176 @@ export class AuthService {
         if (!telegramId) {
             throw new BadRequestException('Missing telegramId');
         }
+        const normalizedUsername = username ? username.replace(/^@+/, '') : null;
+
+        this.logger.log(
+            {
+                event: 'telegram_start_received',
+                context: AuthService.name,
+                data: {
+                    telegramId,
+                    hasStartPayload: Boolean(startPayload),
+                    usernameProvided: Boolean(normalizedUsername),
+                },
+            },
+            AuthService.name,
+        );
 
         if (startPayload) {
-            const user = await this.consumeInviteToken({
-                token: startPayload,
-                telegramId,
-                username,
-            });
+            const tokenHash = this.hashInviteToken(startPayload);
+            const now = new Date();
 
-            return {
-                user: {
-                    id: user.id,
-                    telegramId: user.telegramId?.toString() ?? null,
-                    role: user.role,
-                    username: user.username,
-                    status: user.status,
-                },
-                created: false,
-                linkedInvite: true,
-            };
+            try {
+                const { user, idempotent } = await this.prisma.$transaction(async (tx) => {
+                    const invite = await tx.userInvite.findUnique({
+                        where: { tokenHash },
+                        include: { user: true },
+                    });
+
+                    if (!invite) {
+                        throw new BadRequestException('Invite token is invalid');
+                    }
+
+                    if (invite.user.role !== UserRole.publisher) {
+                        throw new BadRequestException('Invite token role invalid');
+                    }
+
+                    if (invite.usedAt) {
+                        if (invite.user.telegramId?.toString() === telegramId) {
+                            const updateData: Prisma.UserUpdateInput = {};
+                            if (invite.user.status !== UserStatus.active) {
+                                updateData.status = UserStatus.active;
+                            }
+                            if (!invite.user.username && normalizedUsername) {
+                                updateData.username = normalizedUsername;
+                            }
+                            const linkedUser = Object.keys(updateData).length
+                                ? await tx.user.update({
+                                    where: { id: invite.userId },
+                                    data: updateData,
+                                })
+                                : invite.user;
+
+                            return { user: linkedUser, idempotent: true };
+                        }
+
+                        this.logger.warn(
+                            {
+                                event: 'telegram_invite_link_conflict',
+                                context: AuthService.name,
+                                data: {
+                                    inviteId: invite.id,
+                                    telegramId,
+                                    reason: 'invite_already_used',
+                                },
+                            },
+                            AuthService.name,
+                        );
+                        throw new ConflictException('Invite token already used');
+                    }
+
+                    assertInviteTokenUsable({
+                        usedAt: invite.usedAt,
+                        expiresAt: invite.expiresAt,
+                    });
+
+                    if (invite.user.status !== UserStatus.pending_telegram_link) {
+                        throw new ConflictException('Invite user is not pending telegram link');
+                    }
+
+                    const existing = await tx.user.findUnique({
+                        where: { telegramId: BigInt(telegramId) },
+                        select: { id: true },
+                    });
+                    if (existing && existing.id !== invite.userId) {
+                        this.logger.warn(
+                            {
+                                event: 'telegram_invite_link_conflict',
+                                context: AuthService.name,
+                                data: {
+                                    inviteId: invite.id,
+                                    telegramId,
+                                    reason: 'telegram_already_linked',
+                                },
+                            },
+                            AuthService.name,
+                        );
+                        throw new ConflictException('Telegram account already linked');
+                    }
+
+                    const updateData: Prisma.UserUpdateInput = {
+                        telegramId: BigInt(telegramId),
+                        status: UserStatus.active,
+                    };
+                    if (!invite.user.username && normalizedUsername) {
+                        updateData.username = normalizedUsername;
+                    }
+
+                    const user = await tx.user.update({
+                        where: { id: invite.userId },
+                        data: updateData,
+                    });
+
+                    await tx.userInvite.update({
+                        where: { id: invite.id },
+                        data: { usedAt: now },
+                    });
+
+                    await tx.userAuditLog.create({
+                        data: {
+                            userId: invite.userId,
+                            action: 'telegram_linked_from_invite',
+                            metadata: {
+                                inviteId: invite.id,
+                                telegramId,
+                                username: normalizedUsername,
+                            },
+                        },
+                    });
+
+                    return { user, idempotent: false };
+                });
+
+                this.logger.log(
+                    {
+                        event: 'telegram_invite_link_success',
+                        context: AuthService.name,
+                        data: {
+                            telegramId,
+                            userId: user.id,
+                            idempotent,
+                        },
+                    },
+                    AuthService.name,
+                );
+
+                return {
+                    ok: true,
+                    idempotent,
+                    user: {
+                        id: user.id,
+                        telegramId: user.telegramId?.toString() ?? null,
+                        role: user.role,
+                        username: user.username,
+                        status: user.status,
+                    },
+                    created: false,
+                    linkedInvite: true,
+                };
+            } catch (err) {
+                if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+                    this.logger.warn(
+                        {
+                            event: 'telegram_invite_link_conflict',
+                            context: AuthService.name,
+                            data: { telegramId, reason: 'unique_constraint' },
+                        },
+                        AuthService.name,
+                    );
+                    throw new ConflictException('Telegram account already linked');
+                }
+                throw err;
+            }
         }
 
         const existing = await this.prisma.user.findUnique({
@@ -379,6 +469,8 @@ export class AuthService {
             }
 
             return {
+                ok: true,
+                idempotent: true,
                 user: {
                     id: existing.id,
                     telegramId: existing.telegramId?.toString() ?? null,
@@ -395,42 +487,69 @@ export class AuthService {
             throw new ForbiddenException('Public advertiser signups are disabled. Please request an invite.');
         }
 
-        const created = await this.prisma.$transaction(async (tx) => {
-            const user = await tx.user.create({
-                data: {
-                    telegramId: BigInt(telegramId),
-                    username,
-                    role: UserRole.advertiser,
-                    status: UserStatus.active,
+        try {
+            const created = await this.prisma.$transaction(async (tx) => {
+                const user = await tx.user.create({
+                    data: {
+                        telegramId: BigInt(telegramId),
+                        username: normalizedUsername,
+                        role: UserRole.advertiser,
+                        status: UserStatus.active,
+                    },
+                });
+
+                await tx.wallet.create({
+                    data: { userId: user.id, balance: 0, currency: 'USD' },
+                });
+
+                await tx.userAuditLog.create({
+                    data: {
+                        userId: user.id,
+                        action: 'user_created_from_telegram',
+                        metadata: { role: user.role },
+                    },
+                });
+
+                return user;
+            });
+
+            return {
+                ok: true,
+                idempotent: false,
+                user: {
+                    id: created.id,
+                    telegramId: created.telegramId?.toString() ?? null,
+                    role: created.role,
+                    username: created.username,
+                    status: created.status,
                 },
-            });
-
-            await tx.wallet.create({
-                data: { userId: user.id, balance: 0, currency: 'USD' },
-            });
-
-            await tx.userAuditLog.create({
-                data: {
-                    userId: user.id,
-                    action: 'user_created_from_telegram',
-                    metadata: { role: user.role },
-                },
-            });
-
-            return user;
-        });
-
-        return {
-            user: {
-                id: created.id,
-                telegramId: created.telegramId?.toString() ?? null,
-                role: created.role,
-                username: created.username,
-                status: created.status,
-            },
-            created: true,
-            linkedInvite: false,
-        };
+                created: true,
+                linkedInvite: false,
+            };
+        } catch (err) {
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+                const existingUser = await this.prisma.user.findUnique({
+                    where: { telegramId: BigInt(telegramId) },
+                });
+                if (existingUser) {
+                    return {
+                        ok: true,
+                        idempotent: true,
+                        user: {
+                            id: existingUser.id,
+                            telegramId: existingUser.telegramId?.toString() ?? null,
+                            role: existingUser.role,
+                            username: existingUser.username,
+                            status: existingUser.status,
+                        },
+                        created: false,
+                        linkedInvite: false,
+                    };
+                }
+                throw new ConflictException('Telegram account already linked');
+            }
+            throw err;
+        }
     }
 
     async login(dto: LoginDto) {

@@ -5,7 +5,7 @@ This document summarizes the API path for an end-to-end MVP run using the curren
 ## Required high-level steps
 
 1. Register publisher + advertiser accounts with `/api/auth/register` .
-2. Register a third account and promote to `super_admin` in SQL for admin actions.
+2. Register a third account and promote to `super_admin` via `/api/auth/role/change` for admin actions.
 3. Publisher creates a channel and requests verification (bot must be admin in the channel).
 4. Admin approves the channel.
 5. Advertiser creates a campaign, adds a creative, and adds a target.

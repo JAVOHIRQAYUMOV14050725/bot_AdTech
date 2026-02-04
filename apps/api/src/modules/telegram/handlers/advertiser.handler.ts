@@ -136,6 +136,9 @@ export class AdvertiserHandler {
             }
 
             const publisher = publisherResolution.publisher;
+            if (!publisher) {
+                return ctx.reply('❌ Publisher not found. Send a valid @username or a public channel/group link.');
+            }
             if (publisher.id === context.user.id) {
                 return ctx.reply('❌ You cannot create a deal with yourself.');
             }

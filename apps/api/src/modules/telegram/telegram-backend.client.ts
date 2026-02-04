@@ -1,6 +1,7 @@
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
+import { TelegramResolvePublisherResult } from './telegram.types';
 
 type BackendResponse<T> = T;
 
@@ -201,13 +202,7 @@ export class TelegramBackendClient {
     }
 
     resolvePublisher(params: { identifier: string }) {
-        return this.request<{
-            ok: boolean;
-            reason?: string;
-            publisher?: { id: string; telegramId: string | null; username: string | null };
-            channel?: { id: string; title: string; username: string | null };
-            source?: string;
-        }>('/internal/telegram/advertiser/resolve-publisher', {
+        return this.request<TelegramResolvePublisherResult>('/internal/telegram/advertiser/resolve-publisher', {
             method: 'POST',
             body: params,
         });

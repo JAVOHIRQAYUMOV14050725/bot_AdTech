@@ -18,6 +18,7 @@ import { InternalTelegramAdminForceDto } from './dto/internal-telegram-admin-for
 import { InternalTelegramAdminPostDto } from './dto/internal-telegram-admin-post.dto';
 import { InternalTelegramAdminCampaignDto } from './dto/internal-telegram-admin-campaign.dto';
 import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { TelegramResolvePublisherResult } from '@/modules/telegram/telegram.types';
 
 @ApiTags('Internal')
 @UseGuards(InternalTokenGuard)
@@ -90,15 +91,24 @@ export class InternalTelegramController {
     }
 
     @Post('advertiser/resolve-publisher')
-    async resolvePublisher(@Body() dto: InternalTelegramResolvePublisherDto) {
+    async resolvePublisher(@Body() dto: InternalTelegramResolvePublisherDto): Promise<TelegramResolvePublisherResult> {
         const trimmed = dto.identifier.trim();
-        const parsed = this.parsePublisherIdentifier(trimmed);
+        const normalized = normalizeTelegramUsername(trimmed);
+        const parsed = this.parsePublisherIdentifier(normalized ?? trimmed);
         if (!parsed) {
-            return { ok: false as const, reason: 'Please send a valid @username or t.me link.' };
+            return {
+                ok: false as const,
+                reason: 'INVALID_IDENTIFIER',
+                message: 'Please send a valid @username or t.me link.',
+            };
         }
 
         if ('error' in parsed) {
-            return { ok: false as const, reason: parsed.error };
+            return {
+                ok: false as const,
+                reason: 'INVALID_IDENTIFIER',
+                message: parsed.error ?? 'Invalid identifier.',
+            };
         }
 
         const username = parsed.username;
@@ -113,7 +123,15 @@ export class InternalTelegramController {
             if (publisherByUsername.role !== UserRole.publisher) {
                 return {
                     ok: false as const,
-                    reason: `@${publisherByUsername.username ?? username} is not registered as a publisher.`,
+                    reason: 'OWNER_NOT_PUBLISHER',
+                    message: 'Owner must complete publisher onboarding.',
+                };
+            }
+            if (!publisherByUsername.telegramId) {
+                return {
+                    ok: false as const,
+                    reason: 'PUBLISHER_USER_NOT_FOUND',
+                    message: 'Publisher account not linked yet. Use invite deep link.',
                 };
             }
             return {
@@ -138,13 +156,22 @@ export class InternalTelegramController {
             if (channel.status !== ChannelStatus.approved) {
                 return {
                     ok: false as const,
-                    reason: `Channel ${channel.title} is not approved in the marketplace yet.`,
+                    reason: 'CHANNEL_NOT_APPROVED',
+                    message: 'Channel submitted but not approved yet.',
                 };
             }
             if (channel.owner.role !== UserRole.publisher) {
                 return {
                     ok: false as const,
-                    reason: `Channel ${channel.title} is not owned by a publisher account.`,
+                    reason: 'OWNER_NOT_PUBLISHER',
+                    message: 'Owner must complete publisher onboarding.',
+                };
+            }
+            if (!channel.owner.telegramId) {
+                return {
+                    ok: false as const,
+                    reason: 'PUBLISHER_USER_NOT_FOUND',
+                    message: 'Publisher account not linked yet. Use invite deep link.',
                 };
             }
             return {
@@ -165,7 +192,11 @@ export class InternalTelegramController {
 
         return {
             ok: false as const,
-            reason: 'Publisher not found. Send a valid @username or a public channel/group link.',
+            reason: parsed.source === 'link' ? 'CHANNEL_NOT_FOUND' : 'PUBLISHER_USER_NOT_FOUND',
+            message:
+                parsed.source === 'link'
+                    ? 'This channel isn’t onboarded. Ask the owner to onboard + verify.'
+                    : 'Publisher account not linked yet. Use invite deep link.',
         };
     }
 

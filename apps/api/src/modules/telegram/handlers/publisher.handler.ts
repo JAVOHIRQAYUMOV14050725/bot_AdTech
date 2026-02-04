@@ -5,7 +5,7 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { addChannelOptions, publisherHome, verifyPrivateChannelKeyboard } from '../keyboards';
 import { Logger } from '@nestjs/common';
-import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
+import { telegramSafeErrorMessage } from '@/modules/telegram/telegram-error.util';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 @Update()
 export class PublisherHandler {
@@ -115,7 +115,7 @@ export class PublisherHandler {
 
             return ctx.reply(response.message, verifyPrivateChannelKeyboard);
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             return ctx.reply(`❌ ${message}`, verifyPrivateChannelKeyboard);
         }
     }
@@ -147,7 +147,7 @@ export class PublisherHandler {
 
                 return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
             } catch (err) {
-                const message = formatTelegramError(err);
+                const message = telegramSafeErrorMessage(err);
                 this.logger.error({
                     event: 'telegram_accept_failed',
                     adDealId,
@@ -262,7 +262,7 @@ export class PublisherHandler {
 
             return ctx.reply(`✅ Proof submitted & settled\nID: ${adDealId}`);
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             this.logger.error({
                 event: 'telegram_proof_failed',
                 adDealId,
@@ -288,7 +288,7 @@ export class PublisherHandler {
             });
             return ctx.reply(response.message);
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             return ctx.reply(`❌ ${message}`);
         }
     }
@@ -306,7 +306,7 @@ export class PublisherHandler {
                 telegramId: userId.toString(),
             });
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             await ctx.reply(`❌ ${message}`);
             return null;
         }

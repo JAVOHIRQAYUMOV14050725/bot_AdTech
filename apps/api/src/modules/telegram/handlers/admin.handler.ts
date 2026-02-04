@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
+import { telegramSafeErrorMessage } from '@/modules/telegram/telegram-error.util';
 
 @Injectable()
 export class AdminHandler {
@@ -37,7 +37,7 @@ export class AdminHandler {
                 `⏳ Escrow release queued for manual review.\nTarget: ${campaignTargetId}`,
             );
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             await ctx.reply(`❌ ${message}`);
         }
     }
@@ -61,7 +61,7 @@ export class AdminHandler {
                 `⏳ Escrow refund queued for manual review.\nTarget: ${campaignTargetId}\nReason: ${reason}`,
             );
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             await ctx.reply(`❌ ${message}`);
         }
     }
@@ -81,7 +81,7 @@ export class AdminHandler {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             await ctx.reply(`❌ ${message}`);
         }
     }
@@ -101,7 +101,7 @@ export class AdminHandler {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             await ctx.reply(`❌ ${message}`);
         }
     }
@@ -118,7 +118,7 @@ export class AdminHandler {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             await ctx.reply(`❌ ${message}`);
         }
     }

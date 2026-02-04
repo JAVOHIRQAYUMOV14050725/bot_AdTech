@@ -7,7 +7,7 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome, publisherHome } from '../keyboards';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
+import { telegramSafeErrorMessage } from '@/modules/telegram/telegram-error.util';
 
 @Update()
 export class StartHandler {
@@ -88,7 +88,7 @@ export class StartHandler {
             await ctx.reply('✅ Welcome back! Admin mode enabled.');
             return;
         } catch (err) {
-            const message = formatTelegramError(err);
+            const message = telegramSafeErrorMessage(err);
             this.logger.error({
                 event: 'telegram_start_failed',
                 telegramUserId: userId,

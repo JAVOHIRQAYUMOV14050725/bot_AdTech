@@ -89,6 +89,20 @@ async function bootstrap() {
     const logger = buildStructuredLogger();
     const isProd = env.NODE_ENV === 'production';
 
+    if (!env.TELEGRAM_BOT_USERNAME || !env.TELEGRAM_BOT_USERNAME.trim()) {
+        throw new Error('TELEGRAM_BOT_USERNAME is required');
+    }
+
+    if (env.TELEGRAM_INTERNAL_TOKEN === env.TELEGRAM_BOT_TOKEN) {
+        logger.warn(
+            {
+                event: 'telegram_internal_token_collision',
+                message: 'TELEGRAM_INTERNAL_TOKEN must not equal TELEGRAM_BOT_TOKEN',
+            },
+            'Bootstrap',
+        );
+    }
+
     const workerMode = env.WORKER_MODE;
 
     if (workerMode) {

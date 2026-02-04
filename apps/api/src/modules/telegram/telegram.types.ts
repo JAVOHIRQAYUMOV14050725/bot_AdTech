@@ -21,3 +21,24 @@ export interface TelegramCheckResult {
     telegramError?: string;
     retryAfterSeconds?: number | null;
 }
+
+export type TelegramResolvePublisherFailureReason =
+    | 'INVALID_IDENTIFIER'
+    | 'CHANNEL_NOT_FOUND'
+    | 'CHANNEL_NOT_APPROVED'
+    | 'OWNER_NOT_PUBLISHER'
+    | 'PUBLISHER_USER_NOT_FOUND';
+
+export type TelegramResolvePublisherResult =
+    | {
+        ok: true;
+        publisher: { id: string; telegramId: string | null; username: string | null };
+        channel?: { id: string; title: string; username: string | null };
+        source: 'link' | 'username';
+    }
+    | {
+        ok: false;
+        reason: TelegramResolvePublisherFailureReason;
+        message: string;
+        debug?: string;
+    };

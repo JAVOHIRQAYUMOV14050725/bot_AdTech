@@ -21,4 +21,9 @@ export class TelegramStartDto {
     @IsOptional()
     @IsString()
     startPayload?: string;
+
+    @ApiPropertyOptional({ example: '123456' })
+    @IsOptional()
+    @IsString()
+    updateId?: string;
 }

@@ -5,6 +5,8 @@ import { AppModule } from './app.module';
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import compression from 'compression';
+import { Request } from 'express';
+import * as bodyParser from 'body-parser';
 
 import { startPostWorker } from '@/modules/scheduler/workers/post.worker';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -99,7 +101,7 @@ async function bootstrap() {
         app.useLogger(logger);
         const prisma = app.get(PrismaService);
         await prisma.enableShutdownHooks(app);
-     
+
 
         await startWorker(app, logger);
         return;
@@ -118,6 +120,13 @@ async function bootstrap() {
     app.use(helmet());
     app.use(compression());
     app.use(correlationIdMiddleware);
+    app.use(
+        bodyParser.json({
+            verify: (req, _res, buf) => {
+                (req as Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+            },
+        }),
+    );
 
     app.useGlobalPipes(
         new ValidationPipe({
@@ -133,7 +142,7 @@ async function bootstrap() {
         }),
     );
 
- 
+
 
     app.setGlobalPrefix('api');
 

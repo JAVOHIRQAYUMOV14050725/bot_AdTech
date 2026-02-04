@@ -20,6 +20,7 @@ import { TelegramCheckResult } from '@/modules/telegram/telegram.types';
 import { AppConfig, appConfig } from '@/config/app.config';
 import { ConfigType } from '@nestjs/config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
+import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
 
 type Actor = { id: string; role: UserRole; roles?: UserRole[] };
 
@@ -130,12 +131,14 @@ export class ChannelsService {
         const telegramChannelId = this.parseTelegramId(resolved.telegramChannelId);
         const cpm = this.parseCpm(dto.cpm);
 
+        const normalizedUsername = normalizeTelegramUsername(dto.username ?? resolved.username);
+
         try {
             const channel = await this.prisma.channel.create({
                 data: {
                     telegramChannelId,
                     title: dto.title ?? resolved.title,
-                    username: dto.username ?? resolved.username,
+                    username: normalizedUsername,
                     ownerId: userId,
                     status: ChannelStatus.pending,
                     cpm,
@@ -170,13 +173,14 @@ export class ChannelsService {
 
         const telegramChannelId = this.parseTelegramId(resolved.telegramChannelId);
         const cpm = this.parseCpm(overrides?.cpm);
+        const normalizedUsername = normalizeTelegramUsername(overrides?.username ?? resolved.username);
 
         try {
             const channel = await this.prisma.channel.create({
                 data: {
                     telegramChannelId,
                     title: overrides?.title ?? resolved.title,
-                    username: overrides?.username ?? resolved.username,
+                    username: normalizedUsername,
                     ownerId,
                     status: ChannelStatus.pending,
                     cpm,

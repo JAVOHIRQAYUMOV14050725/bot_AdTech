@@ -25,6 +25,7 @@ export class StartHandler {
         const username = rawUsername
             ? `@${rawUsername.replace(/^@+/, '')}`
             : null;
+        const updateId = ctx.update?.update_id ? ctx.update.update_id.toString() : null;
         const payload =
             ctx.message && 'text' in ctx.message
                 ? ctx.message.text?.split(' ').slice(1).join(' ')
@@ -36,6 +37,7 @@ export class StartHandler {
                 telegramId: userId.toString(),
                 username,
                 startPayload,
+                updateId,
             });
 
             const roles = response.user.roles ?? [response.user.role];

@@ -17,9 +17,8 @@ import { IdentityModule } from '@/modules/identity/identity.module';
 import { TELEGRAM_IDENTITY_ADAPTER } from '@/modules/identity/telegram-identity.adapter';
 import { TelegramBackendClient } from './telegram-backend.client';
 
-const env = loadEnv()
-const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN
-console.log('TELEGRAM_BOT_TOKEN', TELEGRAM_BOT_TOKEN)
+const env = loadEnv();
+const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
 
 @Module({
     imports: [

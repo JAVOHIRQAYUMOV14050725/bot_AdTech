@@ -18,7 +18,13 @@ export const envSchema = z.object({
     JWT_ISSUER: z.string().min(1).default('bot_AdTech'),
     JWT_AUDIENCE: z.string().min(1).default('bot_AdTech_api'),
     TELEGRAM_BOT_TOKEN: z.string().min(1),
-    TELEGRAM_BOT_USERNAME: z.string().min(1),
+    TELEGRAM_BOT_USERNAME: z
+        .string()
+        .min(1)
+        .refine(
+            (value) => value.replace(/^@+/, '').toLowerCase() !== 'change_me_bot',
+            { message: 'TELEGRAM_BOT_USERNAME must be configured with a real bot username.' },
+        ),
     TELEGRAM_AUTOSTART: booleanString.default('true'),
     TELEGRAM_STARTUP_TEST: booleanString.default('false'),
     TELEGRAM_SEND_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),

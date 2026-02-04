@@ -1,5 +1,6 @@
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHmac } from 'crypto';
 
 type BackendResponse<T> = T;
 
@@ -9,6 +10,23 @@ export class TelegramBackendClient {
         private readonly configService: ConfigService,
         @Inject('LOGGER') private readonly logger: LoggerService,
     ) {
+        const botToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN', '');
+        if (botToken && botToken === this.telegramInternalToken) {
+            this.logger.error(
+                {
+                    event: 'telegram_internal_token_collision',
+                    message: 'TELEGRAM_INTERNAL_TOKEN must not equal TELEGRAM_BOT_TOKEN',
+                },
+                'TelegramBackendClient',
+            );
+            this.logger.warn(
+                {
+                    event: 'telegram_internal_token_collision_warning',
+                },
+                'TelegramBackendClient',
+            );
+        }
+
         this.logger.log(
             {
                 event: 'telegram_backend_config',
@@ -59,11 +77,16 @@ export class TelegramBackendClient {
         path: string,
         options: { method: string; body?: unknown; headers?: Record<string, string> },
     ): Promise<BackendResponse<T>> {
+        const signatureHeaders =
+            options.headers?.['X-Telegram-Internal-Token']
+                ? {}
+                : this.buildTelegramSignatureHeaders(options.body ?? {});
         const response = await fetch(`${this.baseUrl}${path}`, {
             method: options.method,
             headers: {
                 'Content-Type': 'application/json',
                 'x-internal-token': this.token,
+                ...signatureHeaders,
                 ...options.headers,
             },
             body: options.body ? JSON.stringify(options.body) : undefined,
@@ -108,7 +131,14 @@ export class TelegramBackendClient {
         telegramId: string;
         username?: string | null;
         startPayload?: string | null;
+        updateId?: string | null;
     }) {
+        const signatureHeaders = this.buildTelegramSignatureHeaders({
+            telegramId: params.telegramId,
+            username: params.username ?? null,
+            startPayload: params.startPayload ?? null,
+            updateId: params.updateId ?? null,
+        });
         return this.request<{
             ok: boolean;
             idempotent: boolean;
@@ -125,14 +155,31 @@ export class TelegramBackendClient {
         }>('/auth/telegram/start', {
             method: 'POST',
             headers: {
-                'X-Telegram-Internal-Token': this.telegramInternalToken,
+                ...signatureHeaders,
             },
             body: {
                 telegramId: params.telegramId,
                 username: params.username ?? null,
                 startPayload: params.startPayload ?? null,
+                updateId: params.updateId ?? null,
             },
         });
+    }
+
+    private buildTelegramSignatureHeaders(body: unknown) {
+        if (!this.telegramInternalToken) {
+            throw new Error('TELEGRAM_INTERNAL_TOKEN is required for bot authentication');
+        }
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const rawBody = JSON.stringify(body ?? {});
+        const signature = createHmac('sha256', this.telegramInternalToken)
+            .update(`${timestamp}.${rawBody}`)
+            .digest('hex');
+        return {
+            'X-Telegram-Internal-Token': this.telegramInternalToken,
+            'X-Telegram-Timestamp': timestamp,
+            'X-Telegram-Signature': signature,
+        };
     }
 
     ensureAdvertiser(params: { telegramId: string }) {

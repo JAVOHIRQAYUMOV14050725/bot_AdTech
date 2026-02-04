@@ -7,6 +7,7 @@ export type AuthConfig = {
     inviteTokenTtlHours: number;
     allowPublicAdvertisers: boolean;
     telegramBotUsername: string;
+    telegramInternalToken: string;
 };
 
 export const authConfig = registerAs(
@@ -19,6 +20,7 @@ export const authConfig = registerAs(
             inviteTokenTtlHours: env.INVITE_TOKEN_TTL_HOURS,
             allowPublicAdvertisers: env.ALLOW_PUBLIC_ADVERTISERS,
             telegramBotUsername: env.TELEGRAM_BOT_USERNAME,
+            telegramInternalToken: env.TELEGRAM_INTERNAL_TOKEN,
         };
     },
 );

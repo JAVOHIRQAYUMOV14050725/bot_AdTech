@@ -13,6 +13,7 @@ import { RegisterResponseDto } from './dto/register-response.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
+import { BootstrapResponseDto } from './dto/bootstrap-response.dto';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { UserRole } from '@/modules/domain/contracts';
@@ -56,7 +57,7 @@ export class AuthController {
 
     @Post('bootstrap-super-admin')
     @ApiOperation({ summary: 'Bootstrap initial super admin (one-time)' })
-    @ApiCreatedResponse({ type: RegisterResponseDto })
+    @ApiCreatedResponse({ type: BootstrapResponseDto })
     @ApiStandardErrorResponses()
     bootstrapSuperAdmin(@Body() dto: BootstrapSuperAdminDto) {
         return this.authService.bootstrapSuperAdmin(dto);
@@ -76,6 +77,7 @@ export class AuthController {
             telegramId: dto.telegramId,
             username: dto.username ?? null,
             startPayload: dto.startPayload ?? null,
+            updateId: dto.updateId ?? null,
         });
     }
 

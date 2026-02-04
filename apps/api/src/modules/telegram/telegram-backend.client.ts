@@ -92,6 +92,17 @@ export class TelegramBackendClient {
             body: options.body ? JSON.stringify(options.body) : undefined,
         });
 
+        const correlationId = response.headers.get('x-correlation-id');
+        this.logger.log(
+            {
+                event: 'telegram_backend_response',
+                path,
+                status: response.status,
+                correlationId,
+            },
+            'TelegramBackendClient',
+        );
+
         if (!response.ok) {
             const text = await response.text();
             let message = text;
@@ -109,6 +120,15 @@ export class TelegramBackendClient {
                     message = text;
                 }
             }
+            this.logger.warn(
+                {
+                    event: 'telegram_backend_error',
+                    path,
+                    status: response.status,
+                    correlationId,
+                },
+                'TelegramBackendClient',
+            );
             throw new Error(message || `Backend request failed (${response.status})`);
         }
 

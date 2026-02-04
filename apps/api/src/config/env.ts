@@ -7,6 +7,11 @@ export const loadEnv = (): EnvVars => {
     if (!cachedEnv) {
         try {
             cachedEnv = envSchema.parse(process.env);
+            if (cachedEnv.TELEGRAM_INTERNAL_TOKEN === cachedEnv.TELEGRAM_BOT_TOKEN) {
+                console.warn(
+                    '[env] TELEGRAM_INTERNAL_TOKEN must not equal TELEGRAM_BOT_TOKEN',
+                );
+            }
         } catch (error) {
             if (error instanceof ZodError) {
                 console.error(

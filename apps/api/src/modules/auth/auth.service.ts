@@ -190,7 +190,7 @@ export class AuthService {
     const normalizedUsername = normalizeTelegramUsername(params.username);
     const now = new Date();
 
-    const { invite, inviteToken } = await this.prisma.$transaction(async (tx) => {
+    const { invite, inviteToken, user, idempotent } = await this.prisma.$transaction(async (tx) => {
         const expiresAt = this.getInviteExpiry();
 
         const existingInvite = normalizedUsername
@@ -205,8 +205,6 @@ export class AuthService {
             })
             : null;
 
-        // Idempotent behavior: if an unexpired, unused invite exists for the same username,
-        // return the existing invite (do not rotate its expiry) and reuse its token.
         if (existingInvite) {
             const existingToken = this.buildInviteToken(existingInvite.id);
             const expectedHash = this.hashInviteToken(existingToken);
@@ -219,8 +217,49 @@ export class AuthService {
                         intendedUsernameNormalized: normalizedUsername,
                     },
                 });
-            return { invite, inviteToken: existingToken };
+
+            const existingUser = invite.invitedUserId
+                ? await tx.user.findUnique({ where: { id: invite.invitedUserId } })
+                : null;
+
+            const user = existingUser
+                ? existingUser
+                : await tx.user.create({
+                    data: {
+                        telegramId: null,
+                        username: normalizedUsername ?? null,
+                        role: UserRole.publisher,
+                        status: UserStatus.pending_telegram_link,
+                    },
+                });
+
+            if (!existingUser) {
+                await this.ensureRoleGrant(tx, user.id, UserRole.publisher);
+                await tx.wallet.create({
+                    data: { userId: user.id, balance: 0, currency: 'USD' },
+                });
+                await tx.userInvite.update({
+                    where: { id: invite.id },
+                    data: { invitedUserId: user.id },
+                });
+            }
+
+            return { invite, inviteToken: existingToken, user, idempotent: true };
         }
+
+        const user = await tx.user.create({
+            data: {
+                telegramId: null,
+                username: normalizedUsername ?? null,
+                role: UserRole.publisher,
+                status: UserStatus.pending_telegram_link,
+            },
+        });
+
+        await this.ensureRoleGrant(tx, user.id, UserRole.publisher);
+        await tx.wallet.create({
+            data: { userId: user.id, balance: 0, currency: 'USD' },
+        });
 
         const inviteId = randomUUID();
         const token = this.buildInviteToken(inviteId);
@@ -233,11 +272,28 @@ export class AuthService {
                 expiresAt,
                 intendedRole: UserRole.publisher,
                 intendedUsernameNormalized: normalizedUsername,
+                invitedUserId: user.id,
             },
         });
 
-        return { invite, inviteToken: token };
+        return { invite, inviteToken: token, user, idempotent: false };
     });
+
+    const correlationId = RequestContext.getCorrelationId() ?? null;
+    this.logger.log(
+        {
+            event: idempotent ? 'invite_reused' : 'invite_created',
+            context: AuthService.name,
+            data: {
+                correlationId,
+                inviteId: invite.id,
+                userId: user.id,
+                intendedUsernameNormalized: invite.intendedUsernameNormalized,
+                expiresAt: invite.expiresAt,
+            },
+        },
+        AuthService.name,
+    );
 
     return {
         invite: {
@@ -245,6 +301,12 @@ export class AuthService {
             intendedRole: invite.intendedRole,
             intendedUsernameNormalized: invite.intendedUsernameNormalized,
             expiresAt: invite.expiresAt,
+        },
+        user: {
+            id: user.id,
+            role: user.role,
+            username: user.username ?? null,
+            status: user.status,
         },
         inviteToken,
         deepLink: this.buildInviteDeepLink(inviteToken),
@@ -499,44 +561,41 @@ export class AuthService {
                 }
 
                 if (invite.usedAt) {
-                    const existingUser = await tx.user.findUnique({
-                        where: { telegramId: BigInt(telegramId) },
-                        include: { roleGrants: { select: { role: true } } },
-                    });
-
-                    if (existingUser && invite.usedByUserId === existingUser.id) {
-                        const updateData: Prisma.UserUpdateInput = {};
-                        if (existingUser.status !== UserStatus.active) {
-                            updateData.status = UserStatus.active;
-                        }
-                        const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
-                        if (!existingUser.username && usernameToUse) {
-                            updateData.username = usernameToUse;
-                        }
-                        if (Object.keys(updateData).length) {
-                            await tx.user.update({
-                                where: { id: existingUser.id },
-                                data: updateData,
-                            });
-                        }
-
-                        await this.ensureRoleGrant(tx, existingUser.id, UserRole.publisher);
-                        return { user: existingUser, idempotent: true, linkedInvite: true };
+                    if (!invite.usedByUserId) {
+                        throw new ConflictException('Invite token already used');
                     }
 
-                    this.logger.warn(
-                        {
-                            event: 'telegram_invite_link_conflict',
-                            context: AuthService.name,
-                            data: {
-                                inviteId: invite.id,
-                                telegramId,
-                                reason: 'invite_already_used',
-                            },
-                        },
-                        AuthService.name,
-                    );
-                    throw new ConflictException('Invite token already used');
+                    const linkedUser = await tx.user.findUnique({
+                        where: { id: invite.usedByUserId },
+                        include: { roleGrants: { select: { role: true } } },
+                    });
+                    if (!linkedUser) {
+                        throw new ConflictException('Invite token already used');
+                    }
+
+                    if (linkedUser.telegramId && linkedUser.telegramId !== BigInt(telegramId)) {
+                        throw new ConflictException('Invite token already used');
+                    }
+
+                    const updateData: Prisma.UserUpdateInput = {};
+                    if (linkedUser.status !== UserStatus.active) {
+                        updateData.status = UserStatus.active;
+                    }
+                    if (normalizedUsername) {
+                        updateData.username = normalizedUsername;
+                    } else if (!linkedUser.username && invite.intendedUsernameNormalized) {
+                        updateData.username = invite.intendedUsernameNormalized;
+                    }
+                    const updatedUser = Object.keys(updateData).length
+                        ? await tx.user.update({
+                            where: { id: linkedUser.id },
+                            data: updateData,
+                            include: { roleGrants: { select: { role: true } } },
+                        })
+                        : linkedUser;
+
+                    await this.ensureRoleGrant(tx, linkedUser.id, UserRole.publisher);
+                    return { user: updatedUser, idempotent: true, linkedInvite: true };
                 }
 
                 assertInviteTokenUsable({
@@ -544,46 +603,68 @@ export class AuthService {
                     expiresAt: invite.expiresAt,
                 });
 
-                const existing = await tx.user.findUnique({
+                const existingByTelegram = await tx.user.findUnique({
                     where: { telegramId: BigInt(telegramId) },
                     include: { roleGrants: { select: { role: true } } },
                 });
 
-                let userId: string;
-                if (existing) {
-                    const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
-                    const updateData: Prisma.UserUpdateInput = {
-                        status: UserStatus.active,
-                    };
-                    if (!existing.username && usernameToUse) {
-                        updateData.username = usernameToUse;
-                    }
-                    const updated = await tx.user.update({
-                        where: { id: existing.id },
-                        data: updateData,
-                    });
-                    userId = updated.id;
-                } else {
-                    const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
-                    const created = await tx.user.create({
+                if (existingByTelegram && invite.invitedUserId && existingByTelegram.id !== invite.invitedUserId) {
+                    throw new ConflictException('Telegram account already linked');
+                }
+
+                let user = invite.invitedUserId
+                    ? await tx.user.findUnique({
+                        where: { id: invite.invitedUserId },
+                        include: { roleGrants: { select: { role: true } } },
+                    })
+                    : null;
+
+                if (invite.invitedUserId && !user) {
+                    throw new ConflictException('Invite user not found');
+                }
+
+                if (!user && existingByTelegram) {
+                    user = existingByTelegram;
+                }
+
+                if (!user) {
+                    user = await tx.user.create({
                         data: {
                             telegramId: BigInt(telegramId),
-                            username: usernameToUse,
+                            username: normalizedUsername ?? invite.intendedUsernameNormalized ?? null,
                             role: invite.intendedRole,
                             status: UserStatus.active,
                         },
+                        include: { roleGrants: { select: { role: true } } },
                     });
-                    userId = created.id;
 
                     await tx.wallet.create({
-                        data: { userId: userId, balance: 0, currency: 'USD' },
+                        data: { userId: user.id, balance: 0, currency: 'USD' },
+                    });
+                } else {
+                    if (user.telegramId && user.telegramId !== BigInt(telegramId)) {
+                        throw new ConflictException('Telegram account already linked');
+                    }
+                    const updateData: Prisma.UserUpdateInput = {
+                        telegramId: BigInt(telegramId),
+                        status: UserStatus.active,
+                    };
+                    if (normalizedUsername) {
+                        updateData.username = normalizedUsername;
+                    } else if (!user.username && invite.intendedUsernameNormalized) {
+                        updateData.username = invite.intendedUsernameNormalized;
+                    }
+                    user = await tx.user.update({
+                        where: { id: user.id },
+                        data: updateData,
+                        include: { roleGrants: { select: { role: true } } },
                     });
                 }
 
-                await this.ensureRoleGrant(tx, userId, invite.intendedRole);
+                await this.ensureRoleGrant(tx, user.id, invite.intendedRole);
 
                 const userWithRoles = await tx.user.findUnique({
-                    where: { id: userId },
+                    where: { id: user.id },
                     include: { roleGrants: { select: { role: true } } },
                 });
                 if (!userWithRoles) {
@@ -592,12 +673,16 @@ export class AuthService {
 
                 await tx.userInvite.update({
                     where: { id: invite.id },
-                    data: { usedAt: now, usedByUserId: userId },
+                    data: {
+                        usedAt: now,
+                        usedByUserId: userWithRoles.id,
+                        invitedUserId: invite.invitedUserId ?? userWithRoles.id,
+                    },
                 });
 
                 await tx.userAuditLog.create({
                     data: {
-                        userId: userId,
+                        userId: userWithRoles.id,
                         action: 'user_linked_from_invite',
                         metadata: {
                             inviteId: invite.id,

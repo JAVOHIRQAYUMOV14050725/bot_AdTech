@@ -184,6 +184,7 @@ model User {
   paymentIntents    PaymentIntent[]
   withdrawalIntents WithdrawalIntent[]
   usedInvites       UserInvite[]
+  invitedInvite     UserInvite? @relation("InvitedUser")
   roleGrants        UserRoleGrant[]
   bootstrapState    BootstrapState?
 
@@ -213,9 +214,11 @@ model UserInvite {
   usedAt    DateTime?
   intendedRole UserRole
   intendedUsernameNormalized String?
+  invitedUserId String? @unique
   usedByUserId String?
   createdAt DateTime @default(now())
 
+  invitedUser User? @relation("InvitedUser", fields: [invitedUserId], references: [id])
   usedByUser User? @relation(fields: [usedByUserId], references: [id])
 
   @@index([usedByUserId, createdAt])

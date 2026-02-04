@@ -1,8 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@/modules/domain/contracts';
-import { loadEnv } from '@/config/env';
-const env = loadEnv()
-const bot = env.TELEGRAM_BOT_USERNAME
 export class RegisterResponseDto {
     @ApiProperty({
         example: {
@@ -26,8 +23,23 @@ export class RegisterResponseDto {
     inviteToken!: string;
 
     @ApiProperty({
-        example: `https://t.me/${bot}?start=invite-token`,
+        example: 'https://t.me/adtech_bot?start=invite-token',
         description: 'Telegram deep link to start the bot with the invite token.',
     })
     deepLink!: string;
+
+    @ApiProperty({
+        example: {
+            id: 'user-id',
+            role: UserRole.publisher,
+            username: 'publisher_handle',
+            status: 'pending_telegram_link',
+        },
+    })
+    user!: {
+        id: string;
+        role: UserRole;
+        username: string | null;
+        status: string;
+    };
 }

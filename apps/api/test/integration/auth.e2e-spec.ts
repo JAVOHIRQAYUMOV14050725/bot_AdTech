@@ -40,7 +40,7 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
                         bootstrapToken: 'bootstrap-token',
                         inviteTokenTtlHours: 1,
                         allowPublicAdvertisers: true,
-                        telegramBotUsername: 'adtech_bot',
+                        telegramBotUsername: '@adtech_bot',
                         telegramInternalToken: 'internal-token',
                     },
                 },
@@ -145,14 +145,17 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         }
         const invite = await authService.invitePublisher({ username: 'publisher1' });
 
-        expect(invite.deepLink).toContain('adtech_bot');
+        expect(invite.deepLink).toContain('https://t.me/adtech_bot?start=');
+        expect(invite.deepLink).not.toContain('@adtech_bot');
         expect(invite.deepLink).toContain(invite.inviteToken);
+        expect(invite.user.status).toBe(UserStatus.pending_telegram_link);
 
         const inviteRow = await prisma.userInvite.findFirst({
             where: { intendedUsernameNormalized: 'publisher1' },
         });
         expect(inviteRow?.intendedRole).toBe(UserRole.publisher);
         expect(inviteRow?.intendedUsernameNormalized).toBe('publisher1');
+        expect(inviteRow?.invitedUserId).toBe(invite.user.id);
 
         const linked = await authService.handleTelegramStart({
             telegramId: '9001',
@@ -198,6 +201,24 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         expect(invites).toHaveLength(1);
     });
 
+    it('normalizes invite usernames and links deterministically', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const invite = await authService.invitePublisher({ username: '@Javohir_Qayumov' });
+        const inviteRow = await prisma.userInvite.findUnique({ where: { id: invite.invite.id } });
+        expect(inviteRow?.intendedUsernameNormalized).toBe('javohir_qayumov');
+
+        const linked = await authService.handleTelegramStart({
+            telegramId: '9201',
+            username: 'javohir_qayumov',
+            startPayload: invite.inviteToken,
+        });
+
+        expect(linked.user.username).toBe('javohir_qayumov');
+        expect(linked.user.telegramId).toBe('9201');
+    });
+
     it('creates advertiser on /start only once (idempotent)', async () => {
         if (!dbAvailable) {
             return;
@@ -222,7 +243,7 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         expect(grants.map((grant) => grant.role)).toContain(UserRole.advertiser);
     });
 
-    it('links publisher invite to existing advertiser user without duplicates', async () => {
+    it('rejects invite linking when telegramId is already linked to another user', async () => {
         if (!dbAvailable) {
             return;
         }
@@ -233,21 +254,13 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         });
 
         const invite = await authService.invitePublisher({ username: '@PublisherOne' });
-
-        const linked = await authService.handleTelegramStart({
-            telegramId: '9301',
-            username: '@PublisherOne',
-            startPayload: invite.inviteToken,
-        });
-
-        const users = await prisma.user.findMany({ where: { telegramId: BigInt(9301) } });
-        const grants = await prisma.userRoleGrant.findMany({ where: { userId: users[0].id } });
-        const invites = await prisma.userInvite.findMany({ where: { intendedUsernameNormalized: 'publisherone' } });
-
-        expect(users).toHaveLength(1);
-        expect(invites).toHaveLength(1);
-        expect(linked.user.roles).toEqual(expect.arrayContaining([UserRole.advertiser, UserRole.publisher]));
-        expect(grants.map((grant) => grant.role)).toEqual(expect.arrayContaining([UserRole.advertiser, UserRole.publisher]));
+        await expect(
+            authService.handleTelegramStart({
+                telegramId: '9301',
+                username: '@PublisherOne',
+                startPayload: invite.inviteToken,
+            }),
+        ).rejects.toThrow(ConflictException);
     });
 
     it('dedupes repeated invites and links idempotently', async () => {

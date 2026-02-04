@@ -153,6 +153,22 @@ describe('Telegram start guard (e2e)', () => {
         expect(response.status).toBe(401);
     });
 
+    it('returns 401 when signature headers are missing', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const body = { telegramId: '93025' };
+        const response = await fetch(`${baseUrl}/auth/telegram/start`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Internal-Token': 'internal-token',
+            },
+            body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(401);
+    });
+
     it('returns 401 when signature is invalid', async () => {
         if (!dbAvailable) {
             return;
@@ -168,6 +184,29 @@ describe('Telegram start guard (e2e)', () => {
                 'X-Telegram-Signature': 'bad-signature',
             },
             body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(401);
+    });
+
+    it('returns 401 when timestamp is expired', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const body = { telegramId: '9304' };
+        const timestamp = (Math.floor(Date.now() / 1000) - 180).toString();
+        const rawBody = JSON.stringify(body);
+        const signature = createHmac('sha256', 'internal-token')
+            .update(`${timestamp}.${rawBody}`)
+            .digest('hex');
+        const response = await fetch(`${baseUrl}/auth/telegram/start`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Internal-Token': 'internal-token',
+                'X-Telegram-Timestamp': timestamp,
+                'X-Telegram-Signature': signature,
+            },
+            body: rawBody,
         });
         expect(response.status).toBe(401);
     });
@@ -194,11 +233,51 @@ describe('Telegram start guard (e2e)', () => {
             body: JSON.stringify(body),
         });
         expect(response.status).toBe(201);
-        const payload = await response.json();
+        const payload = (await response.json()) as { user: { role: string } };
         expect(payload.user.role).toBe('publisher');
         const linkedUser = await prisma.user.findUnique({
             where: { telegramId: BigInt(9310) },
         });
         expect(linkedUser?.telegramId?.toString()).toBe('9310');
+    });
+
+    it('is idempotent on repeated telegram start', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const invite = await authService.invitePublisher({ username: 'sig_publisher_2' });
+        const body = {
+            telegramId: '9311',
+            username: '@sig_publisher_2',
+            startPayload: invite.inviteToken,
+        };
+        const { timestamp, signature } = signBody(body);
+        const response = await fetch(`${baseUrl}/auth/telegram/start`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Internal-Token': 'internal-token',
+                'X-Telegram-Timestamp': timestamp,
+                'X-Telegram-Signature': signature,
+            },
+            body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(201);
+        const payload = (await response.json()) as { user: { id: string } };
+
+        const { timestamp: ts2, signature: sig2 } = signBody(body);
+        const replay = await fetch(`${baseUrl}/auth/telegram/start`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Internal-Token': 'internal-token',
+                'X-Telegram-Timestamp': ts2,
+                'X-Telegram-Signature': sig2,
+            },
+            body: JSON.stringify(body),
+        });
+        expect(replay.status).toBe(201);
+        const replayPayload = (await replay.json()) as { user: { id: string } };
+        expect(replayPayload.user.id).toBe(payload.user.id);
     });
 });

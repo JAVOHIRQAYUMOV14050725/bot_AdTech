@@ -1,38 +1,97 @@
-export function formatTelegramError(err: unknown): string {
-    if (err instanceof Error) {
-        return err.message;
-    }
+type HttpExceptionLike = {
+    getResponse?: () => unknown;
+    message?: unknown;
+    response?: unknown;
+};
 
+type AxiosErrorLike = {
+    response?: {
+        data?: unknown;
+        status?: number;
+        statusText?: string;
+    };
+    message?: unknown;
+};
+
+const flattenMessage = (value: unknown): string | null => {
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        const parts = value
+            .map((entry) => flattenMessage(entry))
+            .filter((entry): entry is string => Boolean(entry));
+        if (parts.length) {
+            return parts.join('; ');
+        }
+    }
+    if (value && typeof value === 'object') {
+        const nestedMessage = (value as { message?: unknown }).message;
+        const resolvedNested = flattenMessage(nestedMessage);
+        if (resolvedNested) {
+            return resolvedNested;
+        }
+    }
+    return null;
+};
+
+const stringifyFallback = (value: unknown): string => {
+    try {
+        const serialized = JSON.stringify(value);
+        if (serialized && serialized !== '{}') {
+            return serialized;
+        }
+    } catch {
+        // noop
+    }
+    return 'Unexpected error';
+};
+
+export function telegramSafeErrorMessage(err: unknown): string {
     if (typeof err === 'string') {
         return err;
     }
 
-    if (err && typeof err === 'object') {
-        const maybeMessage = (err as { message?: unknown }).message;
-        if (typeof maybeMessage === 'string') {
-            return maybeMessage;
-        }
+    if (err instanceof Error) {
+        return err.message || 'Unexpected error';
+    }
 
-        const maybeResponse = (err as { response?: unknown }).response;
-        if (typeof maybeResponse === 'string') {
-            return maybeResponse;
-        }
-        if (maybeResponse && typeof maybeResponse === 'object') {
-            const responseMessage = (maybeResponse as { message?: unknown }).message;
-            if (typeof responseMessage === 'string') {
-                return responseMessage;
-            }
-            if (Array.isArray(responseMessage)) {
-                return responseMessage.join('; ');
-            }
-        }
+    if (!err || typeof err !== 'object') {
+        return 'Unexpected error';
+    }
 
-        try {
-            return JSON.stringify(err);
-        } catch {
-            return 'Unexpected error';
+    const httpException = err as HttpExceptionLike;
+    if (typeof httpException.getResponse === 'function') {
+        const response = httpException.getResponse();
+        const resolved = flattenMessage(response);
+        if (resolved) {
+            return resolved;
         }
     }
 
-    return 'Unexpected error';
+    const directMessage = flattenMessage((err as { message?: unknown }).message);
+    if (directMessage) {
+        return directMessage;
+    }
+
+    const axiosLike = err as AxiosErrorLike;
+    if (axiosLike.response) {
+        const responseMessage = flattenMessage(axiosLike.response.data);
+        if (responseMessage) {
+            return responseMessage;
+        }
+        const statusMessage = [axiosLike.response.status, axiosLike.response.statusText]
+            .filter((value) => value != null)
+            .join(' ');
+        if (statusMessage) {
+            return statusMessage;
+        }
+    }
+
+    const responseMessage = flattenMessage((err as { response?: unknown }).response);
+    if (responseMessage) {
+        return responseMessage;
+    }
+
+    return stringifyFallback(err);
 }

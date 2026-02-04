@@ -40,7 +40,7 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
                         bootstrapToken: 'bootstrap-token',
                         inviteTokenTtlHours: 1,
                         allowPublicAdvertisers: true,
-                        telegramBotUsername: 'adtech_bot',
+                        telegramBotUsername: '@adtech_bot',
                         telegramInternalToken: 'internal-token',
                     },
                 },
@@ -145,8 +145,9 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         }
         const invite = await authService.invitePublisher({ username: 'publisher1' });
 
-        expect(invite.deepLink).toContain('adtech_bot');
+        expect(invite.deepLink).toContain('https://t.me/adtech_bot?start=');
         expect(invite.deepLink).toContain(invite.inviteToken);
+        expect(invite.deepLink).not.toContain('@');
 
         const inviteRow = await prisma.userInvite.findFirst({
             where: { intendedUsernameNormalized: 'publisher1' },

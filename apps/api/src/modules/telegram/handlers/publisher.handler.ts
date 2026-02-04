@@ -7,10 +7,6 @@ import { addChannelOptions, publisherHome, verifyPrivateChannelKeyboard } from '
 import { Logger } from '@nestjs/common';
 import { formatTelegramError } from '@/modules/telegram/telegram-error.util';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
-import { ChannelsService } from '@/modules/channels/channels.service';
-import { PrismaService } from '@/prisma/prisma.service';
-import { ChannelStatus } from '@prisma/client';
 @Update()
 export class PublisherHandler {
     private readonly logger = new Logger(PublisherHandler.name);
@@ -18,9 +14,6 @@ export class PublisherHandler {
     constructor(
         private readonly fsm: TelegramFSMService,
         private readonly backendClient: TelegramBackendClient,
-        private readonly identityResolver: IdentityResolverService,
-        private readonly channelsService: ChannelsService,
-        private readonly prisma: PrismaService,
     ) { }
 
     @Action('ROLE_PUBLISHER')
@@ -106,27 +99,25 @@ export class PublisherHandler {
             return;
         }
 
-        const resolved = await this.identityResolver.resolvePrivateChannelForUser({
-            actorId: context.user.id,
-            telegramUserId: userId,
-        });
-
-        if (!resolved.ok) {
-            this.logger.warn({
-                event: 'channel_verification_failed',
-                userId: context.user.id,
-                reason: resolved.reason,
+        try {
+            const response = await this.backendClient.verifyPublisherPrivateChannel({
+                publisherId: context.user.id,
+                telegramUserId: userId.toString(),
             });
-            return ctx.reply(`⚠️ ${resolved.message}`, verifyPrivateChannelKeyboard);
-        }
 
-        return this.registerChannel({
-            ctx,
-            publisherId: context.user.id,
-            telegramChannelId: resolved.value.telegramChannelId,
-            title: resolved.value.title,
-            username: resolved.value.username,
-        });
+            if (!response.ok) {
+                this.logger.warn({
+                    event: 'channel_verification_failed',
+                    userId: context.user.id,
+                    reason: response.message,
+                });
+            }
+
+            return ctx.reply(response.message, verifyPrivateChannelKeyboard);
+        } catch (err) {
+            const message = formatTelegramError(err);
+            return ctx.reply(`❌ ${message}`, verifyPrivateChannelKeyboard);
+        }
     }
 
     @On('text')
@@ -299,60 +290,6 @@ export class PublisherHandler {
         } catch (err) {
             const message = formatTelegramError(err);
             return ctx.reply(`❌ ${message}`);
-        }
-    }
-
-    private async registerChannel(params: {
-        ctx: Context;
-        publisherId: string;
-        telegramChannelId: string;
-        title: string;
-        username?: string;
-    }) {
-        const { ctx, publisherId, telegramChannelId, title, username } = params;
-        let parsedChannelId: bigint;
-        try {
-            parsedChannelId = BigInt(telegramChannelId);
-        } catch {
-            return ctx.reply('❌ Invalid channel identifier. Please try again.');
-        }
-
-        const existing = await this.prisma.channel.findFirst({
-            where: { telegramChannelId: parsedChannelId },
-            include: { owner: true },
-        });
-
-        if (existing) {
-            if (existing.ownerId === publisherId) {
-                if (existing.status === ChannelStatus.approved) {
-                    return ctx.reply('✅ This channel is already approved in your account.');
-                }
-                return ctx.reply('ℹ️ This channel is already registered and pending review.');
-            }
-
-            return ctx.reply('❌ This channel is already registered by another publisher.');
-        }
-
-        try {
-            const channel = await this.channelsService.createChannelFromResolved({
-                ownerId: publisherId,
-                resolved: {
-                    telegramChannelId,
-                    title,
-                    username,
-                },
-            });
-
-            await this.channelsService.requestVerification(channel.id, publisherId);
-
-            return ctx.reply(
-                '✅ Channel verified and registered!\n\nYour channel is now pending approval.',
-            );
-        } catch (err) {
-            const message = formatTelegramError(err);
-            return ctx.reply(
-                `❌ We could not complete verification.\n\n${message}`,
-            );
         }
     }
 

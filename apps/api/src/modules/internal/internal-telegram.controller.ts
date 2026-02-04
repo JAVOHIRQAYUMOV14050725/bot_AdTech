@@ -195,6 +195,10 @@ export class InternalTelegramController {
 
     @Post('publisher/verify-channel')
     async verifyChannel(@Body() dto: InternalTelegramVerifyChannelDto) {
+        if (!dto.identifier) {
+            throw new BadRequestException('Missing identifier');
+        }
+
         const resolved = await this.identityResolver.resolveChannelIdentifier(dto.identifier, {
             actorId: dto.publisherId,
         });
@@ -225,13 +229,54 @@ export class InternalTelegramController {
             };
         }
 
+        return this.registerResolvedChannel({
+            publisherId: dto.publisherId,
+            telegramChannelId: resolved.value.telegramChannelId,
+            title: resolved.value.title,
+            username: resolved.value.username,
+        });
+    }
+
+    @Post('publisher/verify-private-channel')
+    async verifyPrivateChannel(@Body() dto: InternalTelegramVerifyChannelDto) {
+        const resolved = await this.identityResolver.resolvePrivateChannelForUser({
+            actorId: dto.publisherId,
+            telegramUserId: Number(dto.telegramUserId),
+        });
+
+        if (!resolved.ok) {
+            return { ok: false as const, message: resolved.message };
+        }
+
+        return this.registerResolvedChannel({
+            publisherId: dto.publisherId,
+            telegramChannelId: resolved.value.telegramChannelId,
+            title: resolved.value.title,
+            username: resolved.value.username,
+        });
+    }
+
+    private async registerResolvedChannel(params: {
+        publisherId: string;
+        telegramChannelId: string;
+        title: string;
+        username?: string;
+    }) {
+        const { publisherId, telegramChannelId, title, username } = params;
+        let parsedChannelId: bigint;
+        try {
+            parsedChannelId = BigInt(telegramChannelId);
+        } catch {
+            return { ok: false as const, message: '❌ Invalid channel identifier. Please try again.' };
+        }
+
         const existing = await this.prisma.channel.findFirst({
-            where: { telegramChannelId: BigInt(resolved.value.telegramChannelId) },
+            where: { telegramChannelId: parsedChannelId },
             include: { owner: true },
         });
 
         if (existing) {
-            if (existing.ownerId === dto.publisherId) {
+            if (existing.ownerId === publisherId) {
                 if (existing.status === ChannelStatus.approved) {
                     return { ok: true as const, message: '✅ This channel is already approved in your account.' };
                 }
@@ -243,15 +288,15 @@ export class InternalTelegramController {
 
         try {
             const channel = await this.channelsService.createChannelFromResolved({
-                ownerId: dto.publisherId,
+                ownerId: publisherId,
                 resolved: {
-                    telegramChannelId: resolved.value.telegramChannelId,
-                    title: resolved.value.title,
-                    username: resolved.value.username,
+                    telegramChannelId,
+                    title,
+                    username,
                 },
             });
 
-            await this.channelsService.requestVerification(channel.id, dto.publisherId);
+            await this.channelsService.requestVerification(channel.id, publisherId);
 
             return {
                 ok: true as const,

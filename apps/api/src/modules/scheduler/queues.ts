@@ -9,6 +9,7 @@ export const redisConnection = {
     password: env.REDIS_PASSWORD ?? undefined,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    lazyConnect: true,
     retryStrategy: (times: number) => Math.min(1000 * 2 ** times, 30000),
 };
 

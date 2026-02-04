@@ -54,6 +54,7 @@ async function seedSuperAdmin() {
             telegramId,
             username: username ?? 'super_admin',
             role: UserRole.super_admin,
+            superAdminKey: 'super_admin',
             status: UserStatus.active,
             passwordHash,
             passwordUpdatedAt: new Date(),

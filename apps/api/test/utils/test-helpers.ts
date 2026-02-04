@@ -47,6 +47,7 @@ export async function resetDatabase(prisma: PrismaClient) {
     await prisma.killSwitch.deleteMany();
 
     // ROOT
+    await prisma.bootstrapState.deleteMany();
     await prisma.user.deleteMany();
 }
 

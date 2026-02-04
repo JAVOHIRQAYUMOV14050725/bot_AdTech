@@ -15,6 +15,7 @@ import {
     Inject,
     Injectable,
     LoggerService,
+    ServiceUnavailableException,
 } from '@nestjs/common';
 import { KillSwitchService } from '@/modules/ops/kill-switch.service';
 import { ConfigService } from '@nestjs/config';
@@ -332,12 +333,11 @@ export class PaymentsService {
             throw new BadRequestException('Deposit amount must be positive');
         }
 
-        const enableClick = this.configService.get<boolean>(
-            'ENABLE_CLICK_PAYMENTS',
-            false,
-        );
+        const enableClick =
+            this.configService.get<boolean>('ENABLE_CLICK', false)
+            || this.configService.get<boolean>('ENABLE_CLICK_PAYMENTS', false);
         if (!enableClick) {
-            throw new ConflictException('Click payments are disabled');
+            throw new ServiceUnavailableException('Click payments are disabled');
         }
 
         const intent = await this.prisma.$transaction(async (tx) => {
@@ -439,6 +439,24 @@ export class PaymentsService {
             throw err;
         }
 
+        const providerTxnId = String(payload['click_trans_id'] ?? '');
+        if (providerTxnId) {
+            const existingTxn = await this.prisma.paymentIntent.findFirst({
+                where: {
+                    providerTxnId,
+                    NOT: { id: intent.id },
+                },
+            });
+
+            if (existingTxn?.status === PaymentIntentStatus.succeeded) {
+                return { ok: true, idempotent: true };
+            }
+
+            if (existingTxn) {
+                throw new ConflictException('Duplicate provider transaction');
+            }
+        }
+
         if (intent.status === PaymentIntentStatus.succeeded) {
             return { ok: true, idempotent: true };
         }
@@ -465,7 +483,7 @@ export class PaymentsService {
                     data: {
                         status: PaymentIntentStatus.failed,
                         failedAt: new Date(),
-                        providerTxnId: String(payload['click_trans_id'] ?? ''),
+                        providerTxnId,
                         metadata: payload as Prisma.JsonObject,
                     },
                 });
@@ -507,7 +525,7 @@ export class PaymentsService {
                 data: {
                     status: PaymentIntentStatus.succeeded,
                     succeededAt: new Date(),
-                    providerTxnId: String(payload['click_trans_id'] ?? ''),
+                    providerTxnId,
                     metadata: payload as Prisma.JsonObject,
                 },
             });

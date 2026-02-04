@@ -1,11 +1,24 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 type BackendResponse<T> = T;
 
 @Injectable()
 export class TelegramBackendClient {
-    constructor(private readonly configService: ConfigService) { }
+    constructor(
+        private readonly configService: ConfigService,
+        @Inject('LOGGER') private readonly logger: LoggerService,
+    ) {
+        this.logger.log(
+            {
+                event: 'telegram_backend_config',
+                baseUrl: this.baseUrl,
+                internalApiTokenSet: Boolean(this.token),
+                internalApiTokenMasked: this.maskToken(this.token),
+            },
+            'TelegramBackendClient',
+        );
+    }
 
     private get baseUrl() {
         const raw = this.configService.get<string>(
@@ -17,6 +30,15 @@ export class TelegramBackendClient {
 
     private get token() {
         return this.configService.get<string>('INTERNAL_API_TOKEN', '');
+    }
+
+    private maskToken(token: string) {
+        if (!token) return null;
+        const visible = 4;
+        if (token.length <= visible * 2) {
+            return `${token.slice(0, 2)}***${token.slice(-2)}`;
+        }
+        return `${token.slice(0, visible)}***${token.slice(-visible)}`;
     }
 
     private ensureApiPrefix(baseUrl: string) {

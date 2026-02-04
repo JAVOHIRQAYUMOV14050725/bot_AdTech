@@ -105,6 +105,9 @@ describe('Payments integration (wallet / ledger / escrow)', () => {
                 status: 'active',
             },
         });
+        await prisma.userRoleGrant.create({
+            data: { userId: user.id, role: 'advertiser' },
+        });
 
         const wallet = await prisma.wallet.create({
             data: {
@@ -158,6 +161,9 @@ describe('Payments integration (wallet / ledger / escrow)', () => {
                 status: 'active',
             },
         });
+        await prisma.userRoleGrant.create({
+            data: { userId: user.id, role: 'advertiser' },
+        });
 
         const wallet = await prisma.wallet.create({
             data: {
@@ -207,6 +213,9 @@ describe('Payments integration (wallet / ledger / escrow)', () => {
                 role: 'advertiser',
                 status: 'active',
             },
+        });
+        await prisma.userRoleGrant.create({
+            data: { userId: user.id, role: 'advertiser' },
         });
 
         const wallet = await prisma.wallet.create({
@@ -263,6 +272,9 @@ describe('Payments integration (wallet / ledger / escrow)', () => {
                 role: 'advertiser',
                 status: 'active',
             },
+        });
+        await prisma.userRoleGrant.create({
+            data: { userId: user.id, role: 'advertiser' },
         });
 
         await prisma.wallet.create({

@@ -47,6 +47,8 @@ export async function resetDatabase(prisma: PrismaClient) {
     await prisma.killSwitch.deleteMany();
 
     // ROOT
+    await prisma.userInvite.deleteMany();
+    await prisma.userRoleGrant.deleteMany();
     await prisma.user.deleteMany();
 }
 
@@ -96,6 +98,10 @@ export async function createUserWithWallet(params: {
             role,
             status: 'active',
         },
+    });
+
+    await prisma.userRoleGrant.create({
+        data: { userId: user.id, role },
     });
 
     const wallet = await prisma.wallet.create({

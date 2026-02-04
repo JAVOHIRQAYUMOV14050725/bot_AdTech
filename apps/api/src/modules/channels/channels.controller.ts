@@ -148,7 +148,7 @@ export class ChannelsController {
     @ApiStandardErrorResponses()
     verifyDebug(
         @Param('id', new ParseUUIDPipe()) channelId: string,
-        @Actor() actor: { id: string; role: UserRole },
+        @Actor() actor: { id: string; role: UserRole; roles?: UserRole[] },
     ) {
         return this.channelsService.verifyChannelDebug(channelId, actor);
     }

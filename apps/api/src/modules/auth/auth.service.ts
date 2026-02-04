@@ -21,6 +21,7 @@ import { ConfigType } from '@nestjs/config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
 import { createHash, randomBytes } from 'crypto';
 import { assertInviteTokenUsable } from './invite-token.util';
+import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
 
 @Injectable()
 export class AuthService {
@@ -78,6 +79,25 @@ export class AuthService {
     private buildInviteDeepLink(inviteToken: string) {
         const botUsername = this.authConfig.telegramBotUsername.replace(/^@+/, '');
         return `https://t.me/${botUsername}?start=${inviteToken}`;
+    }
+
+    private extractRoles(user: { role: UserRole; roleGrants?: Array<{ role: UserRole }> }) {
+        const roles = new Set<UserRole>();
+        roles.add(user.role);
+        user.roleGrants?.forEach((grant) => roles.add(grant.role));
+        return Array.from(roles);
+    }
+
+    private async ensureRoleGrant(
+        tx: Prisma.TransactionClient,
+        userId: string,
+        role: UserRole,
+    ) {
+        await tx.userRoleGrant.upsert({
+            where: { userId_role: { userId, role } },
+            create: { userId, role },
+            update: {},
+        });
     }
 
     private signAccessToken(user: { id: string; role: UserRole }) {
@@ -139,48 +159,53 @@ export class AuthService {
     }
 
     async invitePublisher(params: { username?: string }) {
-        const { username } = params;
+        const normalizedUsername = normalizeTelegramUsername(params.username);
+        const now = new Date();
 
-        const { user, inviteToken } = await this.prisma.$transaction(async (tx) => {
-            const created = await tx.user.create({
-                data: {
-                    telegramId: null,
-                    role: UserRole.publisher,
-                    status: UserStatus.pending_telegram_link,
-                    username: username ?? null,
-                },
-            });
-
+        const { invite, inviteToken } = await this.prisma.$transaction(async (tx) => {
             const token = this.generateInviteToken();
-            await tx.userInvite.create({
-                data: {
-                    userId: created.id,
-                    tokenHash: this.hashInviteToken(token),
-                    expiresAt: this.getInviteExpiry(),
-                },
-            });
+            const tokenHash = this.hashInviteToken(token);
+            const expiresAt = this.getInviteExpiry();
 
-            await tx.wallet.create({
-                data: { userId: created.id, balance: 0, currency: 'USD' },
-            });
+            const existingInvite = normalizedUsername
+                ? await tx.userInvite.findFirst({
+                    where: {
+                        intendedRole: UserRole.publisher,
+                        intendedUsernameNormalized: normalizedUsername,
+                        usedAt: null,
+                        expiresAt: { gt: now },
+                    },
+                    orderBy: { createdAt: 'desc' },
+                })
+                : null;
 
-            await tx.userAuditLog.create({
-                data: {
-                    userId: created.id,
-                    action: 'user_invited',
-                    metadata: { role: UserRole.publisher, status: UserStatus.pending_telegram_link },
-                },
-            });
+            const invite = existingInvite
+                ? await tx.userInvite.update({
+                    where: { id: existingInvite.id },
+                    data: {
+                        tokenHash,
+                        expiresAt,
+                        intendedUsernameNormalized: normalizedUsername,
+                    },
+                })
+                : await tx.userInvite.create({
+                    data: {
+                        tokenHash,
+                        expiresAt,
+                        intendedRole: UserRole.publisher,
+                        intendedUsernameNormalized: normalizedUsername,
+                    },
+                });
 
-            return { user: created, inviteToken: token };
+            return { invite, inviteToken: token };
         });
 
         return {
-            user: {
-                id: user.id,
-                telegramId: user.telegramId?.toString() ?? null,
-                role: user.role,
-                username: user.username,
+            invite: {
+                id: invite.id,
+                intendedRole: invite.intendedRole,
+                intendedUsernameNormalized: invite.intendedUsernameNormalized,
+                expiresAt: invite.expiresAt,
             },
             inviteToken,
             deepLink: this.buildInviteDeepLink(inviteToken),
@@ -230,6 +255,8 @@ export class AuthService {
                 },
             });
 
+            await this.ensureRoleGrant(tx, created.id, UserRole.super_admin);
+
             await tx.wallet.create({
                 data: { userId: created.id, balance: 0, currency: 'USD' },
             });
@@ -259,6 +286,7 @@ export class AuthService {
                 id: user.id,
                 telegramId: user.telegramId?.toString() ?? null,
                 role: user.role,
+                roles: [user.role],
                 username: user.username,
             },
         };
@@ -273,7 +301,7 @@ export class AuthService {
         if (!telegramId) {
             throw new BadRequestException('Missing telegramId');
         }
-        const normalizedUsername = username ? username.replace(/^@+/, '') : null;
+        const normalizedUsername = normalizeTelegramUsername(username);
 
         this.logger.log(
             {
@@ -296,34 +324,40 @@ export class AuthService {
                 const { user, idempotent } = await this.prisma.$transaction(async (tx) => {
                     const invite = await tx.userInvite.findUnique({
                         where: { tokenHash },
-                        include: { user: true },
                     });
 
                     if (!invite) {
                         throw new BadRequestException('Invite token is invalid');
                     }
 
-                    if (invite.user.role !== UserRole.publisher) {
+                    if (invite.intendedRole !== UserRole.publisher) {
                         throw new BadRequestException('Invite token role invalid');
                     }
 
                     if (invite.usedAt) {
-                        if (invite.user.telegramId?.toString() === telegramId) {
+                        const existingUser = await tx.user.findUnique({
+                            where: { telegramId: BigInt(telegramId) },
+                            include: { roleGrants: { select: { role: true } } },
+                        });
+
+                        if (existingUser && invite.usedByUserId === existingUser.id) {
                             const updateData: Prisma.UserUpdateInput = {};
-                            if (invite.user.status !== UserStatus.active) {
+                            if (existingUser.status !== UserStatus.active) {
                                 updateData.status = UserStatus.active;
                             }
-                            if (!invite.user.username && normalizedUsername) {
-                                updateData.username = normalizedUsername;
+                            const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
+                            if (!existingUser.username && usernameToUse) {
+                                updateData.username = usernameToUse;
                             }
-                            const linkedUser = Object.keys(updateData).length
-                                ? await tx.user.update({
-                                    where: { id: invite.userId },
+                            if (Object.keys(updateData).length) {
+                                await tx.user.update({
+                                    where: { id: existingUser.id },
                                     data: updateData,
-                                })
-                                : invite.user;
+                                });
+                            }
 
-                            return { user: linkedUser, idempotent: true };
+                            await this.ensureRoleGrant(tx, existingUser.id, UserRole.publisher);
+                            return { user: existingUser, idempotent: true };
                         }
 
                         this.logger.warn(
@@ -346,51 +380,60 @@ export class AuthService {
                         expiresAt: invite.expiresAt,
                     });
 
-                    if (invite.user.status !== UserStatus.pending_telegram_link) {
-                        throw new ConflictException('Invite user is not pending telegram link');
-                    }
-
                     const existing = await tx.user.findUnique({
                         where: { telegramId: BigInt(telegramId) },
-                        select: { id: true },
+                        include: { roleGrants: { select: { role: true } } },
                     });
-                    if (existing && existing.id !== invite.userId) {
-                        this.logger.warn(
-                            {
-                                event: 'telegram_invite_link_conflict',
-                                context: AuthService.name,
-                                data: {
-                                    inviteId: invite.id,
-                                    telegramId,
-                                    reason: 'telegram_already_linked',
-                                },
+
+                    let userId: string;
+                    if (existing) {
+                        const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
+                        const updateData: Prisma.UserUpdateInput = {
+                            status: UserStatus.active,
+                        };
+                        if (!existing.username && usernameToUse) {
+                            updateData.username = usernameToUse;
+                        }
+                        const updated = await tx.user.update({
+                            where: { id: existing.id },
+                            data: updateData,
+                        });
+                        userId = updated.id;
+                    } else {
+                        const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
+                        const created = await tx.user.create({
+                            data: {
+                                telegramId: BigInt(telegramId),
+                                username: usernameToUse,
+                                role: invite.intendedRole,
+                                status: UserStatus.active,
                             },
-                            AuthService.name,
-                        );
-                        throw new ConflictException('Telegram account already linked');
+                        });
+                        userId = created.id;
+
+                        await tx.wallet.create({
+                            data: { userId: userId, balance: 0, currency: 'USD' },
+                        });
                     }
 
-                    const updateData: Prisma.UserUpdateInput = {
-                        telegramId: BigInt(telegramId),
-                        status: UserStatus.active,
-                    };
-                    if (!invite.user.username && normalizedUsername) {
-                        updateData.username = normalizedUsername;
-                    }
+                    await this.ensureRoleGrant(tx, userId, invite.intendedRole);
 
-                    const user = await tx.user.update({
-                        where: { id: invite.userId },
-                        data: updateData,
+                    const userWithRoles = await tx.user.findUnique({
+                        where: { id: userId },
+                        include: { roleGrants: { select: { role: true } } },
                     });
+                    if (!userWithRoles) {
+                        throw new BadRequestException('User not found after invite link');
+                    }
 
                     await tx.userInvite.update({
                         where: { id: invite.id },
-                        data: { usedAt: now },
+                        data: { usedAt: now, usedByUserId: userId },
                     });
 
                     await tx.userAuditLog.create({
                         data: {
-                            userId: invite.userId,
+                            userId: userId,
                             action: 'telegram_linked_from_invite',
                             metadata: {
                                 inviteId: invite.id,
@@ -400,7 +443,7 @@ export class AuthService {
                         },
                     });
 
-                    return { user, idempotent: false };
+                    return { user: userWithRoles, idempotent: false };
                 });
 
                 this.logger.log(
@@ -423,6 +466,7 @@ export class AuthService {
                         id: user.id,
                         telegramId: user.telegramId?.toString() ?? null,
                         role: user.role,
+                        roles: this.extractRoles(user),
                         username: user.username,
                         status: user.status,
                     },
@@ -447,6 +491,7 @@ export class AuthService {
 
         const existing = await this.prisma.user.findUnique({
             where: { telegramId: BigInt(telegramId) },
+            include: { roleGrants: { select: { role: true } } },
         });
 
         if (existing) {
@@ -475,6 +520,7 @@ export class AuthService {
                     id: existing.id,
                     telegramId: existing.telegramId?.toString() ?? null,
                     role: existing.role,
+                    roles: this.extractRoles(existing),
                     username: existing.username,
                     status: UserStatus.active,
                 },
@@ -498,6 +544,8 @@ export class AuthService {
                     },
                 });
 
+                await this.ensureRoleGrant(tx, user.id, UserRole.advertiser);
+
                 await tx.wallet.create({
                     data: { userId: user.id, balance: 0, currency: 'USD' },
                 });
@@ -520,6 +568,7 @@ export class AuthService {
                     id: created.id,
                     telegramId: created.telegramId?.toString() ?? null,
                     role: created.role,
+                    roles: [UserRole.advertiser],
                     username: created.username,
                     status: created.status,
                 },
@@ -530,6 +579,7 @@ export class AuthService {
             if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
                 const existingUser = await this.prisma.user.findUnique({
                     where: { telegramId: BigInt(telegramId) },
+                    include: { roleGrants: { select: { role: true } } },
                 });
                 if (existingUser) {
                     return {
@@ -539,6 +589,7 @@ export class AuthService {
                             id: existingUser.id,
                             telegramId: existingUser.telegramId?.toString() ?? null,
                             role: existingUser.role,
+                            roles: this.extractRoles(existingUser),
                             username: existingUser.username,
                             status: existingUser.status,
                         },
@@ -561,6 +612,7 @@ export class AuthService {
                 role: UserRole.super_admin,
                 username: { equals: normalized, mode: 'insensitive' },
             },
+            include: { roleGrants: { select: { role: true } } },
         });
 
         const user = superAdmin
@@ -569,6 +621,7 @@ export class AuthService {
                 const telegramId = (await this.resolveTelegramIdentity(identifier)).telegramId;
                 return this.prisma.user.findUnique({
                     where: { telegramId: BigInt(telegramId) },
+                    include: { roleGrants: { select: { role: true } } },
                 });
             })();
 
@@ -592,6 +645,7 @@ export class AuthService {
                 id: user.id,
                 telegramId: user.telegramId?.toString() ?? null,
                 role: user.role,
+                roles: this.extractRoles(user),
                 username: user.username,
             },
         };
@@ -657,7 +711,15 @@ export class AuthService {
     async me(userId: string) {
         const user = await this.prisma.user.findUnique({
             where: { id: userId },
-            select: { id: true, telegramId: true, username: true, role: true, status: true, createdAt: true },
+            select: {
+                id: true,
+                telegramId: true,
+                username: true,
+                role: true,
+                status: true,
+                createdAt: true,
+                roleGrants: { select: { role: true } },
+            },
         });
         if (!user) throw new UnauthorizedException('User not found');
 
@@ -666,6 +728,7 @@ export class AuthService {
             telegramId: user.telegramId?.toString() ?? null,
             username: user.username,
             role: user.role,
+            roles: this.extractRoles(user),
             status: user.status,
             createdAt: user.createdAt,
         };
@@ -725,6 +788,13 @@ export class AuthService {
                 },
             });
 
+            await this.ensureRoleGrant(tx, updated.id, role);
+
+            const roleGrants = await tx.userRoleGrant.findMany({
+                where: { userId: updated.id },
+                select: { role: true },
+            });
+
             await tx.userAuditLog.create({
                 data: {
                     userId: actorId,
@@ -743,6 +813,7 @@ export class AuthService {
                 user: {
                     id: updated.id,
                     role: updated.role,
+                    roles: this.extractRoles({ role: updated.role, roleGrants }),
                     telegramId: updated.telegramId?.toString() ?? null,
                     username: updated.username,
                 },

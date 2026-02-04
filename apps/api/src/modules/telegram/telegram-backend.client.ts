@@ -116,6 +116,7 @@ export class TelegramBackendClient {
                 id: string;
                 telegramId: string | null;
                 role: string;
+                roles: string[];
                 username: string | null;
                 status: string;
             };
@@ -136,7 +137,7 @@ export class TelegramBackendClient {
 
     ensureAdvertiser(params: { telegramId: string }) {
         return this.request<{
-            user: { id: string; role: string; telegramId: string | null; username: string | null };
+            user: { id: string; role: string; roles: string[]; telegramId: string | null; username: string | null };
         }>('/internal/telegram/advertiser/ensure', {
             method: 'POST',
             body: params,
@@ -145,7 +146,7 @@ export class TelegramBackendClient {
 
     ensurePublisher(params: { telegramId: string }) {
         return this.request<{
-            user: { id: string; role: string; telegramId: string | null; username: string | null };
+            user: { id: string; role: string; roles: string[]; telegramId: string | null; username: string | null };
         }>('/internal/telegram/publisher/ensure', {
             method: 'POST',
             body: params,

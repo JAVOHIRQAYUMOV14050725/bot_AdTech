@@ -79,10 +79,11 @@ export class CampaignsService {
     async createCampaign(userId: string, dto: CreateCampaignDto) {
         const user = await this.prisma.user.findUnique({
             where: { id: userId },
-            select: { role: true },
+            select: { role: true, roleGrants: { select: { role: true } } },
         });
 
-        if (!user || user.role !== UserRole.advertiser) {
+        const roles = user ? new Set([user.role, ...user.roleGrants.map((grant) => grant.role)]) : null;
+        if (!roles || !roles.has(UserRole.advertiser)) {
             throw new BadRequestException('Only advertisers can create campaigns');
         }
 

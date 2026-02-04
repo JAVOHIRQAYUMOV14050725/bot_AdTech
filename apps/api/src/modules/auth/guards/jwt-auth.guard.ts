@@ -51,6 +51,7 @@ export class JwtAuthGuard implements CanActivate {
                     role: true,
                     telegramId: true,
                     status: true,
+                    roleGrants: { select: { role: true } },
                 },
             });
 
@@ -61,6 +62,7 @@ export class JwtAuthGuard implements CanActivate {
             request.user = {
                 id: user.id,
                 role: user.role,
+                roles: Array.from(new Set([user.role, ...user.roleGrants.map((grant) => grant.role)])),
                 telegramId: user.telegramId,
             };
 

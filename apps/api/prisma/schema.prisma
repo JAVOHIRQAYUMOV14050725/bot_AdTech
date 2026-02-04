@@ -183,7 +183,8 @@ model User {
   moderatedTargets  CampaignTarget[] @relation("CampaignTargetModerator")
   paymentIntents    PaymentIntent[]
   withdrawalIntents WithdrawalIntent[]
-  invites           UserInvite[]
+  usedInvites       UserInvite[]
+  roleGrants        UserRoleGrant[]
   bootstrapState    BootstrapState?
 
   @@index([telegramId])
@@ -207,18 +208,33 @@ model BootstrapState {
 
 model UserInvite {
   id        String   @id @default(uuid())
-  userId    String
   tokenHash String   @unique
   expiresAt DateTime
   usedAt    DateTime?
+  intendedRole UserRole
+  intendedUsernameNormalized String?
+  usedByUserId String?
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  usedByUser User? @relation(fields: [usedByUserId], references: [id])
 
-  @@index([userId, createdAt])
+  @@index([usedByUserId, createdAt])
+  @@index([intendedRole, intendedUsernameNormalized, usedAt])
   @@index([expiresAt])
   @@index([usedAt])
   @@map("user_invites")
+}
+
+model UserRoleGrant {
+  userId    String
+  role      UserRole
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@index([role])
+  @@map("user_role_grants")
 }
 
 

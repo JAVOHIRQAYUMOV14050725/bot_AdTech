@@ -21,7 +21,7 @@ import { AppConfig, appConfig } from '@/config/app.config';
 import { ConfigType } from '@nestjs/config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
 
-type Actor = { id: string; role: UserRole };
+type Actor = { id: string; role: UserRole; roles?: UserRole[] };
 
 @Injectable()
 export class ChannelsService {
@@ -204,7 +204,8 @@ export class ChannelsService {
 
 
     async createChannelForOwner(actor: Actor, dto: AdminCreateChannelDto) {
-        if (actor.role !== UserRole.admin && actor.role !== UserRole.super_admin) {
+        const actorRoles = actor.roles ?? [actor.role];
+        if (!actorRoles.includes(UserRole.admin) && !actorRoles.includes(UserRole.super_admin)) {
             throw new ForbiddenException('Only admin or super_admin can create channel for owner');
         }
 
@@ -222,11 +223,12 @@ export class ChannelsService {
 
         const owner = await this.prisma.user.findUnique({
             where: { telegramId: BigInt(ownerResolved.value.telegramId) },
-            select: { id: true, role: true },
+            select: { id: true, role: true, roleGrants: { select: { role: true } } },
         });
 
         if (!owner) throw new NotFoundException('Owner not found');
-        if (owner.role !== UserRole.publisher) {
+        const ownerRoles = new Set([owner.role, ...owner.roleGrants.map((grant) => grant.role)]);
+        if (!ownerRoles.has(UserRole.publisher)) {
             throw new BadRequestException('Owner must be a publisher');
         }
 
@@ -375,7 +377,8 @@ export class ChannelsService {
         this.assertDebugEnabledOr404();
 
         // Optional: double-defense (controller should enforce)
-        if (actor.role !== UserRole.super_admin) {
+        const actorRoles = actor.roles ?? [actor.role];
+        if (!actorRoles.includes(UserRole.super_admin)) {
             throw new NotFoundException('Not Found');
         }
 

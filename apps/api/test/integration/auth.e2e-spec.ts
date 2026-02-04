@@ -122,6 +122,9 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
                 superAdminKey: 'super_admin',
             },
         });
+        await prisma.userRoleGrant.create({
+            data: { userId: user.id, role: UserRole.super_admin },
+        });
 
         const result = await authService.login({
             identifier: 'superadmin',
@@ -142,9 +145,11 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         expect(invite.deepLink).toContain('adtech_bot');
         expect(invite.deepLink).toContain(invite.inviteToken);
 
-        const before = await prisma.user.findUnique({ where: { id: invite.user.id } });
-        expect(before?.status).toBe(UserStatus.pending_telegram_link);
-        expect(before?.telegramId).toBeNull();
+        const inviteRow = await prisma.userInvite.findFirst({
+            where: { intendedUsernameNormalized: 'publisher1' },
+        });
+        expect(inviteRow?.intendedRole).toBe(UserRole.publisher);
+        expect(inviteRow?.intendedUsernameNormalized).toBe('publisher1');
 
         const linked = await authService.handleTelegramStart({
             telegramId: '9001',
@@ -152,15 +157,16 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
             startPayload: invite.inviteToken,
         });
 
-        const after = await prisma.user.findUnique({ where: { id: invite.user.id } });
-        const inviteRow = await prisma.userInvite.findFirst({
-            where: { userId: invite.user.id },
+        const after = await prisma.user.findUnique({ where: { telegramId: BigInt(9001) } });
+        const usedInvite = await prisma.userInvite.findFirst({
+            where: { intendedUsernameNormalized: 'publisher1' },
         });
 
         expect(linked.user.role).toBe(UserRole.publisher);
+        expect(linked.user.roles).toEqual(expect.arrayContaining([UserRole.publisher]));
         expect(linked.user.status).toBe(UserStatus.active);
         expect(after?.telegramId?.toString()).toBe('9001');
-        expect(inviteRow?.usedAt).not.toBeNull();
+        expect(usedInvite?.usedAt).not.toBeNull();
     });
 
     it('is idempotent for repeated telegram start', async () => {
@@ -181,7 +187,7 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
             startPayload: invite.inviteToken,
         });
 
-        const invites = await prisma.userInvite.findMany({ where: { userId: invite.user.id } });
+        const invites = await prisma.userInvite.findMany({ where: { intendedUsernameNormalized: 'publisher2' } });
 
         expect(first.user.id).toBe(second.user.id);
         expect(first.idempotent).toBe(false);
@@ -189,24 +195,106 @@ describe('Auth integration (bootstrap/login/invite/telegram)', () => {
         expect(invites).toHaveLength(1);
     });
 
-    it('rejects duplicate telegramId for another invite', async () => {
+    it('creates advertiser on /start only once (idempotent)', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const first = await authService.handleTelegramStart({
+            telegramId: '9201',
+            username: '@adv_user',
+            startPayload: null,
+        });
+        const second = await authService.handleTelegramStart({
+            telegramId: '9201',
+            username: '@adv_user',
+            startPayload: null,
+        });
+
+        const users = await prisma.user.findMany({ where: { telegramId: BigInt(9201) } });
+        const grants = await prisma.userRoleGrant.findMany({ where: { userId: users[0].id } });
+
+        expect(first.created).toBe(true);
+        expect(second.idempotent).toBe(true);
+        expect(users).toHaveLength(1);
+        expect(grants.map((grant) => grant.role)).toContain(UserRole.advertiser);
+    });
+
+    it('links publisher invite to existing advertiser user without duplicates', async () => {
         if (!dbAvailable) {
             return;
         }
         await authService.handleTelegramStart({
-            telegramId: '9201',
-            username: '@pub3',
+            telegramId: '9301',
+            username: '@advertiser_one',
             startPayload: null,
         });
 
-        const invite = await authService.invitePublisher({ username: 'publisher3' });
+        const invite = await authService.invitePublisher({ username: '@PublisherOne' });
 
-        await expect(
-            authService.handleTelegramStart({
-                telegramId: '9201',
-                username: '@pub3',
-                startPayload: invite.inviteToken,
-            }),
-        ).rejects.toThrow(ConflictException);
+        const linked = await authService.handleTelegramStart({
+            telegramId: '9301',
+            username: '@PublisherOne',
+            startPayload: invite.inviteToken,
+        });
+
+        const users = await prisma.user.findMany({ where: { telegramId: BigInt(9301) } });
+        const grants = await prisma.userRoleGrant.findMany({ where: { userId: users[0].id } });
+        const invites = await prisma.userInvite.findMany({ where: { intendedUsernameNormalized: 'publisherone' } });
+
+        expect(users).toHaveLength(1);
+        expect(invites).toHaveLength(1);
+        expect(linked.user.roles).toEqual(expect.arrayContaining([UserRole.advertiser, UserRole.publisher]));
+        expect(grants.map((grant) => grant.role)).toEqual(expect.arrayContaining([UserRole.advertiser, UserRole.publisher]));
+    });
+
+    it('dedupes repeated invites and links idempotently', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const firstInvite = await authService.invitePublisher({ username: '@repeat_user' });
+        const secondInvite = await authService.invitePublisher({ username: '@repeat_user' });
+
+        const invites = await prisma.userInvite.findMany({ where: { intendedUsernameNormalized: 'repeat_user' } });
+        expect(invites).toHaveLength(1);
+
+        const firstLink = await authService.handleTelegramStart({
+            telegramId: '9401',
+            username: '@repeat_user',
+            startPayload: secondInvite.inviteToken,
+        });
+        const secondLink = await authService.handleTelegramStart({
+            telegramId: '9401',
+            username: '@repeat_user',
+            startPayload: secondInvite.inviteToken,
+        });
+
+        const users = await prisma.user.findMany({ where: { telegramId: BigInt(9401) } });
+        const usedInvite = await prisma.userInvite.findFirst({ where: { intendedUsernameNormalized: 'repeat_user' } });
+
+        expect(firstInvite.inviteToken).not.toBe(secondInvite.inviteToken);
+        expect(firstLink.idempotent).toBe(false);
+        expect(secondLink.idempotent).toBe(true);
+        expect(users).toHaveLength(1);
+        expect(usedInvite?.usedAt).not.toBeNull();
+    });
+
+    it('normalizes usernames with @ and casing', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+        const invite = await authService.invitePublisher({ username: ' @TeSt_User ' });
+        const inviteRow = await prisma.userInvite.findUnique({ where: { id: invite.invite.id } });
+
+        expect(invite.inviteToken).toBeDefined();
+        expect(inviteRow?.intendedUsernameNormalized).toBe('test_user');
+
+        await authService.handleTelegramStart({
+            telegramId: '9501',
+            username: '@TeSt_User',
+            startPayload: invite.inviteToken,
+        });
+
+        const user = await prisma.user.findUnique({ where: { telegramId: BigInt(9501) } });
+        expect(user?.username).toBe('test_user');
     });
 });

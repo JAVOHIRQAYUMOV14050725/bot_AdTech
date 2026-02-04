@@ -38,14 +38,14 @@ export class StartHandler {
                 startPayload,
             });
 
-            const role = response.user.role;
-            if (role === 'publisher') {
+            const roles = response.user.roles ?? [response.user.role];
+            if (roles.includes('publisher')) {
                 await this.fsm.set(userId, 'publisher', TelegramState.PUB_DASHBOARD);
                 this.logger.log({
                     event: 'user_state_recovered',
                     userId: response.user.id,
                     telegramUserId: userId,
-                    role,
+                    role: 'publisher',
                     linkedInvite: response.linkedInvite,
                 });
                 const intro = response.created || response.linkedInvite
@@ -58,13 +58,13 @@ export class StartHandler {
                 return;
             }
 
-            if (role === 'advertiser') {
+            if (roles.includes('advertiser')) {
                 await this.fsm.set(userId, 'advertiser', TelegramState.ADV_DASHBOARD);
                 this.logger.log({
                     event: 'user_state_recovered',
                     userId: response.user.id,
                     telegramUserId: userId,
-                    role,
+                    role: 'advertiser',
                     linkedInvite: response.linkedInvite,
                 });
                 const intro = response.created ? '👋 Welcome to AdTech!' : '✅ Welcome back!';
@@ -80,7 +80,7 @@ export class StartHandler {
                 event: 'user_state_recovered',
                 userId: response.user.id,
                 telegramUserId: userId,
-                role,
+                role: response.user.role,
                 linkedInvite: response.linkedInvite,
             });
             await ctx.reply('✅ Welcome back! Admin mode enabled.');

@@ -29,7 +29,11 @@ export class RolesGuard implements CanActivate {
             throw new UnauthorizedException('Authentication required');
         }
 
-        if (!requiredRoles.includes(user.role)) {
+        const roles: UserRole[] = Array.isArray(user.roles) && user.roles.length > 0
+            ? user.roles
+            : [user.role];
+
+        if (!requiredRoles.some((role) => roles.includes(role))) {
             throw new ForbiddenException('Insufficient role');
         }
 

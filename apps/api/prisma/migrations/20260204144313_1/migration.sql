@@ -89,13 +89,24 @@ CREATE TABLE "bootstrap_state" (
 -- CreateTable
 CREATE TABLE "user_invites" (
     "id" TEXT NOT NULL,
-    "userId" TEXT NOT NULL,
     "tokenHash" TEXT NOT NULL,
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "usedAt" TIMESTAMP(3),
+    "intendedRole" "UserRole" NOT NULL,
+    "intendedUsernameNormalized" TEXT,
+    "usedByUserId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "user_invites_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "user_role_grants" (
+    "userId" TEXT NOT NULL,
+    "role" "UserRole" NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "user_role_grants_pkey" PRIMARY KEY ("userId","role")
 );
 
 -- CreateTable
@@ -515,13 +526,19 @@ CREATE UNIQUE INDEX "bootstrap_state_superAdminUserId_key" ON "bootstrap_state"(
 CREATE UNIQUE INDEX "user_invites_tokenHash_key" ON "user_invites"("tokenHash");
 
 -- CreateIndex
-CREATE INDEX "user_invites_userId_createdAt_idx" ON "user_invites"("userId", "createdAt");
+CREATE INDEX "user_invites_usedByUserId_createdAt_idx" ON "user_invites"("usedByUserId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "user_invites_intendedRole_intendedUsernameNormalized_usedAt_idx" ON "user_invites"("intendedRole", "intendedUsernameNormalized", "usedAt");
 
 -- CreateIndex
 CREATE INDEX "user_invites_expiresAt_idx" ON "user_invites"("expiresAt");
 
 -- CreateIndex
 CREATE INDEX "user_invites_usedAt_idx" ON "user_invites"("usedAt");
+
+-- CreateIndex
+CREATE INDEX "user_role_grants_role_idx" ON "user_role_grants"("role");
 
 -- CreateIndex
 CREATE INDEX "user_audit_logs_userId_idx" ON "user_audit_logs"("userId");
@@ -689,7 +706,10 @@ CREATE INDEX "kill_switch_events_key_createdAt_idx" ON "kill_switch_events"("key
 ALTER TABLE "bootstrap_state" ADD CONSTRAINT "bootstrap_state_superAdminUserId_fkey" FOREIGN KEY ("superAdminUserId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "user_invites" ADD CONSTRAINT "user_invites_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "user_invites" ADD CONSTRAINT "user_invites_usedByUserId_fkey" FOREIGN KEY ("usedByUserId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "user_role_grants" ADD CONSTRAINT "user_role_grants_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "user_audit_logs" ADD CONSTRAINT "user_audit_logs_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

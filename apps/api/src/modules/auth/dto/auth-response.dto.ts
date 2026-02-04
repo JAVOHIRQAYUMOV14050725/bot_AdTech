@@ -12,6 +12,9 @@ export class AuthUserDto {
     @ApiProperty({ enum: UserRole, example: UserRole.advertiser })
     role!: UserRole;
 
+    @ApiProperty({ isArray: true, enum: UserRole, example: [UserRole.advertiser] })
+    roles!: UserRole[];
+
     @ApiPropertyOptional({ example: 'channel_handle' })
     username?: string | null;
 }

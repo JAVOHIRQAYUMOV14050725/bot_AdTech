@@ -26,16 +26,15 @@ export class ResolveDisputeUseCase {
         return this.prisma.$transaction(async (tx) => {
             const admin = await tx.user.findUnique({
                 where: { id: params.adminId },
+                include: { roleGrants: { select: { role: true } } },
             });
 
             if (!admin) {
                 throw new NotFoundException('Admin not found');
             }
 
-            if (
-                admin.role !== UserRole.admin
-                && admin.role !== UserRole.super_admin
-            ) {
+            const roles = new Set([admin.role, ...admin.roleGrants.map((grant) => grant.role)]);
+            if (!roles.has(UserRole.admin) && !roles.has(UserRole.super_admin)) {
                 throw new BadRequestException('Admin privileges required');
             }
 

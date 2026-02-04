@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, UnauthorizedException, ForbiddenException, Inject } from '@nestjs/common';
+import {
+    BadRequestException,
+    Injectable,
+    UnauthorizedException,
+    ForbiddenException,
+    Inject,
+    ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { PUBLIC_ROLES, RegisterDto } from './dto/register.dto';
@@ -44,7 +51,16 @@ export class AuthService {
         return bcrypt.hash(token, rounds);
     }
 
+    private async hashPassword(password: string) {
+        const rounds = this.authConfig.bcryptSaltRounds;
+        return bcrypt.hash(password, rounds);
+    }
+
     private hashInviteToken(token: string) {
+        return createHash('sha256').update(token).digest('hex');
+    }
+
+    private hashBootstrapToken(token: string) {
         return createHash('sha256').update(token).digest('hex');
     }
 
@@ -112,12 +128,19 @@ export class AuthService {
             throw new BadRequestException('Only publisher invites can be created here.');
         }
 
+        return this.invitePublisher({ username: undefined });
+    }
+
+    async invitePublisher(params: { username?: string }) {
+        const { username } = params;
+
         const { user, inviteToken } = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
                 data: {
                     telegramId: null,
-                    role,
+                    role: UserRole.publisher,
                     status: UserStatus.pending_telegram_link,
+                    username: username ?? null,
                 },
             });
 
@@ -138,7 +161,7 @@ export class AuthService {
                 data: {
                     userId: created.id,
                     action: 'user_invited',
-                    metadata: { role, status: UserStatus.pending_telegram_link },
+                    metadata: { role: UserRole.publisher, status: UserStatus.pending_telegram_link },
                 },
             });
 
@@ -157,42 +180,42 @@ export class AuthService {
     }
 
     async bootstrapSuperAdmin(dto: BootstrapSuperAdminDto) {
-        const bootstrapSecret = this.authConfig.bootstrapSecret;
-        if (!bootstrapSecret) {
-            throw new BadRequestException('Bootstrap secret not configured');
+        const bootstrapToken = this.authConfig.bootstrapToken;
+        if (!bootstrapToken) {
+            throw new BadRequestException('Bootstrap token not configured');
         }
 
-        if (dto.bootstrapSecret !== bootstrapSecret) {
-            throw new ForbiddenException('Invalid bootstrap secret');
+        const providedHash = this.hashBootstrapToken(dto.bootstrapSecret);
+        const expectedHash = this.hashBootstrapToken(bootstrapToken);
+        if (providedHash !== expectedHash) {
+            throw new ForbiddenException('Invalid bootstrap token');
+        }
+
+        const existingState = await this.prisma.bootstrapState.findUnique({
+            where: { id: 1 },
+        });
+        if (existingState) {
+            throw new ConflictException('Super admin already bootstrapped');
         }
 
         const existingSuperAdmin = await this.prisma.user.findFirst({
-            where: { role: UserRole.super_admin },
+            where: { superAdminKey: 'super_admin' },
             select: { id: true },
         });
 
         if (existingSuperAdmin) {
-            throw new BadRequestException('Super admin already exists');
+            throw new ConflictException('Super admin already exists');
         }
 
-        const resolvedIdentity = await this.resolveTelegramIdentity(dto.identifier);
-        const telegramId = resolvedIdentity.telegramId;
-        const existing = await this.prisma.user.findUnique({
-            where: { telegramId: BigInt(telegramId) },
-            select: { id: true },
-        });
-        if (existing) {
-            throw new BadRequestException('User already exists');
-        }
-
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const passwordHash = await this.hashPassword(dto.password);
 
         const user = await this.prisma.$transaction(async (tx) => {
             const created = await tx.user.create({
                 data: {
-                    telegramId: BigInt(telegramId),
-                    username: dto.username ?? resolvedIdentity.username,
+                    telegramId: null,
+                    username: dto.username,
                     role: UserRole.super_admin,
+                    superAdminKey: 'super_admin',
                     status: UserStatus.active,
                     passwordHash,
                     passwordUpdatedAt: new Date(),
@@ -203,11 +226,20 @@ export class AuthService {
                 data: { userId: created.id, balance: 0, currency: 'USD' },
             });
 
+            await tx.bootstrapState.create({
+                data: {
+                    id: 1,
+                    bootstrappedAt: new Date(),
+                    superAdminUserId: created.id,
+                    bootstrapTokenHash: expectedHash,
+                },
+            });
+
             await tx.userAuditLog.create({
                 data: {
                     userId: created.id,
                     action: 'super_admin_bootstrap',
-                    metadata: { via: 'bootstrap_secret' },
+                    metadata: { via: 'bootstrap_token' },
                 },
             });
 
@@ -333,6 +365,17 @@ export class AuthService {
                     where: { id: existing.id },
                     data: { status: UserStatus.active },
                 });
+
+                await this.prisma.userAuditLog.create({
+                    data: {
+                        userId: existing.id,
+                        action: 'telegram_linked',
+                        metadata: {
+                            telegramId,
+                            previousStatus: existing.status,
+                        },
+                    },
+                });
             }
 
             return {
@@ -346,6 +389,10 @@ export class AuthService {
                 created: false,
                 linkedInvite: false,
             };
+        }
+
+        if (!this.authConfig.allowPublicAdvertisers) {
+            throw new ForbiddenException('Public advertiser signups are disabled. Please request an invite.');
         }
 
         const created = await this.prisma.$transaction(async (tx) => {
@@ -387,13 +434,32 @@ export class AuthService {
     }
 
     async login(dto: LoginDto) {
-        const telegramId = (await this.resolveTelegramIdentity(dto.identifier)).telegramId;
+        const identifier = dto.identifier.trim();
+        const normalized = identifier.startsWith('@') ? identifier.slice(1) : identifier;
 
-        const user = await this.prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
+        const superAdmin = await this.prisma.user.findFirst({
+            where: {
+                role: UserRole.super_admin,
+                username: { equals: normalized, mode: 'insensitive' },
+            },
+        });
+
+        const user = superAdmin
+            ? superAdmin
+            : await (async () => {
+                const telegramId = (await this.resolveTelegramIdentity(identifier)).telegramId;
+                return this.prisma.user.findUnique({
+                    where: { telegramId: BigInt(telegramId) },
+                });
+            })();
+
         if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
 
         const matches = await bcrypt.compare(dto.password, user.passwordHash);
         if (!matches) throw new UnauthorizedException('Invalid credentials');
+        if (user.role !== UserRole.super_admin && !user.telegramId) {
+            throw new UnauthorizedException('Telegram account not linked. Please start the bot to link Telegram.');
+        }
         if (user.status !== UserStatus.active) throw new UnauthorizedException('User is not active');
 
         const accessToken = this.signAccessToken(user);
@@ -492,7 +558,7 @@ export class AuthService {
         const user = await this.prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
         if (!user) throw new BadRequestException('User not found');
 
-        const passwordHash = await bcrypt.hash(newPassword, 10);
+        const passwordHash = await this.hashPassword(newPassword);
 
         await this.prisma.user.update({
             where: { id: user.id },
@@ -505,5 +571,63 @@ export class AuthService {
         });
 
         return { ok: true };
+    }
+
+    async changeUserRole(params: { actorId: string; userId: string; role: UserRole; reason?: string }) {
+        const { actorId, userId, role, reason } = params;
+
+        return this.prisma.$transaction(async (tx) => {
+            const target = await tx.user.findUnique({
+                where: { id: userId },
+            });
+            if (!target) {
+                throw new BadRequestException('User not found');
+            }
+
+            if (target.role === role) {
+                return { ok: true, idempotent: true };
+            }
+
+            if (role === UserRole.super_admin) {
+                const existing = await tx.user.findFirst({
+                    where: { superAdminKey: 'super_admin' },
+                    select: { id: true },
+                });
+                if (existing) {
+                    throw new ConflictException('Super admin already exists');
+                }
+            }
+
+            const updated = await tx.user.update({
+                where: { id: userId },
+                data: {
+                    role,
+                    superAdminKey: role === UserRole.super_admin ? 'super_admin' : null,
+                },
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: actorId,
+                    action: 'role_changed',
+                    metadata: {
+                        targetUserId: userId,
+                        from: target.role,
+                        to: role,
+                        reason: reason ?? null,
+                    },
+                },
+            });
+
+            return {
+                ok: true,
+                user: {
+                    id: updated.id,
+                    role: updated.role,
+                    telegramId: updated.telegramId?.toString() ?? null,
+                    username: updated.username,
+                },
+            };
+        });
     }
 }

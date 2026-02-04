@@ -1,22 +1,21 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
 
 export class BootstrapSuperAdminDto {
-    @ApiProperty({
-        example: '@username',
-        description:
-            'Telegram @username or t.me link. The user must have started the Telegram bot with /start first.',
-    })
-    @TrimString()
-    @IsString()
-    @IsNotEmpty()
-    identifier!: string;
-
     @ApiProperty({ example: 'superadmin' })
     @IsString()
     @IsNotEmpty()
     username!: string;
+
+    @ApiPropertyOptional({
+        example: '@optionalTelegramUsername',
+        description: 'Optional identifier for logging only. Telegram is not required for bootstrap.',
+    })
+    @TrimString()
+    @IsOptional()
+    @IsString()
+    identifier?: string;
 
     @ApiProperty({ example: 'S3cureP@ssw0rd' })
     @IsString()

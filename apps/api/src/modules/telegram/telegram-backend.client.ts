@@ -112,7 +112,7 @@ export class TelegramBackendClient {
             };
             created: boolean;
             linkedInvite: boolean;
-        }>('/internal/telegram/start', {
+        }>('/auth/telegram/start', {
             method: 'POST',
             body: {
                 telegramId: params.telegramId,
@@ -174,6 +174,16 @@ export class TelegramBackendClient {
     }) {
         return this.request<{ ok: boolean; message: string }>(
             '/internal/telegram/publisher/verify-channel',
+            { method: 'POST', body: params },
+        );
+    }
+
+    verifyPublisherPrivateChannel(params: {
+        publisherId: string;
+        telegramUserId: string;
+    }) {
+        return this.request<{ ok: boolean; message: string }>(
+            '/internal/telegram/publisher/verify-private-channel',
             { method: 'POST', body: params },
         );
     }

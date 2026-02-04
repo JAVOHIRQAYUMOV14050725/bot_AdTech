@@ -156,6 +156,7 @@ model User {
   username     String?
   passwordHash String?
   role         UserRole
+  superAdminKey String? @unique
   status       UserStatus @default(active)
 
   // ✅ refresh infra
@@ -183,11 +184,25 @@ model User {
   paymentIntents    PaymentIntent[]
   withdrawalIntents WithdrawalIntent[]
   invites           UserInvite[]
+  bootstrapState    BootstrapState?
 
   @@index([telegramId])
   @@index([status])
   @@index([refreshTokenExpiresAt]) // ✅ ixtiyoriy, lekin foydali
   @@map("users")
+}
+
+model BootstrapState {
+  id                 Int      @id
+  bootstrappedAt     DateTime
+  superAdminUserId   String   @unique
+  bootstrapTokenHash String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  superAdminUser User @relation(fields: [superAdminUserId], references: [id])
+
+  @@map("bootstrap_state")
 }
 
 model UserInvite {

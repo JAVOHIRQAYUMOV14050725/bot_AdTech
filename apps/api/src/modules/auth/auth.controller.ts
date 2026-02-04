@@ -15,6 +15,9 @@ import { BootstrapSuperAdminDto } from './dto/bootstrap-super-admin.dto';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { UserRole } from '@/modules/domain/contracts';
+import { InvitePublisherDto } from './dto/invite-publisher.dto';
+import { TelegramStartDto } from './dto/telegram-start.dto';
+import { ChangeRoleDto } from './dto/change-role.dto';
 
 @Controller('auth')
 @ApiTags('Auth')
@@ -36,12 +39,36 @@ export class AuthController {
         return this.authService.register(dto);
     }
 
+    @Post('invite-publisher')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.admin, UserRole.super_admin)
+    @ApiBearerAuth()
+    @ApiOperation({
+        summary: 'Admin: Invite publisher (pending Telegram link)',
+    })
+    @ApiCreatedResponse({ type: RegisterResponseDto })
+    @ApiStandardErrorResponses()
+    invitePublisher(@Body() dto: InvitePublisherDto) {
+        return this.authService.invitePublisher(dto);
+    }
+
     @Post('bootstrap-super-admin')
     @ApiOperation({ summary: 'Bootstrap initial super admin (one-time)' })
     @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
     bootstrapSuperAdmin(@Body() dto: BootstrapSuperAdminDto) {
         return this.authService.bootstrapSuperAdmin(dto);
+    }
+
+    @Post('telegram/start')
+    @ApiOperation({ summary: 'Telegram: link or create user on /start' })
+    @ApiStandardErrorResponses()
+    telegramStart(@Body() dto: TelegramStartDto) {
+        return this.authService.handleTelegramStart({
+            telegramId: dto.telegramId,
+            username: dto.username ?? null,
+            startPayload: dto.startPayload ?? null,
+        });
     }
 
     @Post('login')
@@ -86,5 +113,20 @@ export class AuthController {
     @ApiOperation({ summary: 'Admin: Reset password by external identifier' })
     resetPassword(@Body() dto: ResetPasswordDto) {
         return this.authService.resetPasswordByIdentifier(dto.identifier, dto.newPassword);
+    }
+
+    @Post('role/change')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.admin, UserRole.super_admin)
+    @ApiBearerAuth()
+    @ApiOperation({ summary: 'Admin: Change user role (audited)' })
+    @ApiStandardErrorResponses()
+    changeRole(@Actor() actor: { id: string }, @Body() dto: ChangeRoleDto) {
+        return this.authService.changeUserRole({
+            actorId: actor.id,
+            userId: dto.userId,
+            role: dto.role,
+            reason: dto.reason,
+        });
     }
 }

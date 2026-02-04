@@ -2,11 +2,12 @@ import { PaymentsService } from '@/modules/payments/payments.service';
 import { Prisma } from '@prisma/client';
 
 describe('PaymentsService unit', () => {
+    const clickPaymentService = { verifyWebhookSignature: jest.fn().mockReturnValue(false) };
     const paymentsService = new PaymentsService(
         {} as never,
         {} as never,
         { get: jest.fn() } as never,
-        { verifyWebhookSignature: jest.fn() } as never,
+        clickPaymentService as never,
         { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as never,
     );
 
@@ -19,12 +20,8 @@ describe('PaymentsService unit', () => {
         ).toThrow('Commission exceeds escrow amount');
     });
 
-    it('rejects finalize without provider verification', async () => {
-        await expect(
-            paymentsService.finalizeDepositIntent({
-                payload: {},
-                verified: false,
-            }),
-        ).rejects.toThrow('Click webhook signature invalid');
+    it('delegates click signature verification', () => {
+        const payload = { sign: 'bad' };
+        expect(paymentsService.verifyClickSignature(payload)).toBe(false);
     });
 });

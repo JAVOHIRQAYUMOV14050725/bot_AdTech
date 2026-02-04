@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 
 export class InternalTelegramVerifyChannelDto {
     @ApiProperty({ example: 'publisher-id' })
@@ -10,7 +10,8 @@ export class InternalTelegramVerifyChannelDto {
     @IsString()
     telegramUserId!: string;
 
-    @ApiProperty({ example: '@channel' })
+    @ApiPropertyOptional({ example: '@channel' })
+    @IsOptional()
     @IsString()
-    identifier!: string;
+    identifier?: string;
 }

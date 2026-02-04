@@ -281,9 +281,9 @@ export class InternalTelegramController {
             return { username, source: 'username' as const };
         }
 
-        const linkMatch = value.match(
-            /^(?:https?:\\/\\/)?t\\.me\\/([^?\\s /] +)(?: \\/.*)?$/i,
-            );
+        const linkMatch = value.match(/^(?:https?:\/\/)?t\.me\/([^?\s/]+)(?:\/.*)?$/i);
+       
+        
         if (linkMatch) {
             const path = linkMatch[1];
             const lowered = path.toLowerCase();

@@ -62,6 +62,7 @@ CREATE TABLE "users" (
     "username" TEXT,
     "passwordHash" TEXT,
     "role" "UserRole" NOT NULL,
+    "superAdminKey" TEXT,
     "status" "UserStatus" NOT NULL DEFAULT 'active',
     "refreshTokenHash" TEXT,
     "refreshTokenExpiresAt" TIMESTAMP(3),
@@ -71,6 +72,18 @@ CREATE TABLE "users" (
     "deletedAt" TIMESTAMP(3),
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "bootstrap_state" (
+    "id" INTEGER NOT NULL,
+    "bootstrappedAt" TIMESTAMP(3) NOT NULL,
+    "superAdminUserId" TEXT NOT NULL,
+    "bootstrapTokenHash" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "bootstrap_state_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -484,6 +497,9 @@ CREATE TABLE "kill_switch_events" (
 CREATE UNIQUE INDEX "users_telegramId_key" ON "users"("telegramId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "users_superAdminKey_key" ON "users"("superAdminKey");
+
+-- CreateIndex
 CREATE INDEX "users_telegramId_idx" ON "users"("telegramId");
 
 -- CreateIndex
@@ -491,6 +507,9 @@ CREATE INDEX "users_status_idx" ON "users"("status");
 
 -- CreateIndex
 CREATE INDEX "users_refreshTokenExpiresAt_idx" ON "users"("refreshTokenExpiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "bootstrap_state_superAdminUserId_key" ON "bootstrap_state"("superAdminUserId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "user_invites_tokenHash_key" ON "user_invites"("tokenHash");
@@ -665,6 +684,9 @@ CREATE INDEX "SystemActionLog_escrowId_idx" ON "SystemActionLog"("escrowId");
 
 -- CreateIndex
 CREATE INDEX "kill_switch_events_key_createdAt_idx" ON "kill_switch_events"("key", "createdAt");
+
+-- AddForeignKey
+ALTER TABLE "bootstrap_state" ADD CONSTRAINT "bootstrap_state_superAdminUserId_fkey" FOREIGN KEY ("superAdminUserId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "user_invites" ADD CONSTRAINT "user_invites_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

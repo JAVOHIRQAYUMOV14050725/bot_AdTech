@@ -15,6 +15,8 @@ export class TelegramBackendClient {
                 baseUrl: this.baseUrl,
                 internalApiTokenSet: Boolean(this.token),
                 internalApiTokenMasked: this.maskToken(this.token),
+                telegramInternalTokenSet: Boolean(this.telegramInternalToken),
+                telegramInternalTokenMasked: this.maskToken(this.telegramInternalToken),
             },
             'TelegramBackendClient',
         );
@@ -30,6 +32,10 @@ export class TelegramBackendClient {
 
     private get token() {
         return this.configService.get<string>('INTERNAL_API_TOKEN', '');
+    }
+
+    private get telegramInternalToken() {
+        return this.configService.get<string>('TELEGRAM_INTERNAL_TOKEN', '');
     }
 
     private maskToken(token: string) {
@@ -51,13 +57,14 @@ export class TelegramBackendClient {
 
     private async request<T>(
         path: string,
-        options: { method: string; body?: unknown },
+        options: { method: string; body?: unknown; headers?: Record<string, string> },
     ): Promise<BackendResponse<T>> {
         const response = await fetch(`${this.baseUrl}${path}`, {
             method: options.method,
             headers: {
                 'Content-Type': 'application/json',
                 'x-internal-token': this.token,
+                ...options.headers,
             },
             body: options.body ? JSON.stringify(options.body) : undefined,
         });
@@ -103,6 +110,8 @@ export class TelegramBackendClient {
         startPayload?: string | null;
     }) {
         return this.request<{
+            ok: boolean;
+            idempotent: boolean;
             user: {
                 id: string;
                 telegramId: string | null;
@@ -114,6 +123,9 @@ export class TelegramBackendClient {
             linkedInvite: boolean;
         }>('/auth/telegram/start', {
             method: 'POST',
+            headers: {
+                'X-Telegram-Internal-Token': this.telegramInternalToken,
+            },
             body: {
                 telegramId: params.telegramId,
                 username: params.username ?? null,

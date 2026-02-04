@@ -1,3 +1,4 @@
+
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
@@ -18,6 +19,7 @@ import { UserRole } from '@/modules/domain/contracts';
 import { InvitePublisherDto } from './dto/invite-publisher.dto';
 import { TelegramStartDto } from './dto/telegram-start.dto';
 import { ChangeRoleDto } from './dto/change-role.dto';
+import { TelegramInternalTokenGuard } from './guards/telegram-internal-token.guard';
 
 @Controller('auth')
 @ApiTags('Auth')
@@ -61,7 +63,13 @@ export class AuthController {
     }
 
     @Post('telegram/start')
-    @ApiOperation({ summary: 'Telegram: link or create user on /start' })
+    @UseGuards(TelegramInternalTokenGuard)
+    @Throttle({ default: { limit: 20, ttl: 60_000 } })
+    @ApiOperation({
+        summary: 'Telegram: link or create user on /start',
+        description:
+            'This endpoint is called only by the Telegram bot. Do not call manually from Swagger. telegramId comes from Telegram update.',
+    })
     @ApiStandardErrorResponses()
     telegramStart(@Body() dto: TelegramStartDto) {
         return this.authService.handleTelegramStart({

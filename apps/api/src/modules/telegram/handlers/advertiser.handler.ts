@@ -6,8 +6,8 @@ import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome } from '../keyboards';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
-import { telegramSafeErrorMessage } from '@/modules/telegram/telegram-error.util';
-import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { telegramSafeErrorMessageWithCorrelation } from '@/modules/telegram/telegram-error.util';
+import { parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 import { TelegramResolvePublisherFailureReason } from '@/modules/telegram/telegram.types';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 
@@ -112,7 +112,7 @@ export class AdvertiserHandler {
                     return ctx.reply(`🔒 Escrow locked\nID: ${adDealId}`);
                 }
             } catch (err) {
-                const message = telegramSafeErrorMessage(err);
+                const message = telegramSafeErrorMessageWithCorrelation(err);
                 this.logger.error({
                     event: 'telegram_addeal_command_failed',
                     command,
@@ -204,7 +204,7 @@ export class AdvertiserHandler {
                     `✅ Deposit intent created\nAmount: $${amount.toFixed(2)}\nPay here: ${intent.paymentUrl ?? 'pending'}`,
                 );
             } catch (err) {
-                const message = telegramSafeErrorMessage(err);
+                const message = telegramSafeErrorMessageWithCorrelation(err);
                 this.logger.error({
                     event: 'telegram_deposit_failed',
                     userId,
@@ -285,7 +285,7 @@ export class AdvertiserHandler {
                     `• Publisher: /submit_proof ${adDeal.id} <proof>`,
                 );
             } catch (err) {
-                const message = telegramSafeErrorMessage(err);
+                const message = telegramSafeErrorMessageWithCorrelation(err);
                 this.logger.error({
                     event: 'telegram_addeal_create_failed',
                     userId,
@@ -314,8 +314,8 @@ export class AdvertiserHandler {
             return null;
         }
 
-        const normalized = normalizeTelegramUsername(trimmed);
-        const identifier = normalized ?? trimmed;
+        const parsed = parseTelegramIdentifier(trimmed);
+        const identifier = parsed.normalized ?? trimmed;
 
         return this.backendClient.resolvePublisher({ identifier });
     }
@@ -328,10 +328,10 @@ export class AdvertiserHandler {
                 return 'This channel isn’t onboarded. Ask the owner to onboard + verify.';
             case 'CHANNEL_NOT_APPROVED':
                 return 'Channel submitted but not approved yet.';
-            case 'OWNER_NOT_PUBLISHER':
-                return 'Owner must complete publisher onboarding.';
-            case 'PUBLISHER_USER_NOT_FOUND':
-                return 'Publisher account not linked yet. Use invite deep link.';
+            case 'CHANNEL_OWNER_NOT_PUBLISHER':
+                return 'Channel owner must complete publisher onboarding.';
+            case 'PUBLISHER_NOT_REGISTERED':
+                return 'Publisher account not registered yet. Use invite deep link.';
             default:
                 return 'Please send a valid @username or t.me link.';
         }
@@ -350,7 +350,7 @@ export class AdvertiserHandler {
                 telegramId: userId.toString(),
             });
         } catch (err) {
-            const message = telegramSafeErrorMessage(err);
+            const message = telegramSafeErrorMessageWithCorrelation(err);
             await ctx.reply(`❌ ${message}`);
             return null;
         }

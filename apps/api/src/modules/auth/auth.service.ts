@@ -20,7 +20,7 @@ import { JwtConfig, jwtConfig } from '@/config/jwt.config';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { assertInviteTokenUsable } from './invite-token.util';
-import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 import { RequestContext } from '@/common/context/request-context';
 
 @Injectable()
@@ -117,16 +117,73 @@ export class AuthService {
 }
 
     private async ensureRoleGrant(
-    tx: Prisma.TransactionClient,
-    userId: string,
-    role: UserRole,
-) {
-    await tx.userRoleGrant.upsert({
-        where: { userId_role: { userId, role } },
-        create: { userId, role },
-        update: {},
-    });
-}
+        tx: Prisma.TransactionClient,
+        userId: string,
+        role: UserRole,
+    ) {
+        const existing = await tx.userRoleGrant.findUnique({
+            where: { userId_role: { userId, role } },
+        });
+        if (existing) {
+            return false;
+        }
+        await tx.userRoleGrant.create({
+            data: { userId, role },
+        });
+        await tx.userAuditLog.create({
+            data: {
+                userId,
+                action: 'role_granted',
+                metadata: { role },
+            },
+        });
+        await this.recordSecurityEvent({
+            tx,
+            event: 'role_granted',
+            actorUserId: userId,
+            metadata: { role },
+        });
+        return true;
+    }
+
+    private async recordSecurityEvent(params: {
+        tx?: Prisma.TransactionClient;
+        event: string;
+        actorUserId?: string | null;
+        telegramId?: string | null;
+        metadata?: Prisma.InputJsonValue;
+    }) {
+        const client = params.tx ?? this.prisma;
+        const correlationId = RequestContext.getCorrelationId() ?? null;
+        await client.securityAuditLog.create({
+            data: {
+                event: params.event,
+                actorUserId: params.actorUserId ?? null,
+                telegramId: params.telegramId ? BigInt(params.telegramId) : null,
+                metadata: params.metadata ?? undefined,
+                correlationId,
+            },
+        });
+    }
+
+    private async upsertTelegramSession(params: { telegramId: string; username?: string | null }) {
+        const normalizedUsername = parseTelegramIdentifier(params.username ?? null).normalized;
+        const updateData: Prisma.TelegramSessionUpdateInput = {
+            lastSeenAt: new Date(),
+        };
+        if (normalizedUsername) {
+            updateData.usernameNormalized = normalizedUsername;
+        }
+        await this.prisma.telegramSession.upsert({
+            where: { telegramId: BigInt(params.telegramId) },
+            create: {
+                telegramId: BigInt(params.telegramId),
+                usernameNormalized: normalizedUsername,
+            },
+            update: updateData,
+        });
+        return normalizedUsername;
+    }
 
     private signAccessToken(user: { id: string; role: UserRole }) {
     return this.jwtService.sign(
@@ -173,7 +230,7 @@ export class AuthService {
     });
 }
 
-    async register(dto: RegisterDto) {
+    async register(dto: RegisterDto, actorId?: string) {
     if (!dto.invite) {
         throw new BadRequestException('Registration is invite-only. Admins must set invite=true.');
     }
@@ -183,27 +240,44 @@ export class AuthService {
         throw new BadRequestException('Only publisher invites can be created here.');
     }
 
-    return this.invitePublisher({ username: undefined });
+    return this.invitePublisher({ username: dto.username, actorId });
 }
 
-    async invitePublisher(params: { username?: string }) {
-    const normalizedUsername = normalizeTelegramUsername(params.username);
+    async invitePublisher(params: { username?: string; actorId?: string }) {
+    const parsedUsername = parseTelegramIdentifier(params.username ?? null);
+    const normalizedUsername = parsedUsername.normalized;
+    if (!normalizedUsername) {
+        throw new BadRequestException('Username is required to create a publisher invite.');
+    }
     const now = new Date();
+    const session = await this.prisma.telegramSession.findFirst({
+        where: { usernameNormalized: normalizedUsername },
+        orderBy: { lastSeenAt: 'desc' },
+    });
+    if (!session) {
+        await this.recordSecurityEvent({
+            event: 'invite_rejected_no_session',
+            actorUserId: params.actorId ?? null,
+            metadata: { intendedUsernameNormalized: normalizedUsername },
+        });
+        throw new ConflictException({
+            code: 'USER_MUST_START_BOT_FIRST',
+            message: 'User must start the bot before an invite can be issued.',
+        });
+    }
 
     const { invite, inviteToken } = await this.prisma.$transaction(async (tx) => {
         const expiresAt = this.getInviteExpiry();
 
-        const existingInvite = normalizedUsername
-            ? await tx.userInvite.findFirst({
-                where: {
-                    intendedRole: UserRole.publisher,
-                    intendedUsernameNormalized: normalizedUsername,
-                    usedAt: null,
-                    expiresAt: { gt: now },
-                },
-                orderBy: { createdAt: 'desc' },
-            })
-            : null;
+        const existingInvite = await tx.userInvite.findFirst({
+            where: {
+                intendedRole: UserRole.publisher,
+                intendedUsernameNormalized: normalizedUsername,
+                usedAt: null,
+                expiresAt: { gt: now },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
 
         // Idempotent behavior: if an unexpired, unused invite exists for the same username,
         // return the existing invite (do not rotate its expiry) and reuse its token.
@@ -217,8 +291,19 @@ export class AuthService {
                     data: {
                         tokenHash: expectedHash,
                         intendedUsernameNormalized: normalizedUsername,
+                        boundTelegramId: existingInvite.boundTelegramId ?? session.telegramId,
                     },
                 });
+            await this.recordSecurityEvent({
+                tx,
+                event: 'invite_reused',
+                actorUserId: params.actorId ?? null,
+                telegramId: session.telegramId.toString(),
+                metadata: {
+                    inviteId: invite.id,
+                    intendedUsernameNormalized: normalizedUsername,
+                },
+            });
             return { invite, inviteToken: existingToken };
         }
 
@@ -232,6 +317,18 @@ export class AuthService {
                 tokenHash,
                 expiresAt,
                 intendedRole: UserRole.publisher,
+                intendedUsernameNormalized: normalizedUsername,
+                boundTelegramId: session.telegramId,
+            },
+        });
+
+        await this.recordSecurityEvent({
+            tx,
+            event: 'invite_created',
+            actorUserId: params.actorId ?? null,
+            telegramId: session.telegramId.toString(),
+            metadata: {
+                inviteId: invite.id,
                 intendedUsernameNormalized: normalizedUsername,
             },
         });
@@ -315,6 +412,12 @@ export class AuthService {
                 metadata: { via: 'bootstrap_token' },
             },
         });
+        await this.recordSecurityEvent({
+            tx,
+            event: 'super_admin_bootstrap',
+            actorUserId: created.id,
+            metadata: { via: 'bootstrap_token' },
+        });
 
         return created;
     });
@@ -341,7 +444,10 @@ export class AuthService {
     if (!telegramId) {
         throw new BadRequestException('Missing telegramId');
     }
-    const normalizedUsername = normalizeTelegramUsername(username);
+    const normalizedUsername = await this.upsertTelegramSession({
+        telegramId,
+        username: username ?? null,
+    });
     const correlationId = RequestContext.getCorrelationId() ?? null;
     const payloadType =
         startPayload === 'BOOTSTRAP'
@@ -425,6 +531,13 @@ export class AuthService {
                             },
                         },
                     });
+                    await this.recordSecurityEvent({
+                        tx,
+                        event: 'super_admin_linked_to_telegram',
+                        actorUserId: superAdmin.id,
+                        telegramId,
+                        metadata: { updateId: updateId ?? null },
+                    });
                 }
 
                 await this.ensureRoleGrant(tx, superAdmin.id, UserRole.super_admin);
@@ -483,6 +596,42 @@ export class AuthService {
     if (startPayload) {
         const tokenHash = this.hashInviteToken(startPayload);
         const now = new Date();
+        const invitePrecheck = await this.prisma.userInvite.findUnique({
+            where: { tokenHash },
+        });
+
+        if (!invitePrecheck) {
+            throw new BadRequestException('Invite token is invalid');
+        }
+
+        if (invitePrecheck.intendedRole !== UserRole.publisher) {
+            throw new BadRequestException('Invite token role invalid');
+        }
+
+        await this.recordSecurityEvent({
+            event: 'invite_claim_attempt',
+            telegramId,
+            metadata: {
+                inviteId: invitePrecheck.id,
+                boundTelegramId: invitePrecheck.boundTelegramId?.toString() ?? null,
+            },
+        });
+
+        if (!invitePrecheck.boundTelegramId || invitePrecheck.boundTelegramId.toString() !== telegramId) {
+            await this.recordSecurityEvent({
+                event: 'invite_claim_rejected',
+                telegramId,
+                metadata: {
+                    inviteId: invitePrecheck.id,
+                    boundTelegramId: invitePrecheck.boundTelegramId?.toString() ?? null,
+                    attemptedTelegramId: telegramId,
+                },
+            });
+            throw new ForbiddenException({
+                code: 'INVITE_NOT_FOR_YOU',
+                message: 'Invite token does not belong to this Telegram account.',
+            });
+        }
 
         try {
             const { user, idempotent, linkedInvite } = await this.prisma.$transaction(async (tx) => {
@@ -496,6 +645,12 @@ export class AuthService {
 
                 if (invite.intendedRole !== UserRole.publisher) {
                     throw new BadRequestException('Invite token role invalid');
+                }
+                if (!invite.boundTelegramId || invite.boundTelegramId.toString() !== telegramId) {
+                    throw new ForbiddenException({
+                        code: 'INVITE_NOT_FOR_YOU',
+                        message: 'Invite token does not belong to this Telegram account.',
+                    });
                 }
 
                 if (invite.usedAt) {
@@ -521,6 +676,13 @@ export class AuthService {
                         }
 
                         await this.ensureRoleGrant(tx, existingUser.id, UserRole.publisher);
+                        await this.recordSecurityEvent({
+                            tx,
+                            event: 'invite_claim_idempotent',
+                            actorUserId: existingUser.id,
+                            telegramId,
+                            metadata: { inviteId: invite.id },
+                        });
                         return { user: existingUser, idempotent: true, linkedInvite: true };
                     }
 
@@ -536,7 +698,10 @@ export class AuthService {
                         },
                         AuthService.name,
                     );
-                    throw new ConflictException('Invite token already used');
+                    throw new ConflictException({
+                        code: 'INVITE_ALREADY_CLAIMED',
+                        message: 'Invite token already used.',
+                    });
                 }
 
                 assertInviteTokenUsable({
@@ -563,6 +728,14 @@ export class AuthService {
                         data: updateData,
                     });
                     userId = updated.id;
+
+                    await this.recordSecurityEvent({
+                        tx,
+                        event: 'identity_linked',
+                        actorUserId: userId,
+                        telegramId,
+                        metadata: { inviteId: invite.id },
+                    });
                 } else {
                     const usernameToUse = normalizedUsername ?? invite.intendedUsernameNormalized ?? null;
                     const created = await tx.user.create({
@@ -577,6 +750,13 @@ export class AuthService {
 
                     await tx.wallet.create({
                         data: { userId: userId, balance: 0, currency: 'USD' },
+                    });
+                    await this.recordSecurityEvent({
+                        tx,
+                        event: 'identity_linked',
+                        actorUserId: userId,
+                        telegramId,
+                        metadata: { inviteId: invite.id, created: true },
                     });
                 }
 
@@ -605,6 +785,16 @@ export class AuthService {
                             username: normalizedUsername,
                             updateId: updateId ?? null,
                         },
+                    },
+                });
+                await this.recordSecurityEvent({
+                    tx,
+                    event: 'invite_claim_succeeded',
+                    actorUserId: userId,
+                    telegramId,
+                    metadata: {
+                        inviteId: invite.id,
+                        updateId: updateId ?? null,
                     },
                 });
 
@@ -666,6 +856,23 @@ export class AuthService {
                     AuthService.name,
                 );
                 throw new ConflictException('Telegram account already linked');
+            }
+            if (err instanceof ConflictException) {
+                const response = err.getResponse();
+                const code =
+                    typeof response === 'object' && response !== null
+                        ? (response as { code?: string }).code
+                        : null;
+                if (code === 'INVITE_ALREADY_CLAIMED') {
+                    await this.recordSecurityEvent({
+                        event: 'invite_claim_conflict',
+                        telegramId,
+                        metadata: {
+                            inviteId: invitePrecheck.id,
+                            attemptedTelegramId: telegramId,
+                        },
+                    });
+                }
             }
             this.logger.warn(
                 {

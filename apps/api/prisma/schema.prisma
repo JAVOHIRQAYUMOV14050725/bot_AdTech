@@ -213,6 +213,7 @@ model UserInvite {
   usedAt    DateTime?
   intendedRole UserRole
   intendedUsernameNormalized String?
+  boundTelegramId BigInt?
   usedByUserId String?
   createdAt DateTime @default(now())
 
@@ -252,14 +253,29 @@ model UserAuditLog {
   @@map("user_audit_logs")
 }
 
+model SecurityAuditLog {
+  id        String   @id @default(uuid())
+  event     String
+  actorUserId String?
+  telegramId BigInt?
+  metadata  Json?
+  correlationId String?
+  createdAt DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([telegramId, createdAt])
+  @@index([event, createdAt])
+  @@map("security_audit_logs")
+}
+
 model TelegramSession {
   telegramId BigInt  @id
-  state      String
-  payload    Json
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  usernameNormalized String?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
 
-  @@index([updatedAt])
+  @@index([usernameNormalized])
+  @@index([lastSeenAt])
   @@map("telegram_sessions")
 }
 

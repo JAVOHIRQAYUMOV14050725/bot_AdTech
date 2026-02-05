@@ -39,6 +39,7 @@ export async function resetDatabase(prisma: PrismaClient) {
     await prisma.channel.deleteMany();
 
     // logs
+    await prisma.securityAuditLog.deleteMany();
     await prisma.userAuditLog.deleteMany();
     await prisma.systemActionLog.deleteMany();
 
@@ -50,6 +51,7 @@ export async function resetDatabase(prisma: PrismaClient) {
     await prisma.userInvite.deleteMany();
     await prisma.userRoleGrant.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.telegramSession.deleteMany();
 }
 
 

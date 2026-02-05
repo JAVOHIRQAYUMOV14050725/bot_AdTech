@@ -1,6 +1,6 @@
 import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
+import { createHmac, randomUUID } from 'crypto';
 import { TelegramResolvePublisherResult } from './telegram.types';
 
 type BackendResponse<T> = T;
@@ -78,39 +78,72 @@ export class TelegramBackendClient {
         path: string,
         options: { method: string; body?: unknown; headers?: Record<string, string> },
     ): Promise<BackendResponse<T>> {
+        const rawBody = options.body ? JSON.stringify(options.body) : undefined;
+        const requestCorrelationId = randomUUID();
         const signatureHeaders =
             options.headers?.['X-Telegram-Internal-Token']
                 ? {}
-                : this.buildTelegramSignatureHeaders(options.body ?? {});
+                : this.buildTelegramSignatureHeaders(rawBody ?? '{}');
         const response = await fetch(`${this.baseUrl}${path}`, {
             method: options.method,
             headers: {
                 'Content-Type': 'application/json',
                 'x-internal-token': this.token,
+                'x-correlation-id': requestCorrelationId,
                 ...signatureHeaders,
                 ...options.headers,
             },
-            body: options.body ? JSON.stringify(options.body) : undefined,
+            body: rawBody,
         });
+
+        const responseCorrelationId =
+            response.headers.get('x-correlation-id') ?? requestCorrelationId;
+        this.logger.log(
+            {
+                event: 'telegram_backend_request',
+                path,
+                status: response.status,
+                correlationId: responseCorrelationId,
+            },
+            'TelegramBackendClient',
+        );
 
         if (!response.ok) {
             const text = await response.text();
             let message = text;
+            let code: string | null = null;
+            let correlationId: string | null = responseCorrelationId;
             if (text) {
                 try {
-                    const parsed = JSON.parse(text) as { message?: unknown };
-                    if (typeof parsed.message === 'string') {
-                        message = parsed.message;
-                    } else if (Array.isArray(parsed.message)) {
-                        message = parsed.message.join('; ');
-                    } else {
-                        message = JSON.stringify(parsed);
-                    }
+                    const parsed = JSON.parse(text) as {
+                        message?: unknown;
+                        code?: unknown;
+                        correlationId?: unknown;
+                        error?: { message?: unknown; details?: { code?: unknown } };
+                    };
+                    const parsedMessage =
+                        typeof parsed.message === 'string'
+                            ? parsed.message
+                            : Array.isArray(parsed.message)
+                                ? parsed.message.join('; ')
+                                : parsed.error?.message;
+                    message = parsedMessage ?? JSON.stringify(parsed);
+                    code =
+                        typeof parsed.code === 'string'
+                            ? parsed.code
+                            : typeof parsed.error?.details?.code === 'string'
+                                ? parsed.error.details.code
+                                : null;
+                    correlationId =
+                        typeof parsed.correlationId === 'string' ? parsed.correlationId : null;
                 } catch {
                     message = text;
                 }
             }
-            throw new Error(message || `Backend request failed (${response.status})`);
+            const error = new Error(message || `Backend request failed (${response.status})`);
+            (error as { code?: string | null; correlationId?: string | null }).code = code;
+            (error as { code?: string | null; correlationId?: string | null }).correlationId = correlationId;
+            throw error;
         }
 
         return (await response.json()) as BackendResponse<T>;
@@ -134,12 +167,13 @@ export class TelegramBackendClient {
         startPayload?: string | null;
         updateId?: string | null;
     }) {
-        const signatureHeaders = this.buildTelegramSignatureHeaders({
+        const body = {
             telegramId: params.telegramId,
             username: params.username ?? null,
             startPayload: params.startPayload ?? null,
             updateId: params.updateId ?? null,
-        });
+        };
+        const signatureHeaders = this.buildTelegramSignatureHeaders(JSON.stringify(body));
         return this.request<{
             ok: boolean;
             idempotent: boolean;
@@ -158,21 +192,15 @@ export class TelegramBackendClient {
             headers: {
                 ...signatureHeaders,
             },
-            body: {
-                telegramId: params.telegramId,
-                username: params.username ?? null,
-                startPayload: params.startPayload ?? null,
-                updateId: params.updateId ?? null,
-            },
+            body,
         });
     }
 
-    private buildTelegramSignatureHeaders(body: unknown) {
+    private buildTelegramSignatureHeaders(rawBody: string) {
         if (!this.telegramInternalToken) {
             throw new Error('TELEGRAM_INTERNAL_TOKEN is required for bot authentication');
         }
         const timestamp = Math.floor(Date.now() / 1000).toString();
-        const rawBody = JSON.stringify(body ?? {});
         const signature = createHmac('sha256', this.telegramInternalToken)
             .update(`${timestamp}.${rawBody}`)
             .digest('hex');

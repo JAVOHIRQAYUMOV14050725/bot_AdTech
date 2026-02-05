@@ -13,6 +13,11 @@ type AxiosErrorLike = {
     message?: unknown;
 };
 
+type TelegramBackendErrorLike = {
+    code?: unknown;
+    correlationId?: unknown;
+};
+
 const flattenMessage = (value: unknown): string | null => {
     if (typeof value === 'string') {
         return value;
@@ -94,4 +99,27 @@ export function telegramSafeErrorMessage(err: unknown): string {
     }
 
     return stringifyFallback(err);
+}
+
+export function extractTelegramErrorMeta(err: unknown): { code: string | null; correlationId: string | null } {
+    if (!err || typeof err !== 'object') {
+        return { code: null, correlationId: null };
+    }
+
+    const backendError = err as TelegramBackendErrorLike;
+    const code = typeof backendError.code === 'string' ? backendError.code : null;
+    const correlationId =
+        typeof backendError.correlationId === 'string' ? backendError.correlationId : null;
+
+    return { code, correlationId };
+}
+
+export function telegramSafeErrorMessageWithCorrelation(err: unknown): string {
+    const message = telegramSafeErrorMessage(err);
+    const { correlationId } = extractTelegramErrorMeta(err);
+    if (!correlationId) {
+        return message;
+    }
+    const shortId = correlationId.slice(0, 8);
+    return `${message}\n\nRef: ${shortId}`;
 }

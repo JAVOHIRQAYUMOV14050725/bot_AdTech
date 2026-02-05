@@ -43,12 +43,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const errorResponse = (() => {
             if (isPrismaKnownError) {
                 if (exception.code === 'P2002') {
-                    return { message: 'Unique constraint violation' };
+                    return { message: 'Unique constraint violation', code: 'UNIQUE_CONSTRAINT' };
                 }
                 if (exception.code === 'P2025') {
-                    return { message: 'Record not found' };
+                    return { message: 'Record not found', code: 'RECORD_NOT_FOUND' };
                 }
-                return { message: 'Database error' };
+                return { message: 'Database error', code: 'DATABASE_ERROR' };
             }
             return isHttpException
                 ? exception.getResponse()
@@ -65,14 +65,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
             }
 
             if (typeof errorResponse === 'object' && errorResponse !== null) {
-                const message = (errorResponse as { message?: unknown }).message;
+                const messageValue = (errorResponse as { message?: unknown }).message;
+                const message = Array.isArray(messageValue)
+                    ? 'Validation failed'
+                    : typeof messageValue === 'string'
+                        ? messageValue
+                        : 'Request failed';
                 const details = (errorResponse as { details?: unknown }).details ?? {
                     ...errorResponse,
                 };
                 return {
-                    message: Array.isArray(message)
-                        ? 'Validation failed'
-                        : (message as string | undefined) ?? 'Request failed',
+                    message,
                     details,
                 };
             }
@@ -82,20 +85,30 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
         const correlationId =
             request.correlationId ?? RequestContext.getCorrelationId() ?? null;
-        const errorCode =
+        const rawCode =
             typeof (errorResponse as { code?: unknown }).code === 'string'
                 ? (errorResponse as { code?: string }).code
                 : typeof (normalizedError.details as { code?: unknown } | undefined)?.code === 'string'
                     ? (normalizedError.details as { code?: string }).code
                     : null;
+
+        const isValidation =
+            (errorResponse as { event?: unknown })?.event === 'validation_failed'
+            || normalizedError.message === 'Validation failed';
+
+        const errorCode = rawCode
+            ?? (isValidation ? 'VALIDATION_FAILED' : null)
+            ?? (status === HttpStatus.UNAUTHORIZED ? 'UNAUTHORIZED' : null)
+            ?? (status === HttpStatus.FORBIDDEN ? 'FORBIDDEN' : null)
+            ?? (status === HttpStatus.TOO_MANY_REQUESTS ? 'RATE_LIMITED' : null)
+            ?? (status >= HttpStatus.INTERNAL_SERVER_ERROR ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED');
+
         const payload = sanitizeForJson({
-            statusCode: status,
-            timestamp: new Date().toISOString(),
-            path: request.originalUrl,
-            correlationId,
+            event: 'error',
             code: errorCode,
             message: normalizedError.message,
-            error: normalizedError,
+            correlationId,
+            details: normalizedError.details,
         });
 
         const stack = exception instanceof Error ? exception.stack : undefined;
@@ -110,6 +123,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
                 path: request.originalUrl,
                 statusCode: status,
                 error: normalizedError,
+                code: errorCode,
                 errorType: exception instanceof Error ? exception.name : undefined,
                 message: exception instanceof Error ? exception.message : undefined,
             },

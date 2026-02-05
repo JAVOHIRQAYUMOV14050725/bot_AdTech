@@ -1,125 +1,49 @@
-type HttpExceptionLike = {
-    getResponse?: () => unknown;
-    message?: unknown;
-    response?: unknown;
-};
-
-type AxiosErrorLike = {
-    response?: {
-        data?: unknown;
-        status?: number;
-        statusText?: string;
-    };
-    message?: unknown;
-};
-
 type TelegramBackendErrorLike = {
     code?: unknown;
     correlationId?: unknown;
+    status?: unknown;
 };
-
-const flattenMessage = (value: unknown): string | null => {
-    if (typeof value === 'string') {
-        return value;
-    }
-    if (Array.isArray(value)) {
-        const parts = value
-            .map((entry) => flattenMessage(entry))
-            .filter((entry): entry is string => Boolean(entry));
-        if (parts.length) {
-            return parts.join('; ');
-        }
-    }
-    if (value && typeof value === 'object') {
-        const nestedMessage = (value as { message?: unknown }).message;
-        const resolvedNested = flattenMessage(nestedMessage);
-        if (resolvedNested) {
-            return resolvedNested;
-        }
-    }
-    return null;
-};
-
-const stringifyFallback = (value: unknown): string => {
-    try {
-        const serialized = JSON.stringify(value);
-        if (serialized && serialized !== '{}') {
-            return serialized;
-        }
-    } catch {
-        // noop
-    }
-    return 'Unexpected error';
-};
-
-export function telegramSafeErrorMessage(err: unknown): string {
-    if (typeof err === 'string') {
-        return err;
-    }
-
-    if (err instanceof Error) {
-        return err.message || 'Unexpected error';
-    }
-
+export function extractTelegramErrorMeta(err: unknown): {
+    code: string | null;
+    correlationId: string | null;
+    status: number | null;
+} {
     if (!err || typeof err !== 'object') {
-        return 'Unexpected error';
-    }
-
-    const httpException = err as HttpExceptionLike;
-    if (typeof httpException.getResponse === 'function') {
-        const response = httpException.getResponse();
-        const resolved = flattenMessage(response);
-        if (resolved) {
-            return resolved;
-        }
-    }
-
-    const directMessage = flattenMessage((err as { message?: unknown }).message);
-    if (directMessage) {
-        return directMessage;
-    }
-
-    const axiosLike = err as AxiosErrorLike;
-    if (axiosLike.response) {
-        const responseMessage = flattenMessage(axiosLike.response.data);
-        if (responseMessage) {
-            return responseMessage;
-        }
-        const statusMessage = [axiosLike.response.status, axiosLike.response.statusText]
-            .filter((value) => value != null)
-            .join(' ');
-        if (statusMessage) {
-            return statusMessage;
-        }
-    }
-
-    const responseMessage = flattenMessage((err as { response?: unknown }).response);
-    if (responseMessage) {
-        return responseMessage;
-    }
-
-    return stringifyFallback(err);
-}
-
-export function extractTelegramErrorMeta(err: unknown): { code: string | null; correlationId: string | null } {
-    if (!err || typeof err !== 'object') {
-        return { code: null, correlationId: null };
+        return { code: null, correlationId: null, status: null };
     }
 
     const backendError = err as TelegramBackendErrorLike;
     const code = typeof backendError.code === 'string' ? backendError.code : null;
     const correlationId =
         typeof backendError.correlationId === 'string' ? backendError.correlationId : null;
+    const status = typeof backendError.status === 'number' ? backendError.status : null;
 
-    return { code, correlationId };
+    return { code, correlationId, status };
 }
 
-export function telegramSafeErrorMessageWithCorrelation(err: unknown): string {
-    const message = telegramSafeErrorMessage(err);
-    const { correlationId } = extractTelegramErrorMeta(err);
-    if (!correlationId) {
-        return message;
+export function mapBackendErrorToTelegramMessage(err: unknown): string {
+    const { code, correlationId } = extractTelegramErrorMeta(err);
+    const safeCorrelationId = correlationId ?? 'unknown';
+
+    switch (code) {
+        case 'INVITE_NOT_FOR_YOU':
+            return '❌ Bu taklif sizga tegishli emas.';
+        case 'USER_MUST_START_BOT_FIRST':
+            return '❌ Avval botga /start bosing, so‘ng taklif yuboriladi.';
+        case 'PUBLISHER_NOT_REGISTERED':
+            return '❌ Publisher ro‘yxatdan o‘tmagan. Invite link orqali kiring.';
+        case 'CHANNEL_NOT_APPROVED':
+            return '⏳ Kanal hali marketplace’da tasdiqlanmagan. Admin ko‘rib chiqmoqda.';
+        case 'CHANNEL_NOT_OWNED_BY_PUBLISHER':
+            return '❌ Kanal egasi publisher akkaunt emas.';
+        case 'INVALID_TELEGRAM_INTERNAL_TOKEN':
+        case 'UNAUTHORIZED':
+            return '❌ Xavfsizlik tekshiruvi o‘tmadi.';
+        case 'VALIDATION_FAILED':
+            return '❌ Kiritilgan ma’lumot noto‘g‘ri.';
+        case 'RATE_LIMITED':
+            return '⏳ Juda ko‘p urinish. Keyinroq qayta urinib ko‘ring.';
+        default:
+            return `❌ Xatolik yuz berdi. (ID: ${safeCorrelationId})`;
     }
-    const shortId = correlationId.slice(0, 8);
-    return `${message}\n\nRef: ${shortId}`;
 }

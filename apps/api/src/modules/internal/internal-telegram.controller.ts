@@ -19,6 +19,8 @@ import { InternalTelegramAdminPostDto } from './dto/internal-telegram-admin-post
 import { InternalTelegramAdminCampaignDto } from './dto/internal-telegram-admin-campaign.dto';
 import { normalizeTelegramUsername, parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 import { TelegramResolvePublisherResult } from '@/modules/telegram/telegram.types';
+import { ConfigService } from '@nestjs/config';
+import { formatTelegramBotUsernameMention } from '@/common/utils/telegram-bot-username.util';
 
 @ApiTags('Internal')
 @UseGuards(InternalTokenGuard)
@@ -30,6 +32,7 @@ export class InternalTelegramController {
         private readonly identityResolver: IdentityResolverService,
         private readonly telegramService: TelegramService,
         private readonly channelsService: ChannelsService,
+        private readonly configService: ConfigService,
     ) { }
 
     @Post('start')
@@ -102,7 +105,7 @@ export class InternalTelegramController {
         if (!parsed) {
             return {
                 ok: false as const,
-                reason: 'INVALID_IDENTIFIER',
+                reason: 'INVALID_PUBLISHER_IDENTIFIER',
                 message: 'Please send a valid @username or t.me link.',
             };
         }
@@ -110,7 +113,7 @@ export class InternalTelegramController {
         if ('error' in parsed) {
             return {
                 ok: false as const,
-                reason: 'INVALID_IDENTIFIER',
+                reason: 'INVALID_PUBLISHER_IDENTIFIER',
                 message: parsed.error ?? 'Invalid identifier.',
             };
         }
@@ -173,7 +176,7 @@ export class InternalTelegramController {
             if (!ownerRoles.has(UserRole.publisher)) {
                 return {
                     ok: false as const,
-                    reason: 'CHANNEL_OWNER_NOT_PUBLISHER',
+                    reason: 'CHANNEL_NOT_OWNED_BY_PUBLISHER',
                     message: 'Channel owner must complete publisher onboarding.',
                 };
             }
@@ -253,10 +256,13 @@ export class InternalTelegramController {
             resolved.value.telegramChannelId,
         );
         if (!botAdmin.isAdmin) {
+            const botMention = formatTelegramBotUsernameMention(
+                this.configService.get<string>('TELEGRAM_BOT_USERNAME'),
+            );
             return {
                 ok: false as const,
                 message:
-                    '⚠️ Please add @AdTechBot as an ADMIN to your channel, then try again.',
+                    `⚠️ Please add ${botMention} as an ADMIN to your channel, then try again.`,
             };
         }
 
@@ -346,11 +352,14 @@ export class InternalTelegramController {
                 message: '✅ Channel verified and registered!\n\nYour channel is now pending approval.',
             };
         } catch (err) {
+            const botMention = formatTelegramBotUsernameMention(
+                this.configService.get<string>('TELEGRAM_BOT_USERNAME'),
+            );
             return {
                 ok: false as const,
                 message:
                     '❌ We could not complete verification.\n\n' +
-                    'Please ensure @AdTechBot is ADMIN and try again.',
+                    `Please ensure ${botMention} is ADMIN and try again.`,
             };
         }
     }

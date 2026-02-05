@@ -1,40 +1,38 @@
-import { telegramSafeErrorMessage } from '@/modules/telegram/telegram-error.util';
+import { mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
+import { BackendApiError } from '@/modules/telegram/telegram-backend.client';
 
-describe('telegramSafeErrorMessage', () => {
-    it('returns string errors as-is', () => {
-        expect(telegramSafeErrorMessage('bad')).toBe('bad');
-    });
+describe('mapBackendErrorToTelegramMessage', () => {
+    it('maps known backend codes to Uzbek messages', () => {
+        const cases = [
+            ['INVITE_NOT_FOR_YOU', '❌ Bu taklif sizga tegishli emas.'],
+            ['USER_MUST_START_BOT_FIRST', '❌ Avval botga /start bosing, so‘ng taklif yuboriladi.'],
+            ['PUBLISHER_NOT_REGISTERED', '❌ Publisher ro‘yxatdan o‘tmagan. Invite link orqali kiring.'],
+            ['CHANNEL_NOT_APPROVED', '⏳ Kanal hali marketplace’da tasdiqlanmagan. Admin ko‘rib chiqmoqda.'],
+            ['CHANNEL_NOT_OWNED_BY_PUBLISHER', '❌ Kanal egasi publisher akkaunt emas.'],
+            ['INVALID_TELEGRAM_INTERNAL_TOKEN', '❌ Xavfsizlik tekshiruvi o‘tmadi.'],
+            ['UNAUTHORIZED', '❌ Xavfsizlik tekshiruvi o‘tmadi.'],
+            ['VALIDATION_FAILED', '❌ Kiritilgan ma’lumot noto‘g‘ri.'],
+            ['RATE_LIMITED', '⏳ Juda ko‘p urinish. Keyinroq qayta urinib ko‘ring.'],
+        ] as const;
 
-    it('returns Error messages', () => {
-        expect(telegramSafeErrorMessage(new Error('boom'))).toBe('boom');
-    });
-
-    it('handles HttpException-like responses', () => {
-        const err = {
-            getResponse: () => ({ message: ['first', 'second'] }),
-        };
-        expect(telegramSafeErrorMessage(err)).toBe('first; second');
-    });
-
-    it('handles axios-style error responses', () => {
-        const err = {
-            response: {
-                data: { message: 'axios fail' },
+        for (const [code, expected] of cases) {
+            const err = new BackendApiError({
                 status: 400,
-                statusText: 'Bad Request',
-            },
-        };
-        expect(telegramSafeErrorMessage(err)).toBe('axios fail');
+                code,
+                correlationId: 'corr-abc',
+                message: 'nope',
+            });
+            expect(mapBackendErrorToTelegramMessage(err)).toBe(expected);
+        }
     });
 
-    it('handles nested message arrays', () => {
-        const err = { message: ['one', { message: 'two' }] };
-        expect(telegramSafeErrorMessage(err)).toBe('one; two');
-    });
-
-    it('never returns [object Object]', () => {
-        const err = { foo: 'bar' };
-        expect(telegramSafeErrorMessage(err)).not.toBe('[object Object]');
-        expect(telegramSafeErrorMessage(err)).toBe('Unexpected error');
+    it('uses generic fallback with correlation id for unknown codes', () => {
+        const err = new BackendApiError({
+            status: 500,
+            code: 'SOME_UNKNOWN',
+            correlationId: 'corr-999',
+            message: 'oops',
+        });
+        expect(mapBackendErrorToTelegramMessage(err)).toBe('❌ Xatolik yuz berdi. (ID: corr-999)');
     });
 });

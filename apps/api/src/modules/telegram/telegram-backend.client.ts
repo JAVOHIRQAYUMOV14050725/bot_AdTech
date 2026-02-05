@@ -3,6 +3,106 @@ import { ConfigService } from '@nestjs/config';
 import { createHmac, randomUUID } from 'crypto';
 import { TelegramResolvePublisherResult } from './telegram.types';
 
+type BackendErrorPayload = {
+    message: string;
+    code: string | null;
+    correlationId: string;
+    raw?: unknown;
+};
+
+const toNonEmptyString = (value: unknown): string | null => {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed ? trimmed : null;
+    }
+    if (Array.isArray(value)) {
+        const parts = value
+            .map((entry) => toNonEmptyString(entry))
+            .filter((entry): entry is string => Boolean(entry));
+        if (parts.length) {
+            return parts.join('; ');
+        }
+    }
+    if (value && typeof value === 'object') {
+        try {
+            const serialized = JSON.stringify(value);
+            if (serialized && serialized !== '{}') {
+                return serialized;
+            }
+        } catch {
+            return null;
+        }
+    }
+    return null;
+};
+
+export class BackendApiError extends Error {
+    status: number;
+    code: string | null;
+    correlationId: string;
+    raw?: unknown;
+
+    constructor(params: { status: number; code?: string | null; correlationId: string; message: string; raw?: unknown }) {
+        super(params.message);
+        this.name = 'BackendApiError';
+        this.status = params.status;
+        this.code = params.code ?? null;
+        this.correlationId = params.correlationId;
+        this.raw = params.raw;
+    }
+}
+
+export const parseBackendErrorResponse = (
+    text: string,
+    responseCorrelationId: string,
+    status: number,
+): BackendErrorPayload => {
+    let message = `Backend request failed (${status})`;
+    let code: string | null = null;
+    let correlationId = responseCorrelationId;
+    let raw: unknown = undefined;
+
+    if (text) {
+        try {
+            const parsed = JSON.parse(text) as {
+                message?: unknown;
+                code?: unknown;
+                correlationId?: unknown;
+                error?: { message?: unknown; details?: { code?: unknown } };
+            };
+            raw = parsed;
+            const parsedMessage =
+                toNonEmptyString(parsed.message) ??
+                toNonEmptyString(parsed.error?.message) ??
+                toNonEmptyString(parsed);
+
+            message = parsedMessage ?? message;
+            code =
+                typeof parsed.code === 'string'
+                    ? parsed.code
+                    : typeof parsed.error?.details?.code === 'string'
+                        ? parsed.error.details.code
+                        : null;
+            correlationId =
+                typeof parsed.correlationId === 'string' ? parsed.correlationId : responseCorrelationId;
+        } catch {
+            const fallback = text.trim();
+            message = fallback || message;
+        }
+    }
+
+    if (!message.trim()) {
+        message = `Backend request failed (${status})`;
+    }
+
+    return {
+        message,
+        code,
+        correlationId,
+        raw,
+    };
+};
+
 type BackendResponse<T> = T;
 
 @Injectable()
@@ -110,43 +210,14 @@ export class TelegramBackendClient {
 
         if (!response.ok) {
             const text = await response.text();
-            let message = text;
-            let code: string | null = null;
-            let correlationId: string | null = responseCorrelationId;
-            if (text) {
-                try {
-                    const parsed = JSON.parse(text) as {
-                        message?: unknown;
-                        code?: unknown;
-                        correlationId?: unknown;
-                        error?: { message?: unknown; details?: { code?: unknown } };
-                    };
-                    const parsedMessage: string | undefined =
-                        typeof parsed.message === "string"
-                            ? parsed.message
-                            : Array.isArray(parsed.message)
-                                ? parsed.message.filter((x): x is string => typeof x === "string").join("; ")
-                                : typeof parsed.error?.message === "string"
-                                    ? parsed.error.message
-                                    : undefined;
-                    
-                    message = parsedMessage ?? JSON.stringify(parsed);
-                    code =
-                        typeof parsed.code === 'string'
-                            ? parsed.code
-                            : typeof parsed.error?.details?.code === 'string'
-                                ? parsed.error.details.code
-                                : null;
-                    correlationId =
-                        typeof parsed.correlationId === 'string' ? parsed.correlationId : null;
-                } catch {
-                    message = text;
-                }
-            }
-            const error = new Error(message || `Backend request failed (${response.status})`);
-            (error as { code?: string | null; correlationId?: string | null }).code = code;
-            (error as { code?: string | null; correlationId?: string | null }).correlationId = correlationId;
-            throw error;
+            const parsed = parseBackendErrorResponse(text, responseCorrelationId, response.status);
+            throw new BackendApiError({
+                status: response.status,
+                code: parsed.code,
+                correlationId: parsed.correlationId,
+                message: parsed.message,
+                raw: parsed.raw,
+            });
         }
 
         return (await response.json()) as BackendResponse<T>;

@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { telegramSafeErrorMessageWithCorrelation } from '@/modules/telegram/telegram-error.util';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
+import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
 
 @Injectable()
 export class AdminHandler {
@@ -33,12 +34,21 @@ export class AdminHandler {
                 telegramId: adminTelegramId.toString(),
                 campaignTargetId,
             });
-            await ctx.reply(
+            await replySafe(
+                ctx,
                 `⏳ Escrow release queued for manual review.\nTarget: ${campaignTargetId}`,
             );
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_force_release_failed',
+                campaignTargetId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
         }
     }
 
@@ -57,12 +67,21 @@ export class AdminHandler {
                 campaignTargetId,
                 reason,
             });
-            await ctx.reply(
+            await replySafe(
+                ctx,
                 `⏳ Escrow refund queued for manual review.\nTarget: ${campaignTargetId}\nReason: ${reason}`,
             );
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_force_refund_failed',
+                campaignTargetId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
         }
     }
 
@@ -76,13 +95,21 @@ export class AdminHandler {
                 telegramId: adminTelegramId.toString(),
                 postJobId,
             });
-            await ctx.reply(`♻️ PostJob re-queued\nID: ${postJobId}`);
+            await replySafe(ctx, `♻️ PostJob re-queued\nID: ${postJobId}`);
         } catch (err) {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_retry_post_failed',
+                postJobId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
         }
     }
 
@@ -96,13 +123,21 @@ export class AdminHandler {
                 telegramId: adminTelegramId.toString(),
                 campaignId,
             });
-            await ctx.reply(`⛔ Campaign frozen\nID: ${campaignId}`);
+            await replySafe(ctx, `⛔ Campaign frozen\nID: ${campaignId}`);
         } catch (err) {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_freeze_campaign_failed',
+                campaignId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
         }
     }
 
@@ -113,13 +148,21 @@ export class AdminHandler {
                 telegramId: adminTelegramId.toString(),
                 campaignId,
             });
-            await ctx.reply(`▶️ Campaign resumed\nID: ${campaignId}`);
+            await replySafe(ctx, `▶️ Campaign resumed\nID: ${campaignId}`);
         } catch (err) {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_unfreeze_campaign_failed',
+                campaignId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
         }
     }
 }

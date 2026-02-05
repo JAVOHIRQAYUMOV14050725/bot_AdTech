@@ -150,11 +150,14 @@ async function bootstrap() {
             exceptionFactory: (errors) =>
                 new BadRequestException({
                     event: 'validation_failed',
+                    code: 'VALIDATION_FAILED',
                     message: 'Validation failed',
                     details: formatValidationErrors(errors),
                 }),
         }),
     );
+
+    app.useGlobalFilters(new AllExceptionsFilter(logger));
 
 
 

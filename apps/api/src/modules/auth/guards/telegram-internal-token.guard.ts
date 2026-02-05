@@ -32,7 +32,10 @@ export class TelegramInternalTokenGuard implements CanActivate {
                 },
                 TelegramInternalTokenGuard.name,
             );
-            throw new UnauthorizedException('Invalid telegram internal token');
+            throw new UnauthorizedException({
+                code: 'INVALID_TELEGRAM_INTERNAL_TOKEN',
+                message: 'Invalid telegram internal token',
+            });
         }
 
         const timestampValueRaw = Array.isArray(timestamp) ? timestamp[0] : timestamp;
@@ -47,7 +50,10 @@ export class TelegramInternalTokenGuard implements CanActivate {
                 },
                 TelegramInternalTokenGuard.name,
             );
-            throw new UnauthorizedException('Missing telegram signature headers');
+            throw new UnauthorizedException({
+                code: 'INVALID_TELEGRAM_INTERNAL_TOKEN',
+                message: 'Missing telegram signature headers',
+            });
         }
 
         const timestampValue = Number(timestampValueRaw);
@@ -60,7 +66,10 @@ export class TelegramInternalTokenGuard implements CanActivate {
                 },
                 TelegramInternalTokenGuard.name,
             );
-            throw new UnauthorizedException('Invalid telegram timestamp');
+            throw new UnauthorizedException({
+                code: 'INVALID_TELEGRAM_INTERNAL_TOKEN',
+                message: 'Invalid telegram timestamp',
+            });
         }
 
         const nowSeconds = Math.floor(Date.now() / 1000);
@@ -73,7 +82,10 @@ export class TelegramInternalTokenGuard implements CanActivate {
                 },
                 TelegramInternalTokenGuard.name,
             );
-            throw new UnauthorizedException('Telegram timestamp expired');
+            throw new UnauthorizedException({
+                code: 'INVALID_TELEGRAM_INTERNAL_TOKEN',
+                message: 'Telegram timestamp expired',
+            });
         }
 
         const rawBody =
@@ -98,7 +110,10 @@ export class TelegramInternalTokenGuard implements CanActivate {
                 },
                 TelegramInternalTokenGuard.name,
             );
-            throw new UnauthorizedException('Invalid telegram signature');
+            throw new UnauthorizedException({
+                code: 'INVALID_TELEGRAM_INTERNAL_TOKEN',
+                message: 'Invalid telegram signature',
+            });
         }
 
         return true;

@@ -6,10 +6,11 @@ import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome } from '../keyboards';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
-import { telegramSafeErrorMessageWithCorrelation } from '@/modules/telegram/telegram-error.util';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 import { parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 import { TelegramResolvePublisherFailureReason } from '@/modules/telegram/telegram.types';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
+import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
 
 @Update()
 export class AdvertiserHandler {
@@ -35,7 +36,8 @@ export class AdvertiserHandler {
             TelegramState.ADV_DASHBOARD,
         );
 
-        await ctx.reply(
+        await replySafe(
+            ctx,
             `🧑‍💼 Advertiser Panel\n\n💰 Balance: $0\n📊 Active campaigns: 0`,
             advertiserHome,
         );
@@ -54,7 +56,7 @@ export class AdvertiserHandler {
             TelegramState.ADV_ADD_BALANCE_AMOUNT,
         );
 
-        await ctx.reply('💰 Enter amount (USD):');
+        await replySafe(ctx, '💰 Enter amount (USD):');
     }
 
     @Action('CREATE_ADDEAL')
@@ -70,7 +72,8 @@ export class AdvertiserHandler {
             TelegramState.ADV_ADDEAL_PUBLISHER,
         );
 
-        await ctx.reply(
+        await replySafe(
+            ctx,
             '🤝 Send the publisher @username or a public channel/group link (t.me/...).',
         );
     }
@@ -94,7 +97,7 @@ export class AdvertiserHandler {
                 const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
 
                 if (adDeal.adDeal.advertiserId !== context.user.id) {
-                    return ctx.reply('❌ AdDeal not found for advertiser');
+                    return replySafe(ctx, '❌ AdDeal not found for advertiser');
                 }
 
                 if (command === 'fund_addeal') {
@@ -104,15 +107,16 @@ export class AdvertiserHandler {
                         providerReference: `telegram:${userId}:${adDealId}`,
                         amount: adDeal.adDeal.amount,
                     });
-                    return ctx.reply(`✅ AdDeal funded\nID: ${adDealId}`);
+                    return replySafe(ctx, `✅ AdDeal funded\nID: ${adDealId}`);
                 }
 
                 if (command === 'lock_addeal') {
                     await this.backendClient.lockAdDeal(adDealId);
-                    return ctx.reply(`🔒 Escrow locked\nID: ${adDealId}`);
+                    return replySafe(ctx, `🔒 Escrow locked\nID: ${adDealId}`);
                 }
             } catch (err) {
-                const message = telegramSafeErrorMessageWithCorrelation(err);
+                const message = mapBackendErrorToTelegramMessage(err);
+                const { code, correlationId } = extractTelegramErrorMeta(err);
                 this.logger.error({
                     event: 'telegram_addeal_command_failed',
                     command,
@@ -121,15 +125,17 @@ export class AdvertiserHandler {
                     role: fsm.role,
                     state: fsm.state,
                     error: message,
+                    code,
+                    correlationId,
                 });
-                return ctx.reply(`❌ ${message}`);
+                return replySafe(ctx, message);
             }
         }
 
         const publisherResolution = await this.resolvePublisherInput(text);
         if (publisherResolution) {
             if (!publisherResolution.ok) {
-                return ctx.reply(`❌ ${this.mapResolvePublisherReason(publisherResolution)}`);
+                return replySafe(ctx, this.mapResolvePublisherReason(publisherResolution));
             }
 
             const context = await this.ensureAdvertiser(ctx);
@@ -139,10 +145,10 @@ export class AdvertiserHandler {
 
             const publisher = publisherResolution.publisher;
             if (!publisher) {
-                return ctx.reply('❌ Publisher not found. Send a valid @username or a public channel/group link.');
+                return replySafe(ctx, '❌ Publisher not found. Send a valid @username or a public channel/group link.');
             }
             if (publisher.id === context.user.id) {
-                return ctx.reply('❌ You cannot create a deal with yourself.');
+                return replySafe(ctx, '❌ You cannot create a deal with yourself.');
             }
 
             this.logger.log({
@@ -165,7 +171,8 @@ export class AdvertiserHandler {
                     ? `@${publisher.username}`
                     : publisherResolution.channel?.title ?? 'publisher';
 
-            return ctx.reply(
+            return replySafe(
+                ctx,
                 `✅ Publisher selected: ${publisherLabel}\n💵 Enter deal amount (USD):`,
             );
         }
@@ -179,11 +186,11 @@ export class AdvertiserHandler {
         if (fsm.state === TelegramState.ADV_ADD_BALANCE_AMOUNT) {
             const amountText = text.trim();
             if (!/^\d+(\.\d{1,2})?$/.test(amountText)) {
-                return ctx.reply('❌ Invalid amount');
+                return replySafe(ctx, '❌ Invalid amount');
             }
             const amount = new Decimal(amountText);
             if (amount.lte(0)) {
-                return ctx.reply('❌ Invalid amount');
+                return replySafe(ctx, '❌ Invalid amount');
             }
 
             try {
@@ -200,24 +207,29 @@ export class AdvertiserHandler {
                     { amount: amount.toFixed(2) },
                 );
 
-                return ctx.reply(
+                return replySafe(
+                    ctx,
                     `✅ Deposit intent created\nAmount: $${amount.toFixed(2)}\nPay here: ${intent.paymentUrl ?? 'pending'}`,
                 );
             } catch (err) {
-                const message = telegramSafeErrorMessageWithCorrelation(err);
+                const message = mapBackendErrorToTelegramMessage(err);
+                const { code, correlationId } = extractTelegramErrorMeta(err);
                 this.logger.error({
                     event: 'telegram_deposit_failed',
                     userId,
                     role: fsm.role,
                     state: fsm.state,
                     error: message,
+                    code,
+                    correlationId,
                 });
-                return ctx.reply(`❌ ${message}`);
+                return replySafe(ctx, message);
             }
         }
 
         if (fsm.state === TelegramState.ADV_ADDEAL_PUBLISHER) {
-            return ctx.reply(
+            return replySafe(
+                ctx,
                 '❌ Please send a publisher @username or a public channel/group link (t.me/...).',
             );
         }
@@ -228,18 +240,19 @@ export class AdvertiserHandler {
                     userId,
                     TelegramState.ADV_ADDEAL_PUBLISHER,
                 );
-                return ctx.reply(
+                return replySafe(
+                    ctx,
                     '⚠️ Please select a publisher first by sending @username or a public channel/group link (t.me/...).',
                 );
             }
 
             const amountText = text.trim();
             if (!/^\d+(\.\d{1,2})?$/.test(amountText)) {
-                return ctx.reply('❌ Invalid amount');
+                return replySafe(ctx, '❌ Invalid amount');
             }
 
             if (new Decimal(amountText).lte(0)) {
-                return ctx.reply('❌ Invalid amount');
+                return replySafe(ctx, '❌ Invalid amount');
             }
 
             try {
@@ -278,22 +291,26 @@ export class AdvertiserHandler {
                     TelegramState.ADV_DASHBOARD,
                 );
 
-                return ctx.reply(
+                return replySafe(
+                    ctx,
                     `✅ AdDeal created & escrow locked\nID: ${adDeal.id}\n\n` +
                     `Next steps:\n` +
                     `• Publisher: /accept_addeal ${adDeal.id}\n` +
                     `• Publisher: /submit_proof ${adDeal.id} <proof>`,
                 );
             } catch (err) {
-                const message = telegramSafeErrorMessageWithCorrelation(err);
+                const message = mapBackendErrorToTelegramMessage(err);
+                const { code, correlationId } = extractTelegramErrorMeta(err);
                 this.logger.error({
                     event: 'telegram_addeal_create_failed',
                     userId,
                     role: fsm.role,
                     state: fsm.state,
                     error: message,
+                    code,
+                    correlationId,
                 });
-                return ctx.reply(`❌ ${message}`);
+                return replySafe(ctx, message);
             }
         }
 
@@ -301,7 +318,7 @@ export class AdvertiserHandler {
             fsm.state === TelegramState.IDLE
             || fsm.state === TelegramState.SELECT_ROLE
         ) {
-            await ctx.reply('ℹ️ Session expired. Use /start to choose your role.');
+            await replySafe(ctx, 'ℹ️ Session expired. Use /start to choose your role.');
             return;
         }
 
@@ -322,25 +339,25 @@ export class AdvertiserHandler {
 
     private mapResolvePublisherReason(result: { reason?: TelegramResolvePublisherFailureReason }) {
         switch (result.reason) {
-            case 'INVALID_IDENTIFIER':
-                return 'Send @username or t.me link';
             case 'CHANNEL_NOT_FOUND':
-                return 'This channel isn’t onboarded. Ask the owner to onboard + verify.';
+                return '❌ Bu kanal hali marketplace’da yo‘q. Egasi onboarding + verifikatsiya qilsin.';
             case 'CHANNEL_NOT_APPROVED':
-                return 'Channel submitted but not approved yet.';
-            case 'CHANNEL_OWNER_NOT_PUBLISHER':
-                return 'Channel owner must complete publisher onboarding.';
+                return '⏳ Kanal hali marketplace’da tasdiqlanmagan. Admin ko‘rib chiqmoqda.';
+            case 'CHANNEL_NOT_OWNED_BY_PUBLISHER':
+                return '❌ Kanal egasi publisher akkaunt emas.';
             case 'PUBLISHER_NOT_REGISTERED':
-                return 'Publisher account not registered yet. Use invite deep link.';
+                return '❌ Publisher ro‘yxatdan o‘tmagan. Invite link orqali kiring.';
+            case 'INVALID_PUBLISHER_IDENTIFIER':
+                return '❌ @username yoki t.me link noto‘g‘ri.';
             default:
-                return 'Please send a valid @username or t.me link.';
+                return '❌ Iltimos, to‘g‘ri @username yoki t.me link yuboring.';
         }
     }
 
     private async ensureAdvertiser(ctx: Context) {
         const userId = ctx.from?.id;
         if (!userId) {
-            await ctx.reply('❌ Telegram user not found.');
+            await replySafe(ctx, '❌ Telegram user not found.');
             return null;
         }
 
@@ -350,8 +367,16 @@ export class AdvertiserHandler {
                 telegramId: userId.toString(),
             });
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_advertiser_ensure_failed',
+                userId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
             return null;
         }
 

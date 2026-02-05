@@ -14,6 +14,7 @@ import { AppConfig, appConfig } from '@/config/app.config';
 import CircuitBreaker from 'opossum';
 import { TelegramTimeoutError, withTelegramTimeout } from './telegram-timeout';
 import { TelegramIdentityAdapter } from '@/modules/identity/telegram-identity.adapter';
+import { answerCbQuerySafe, replySafe } from '@/modules/telegram/telegram-safe-text.util';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
     const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
@@ -161,7 +162,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramI
     // ===============================
     private registerUserHandlers() {
         this.bot.start(async (ctx) => {
-            await ctx.reply(
+            await replySafe(
+                ctx,
                 `👋 Welcome to AdTech
 
 Safe Telegram advertising with escrow protection.
@@ -179,13 +181,13 @@ Who are you?`,
         });
 
         this.bot.action('ROLE_ADVERTISER', async (ctx) => {
-            await ctx.answerCbQuery();
-            await ctx.reply('🧑‍💼 Advertiser panel (coming soon)');
+            await answerCbQuerySafe(ctx);
+            await replySafe(ctx, '🧑‍💼 Advertiser panel (coming soon)');
         });
 
         this.bot.action('ROLE_PUBLISHER', async (ctx) => {
-            await ctx.answerCbQuery();
-            await ctx.reply('📢 Publisher panel (coming soon)');
+            await answerCbQuerySafe(ctx);
+            await replySafe(ctx, '📢 Publisher panel (coming soon)');
         });
     }
 
@@ -404,31 +406,31 @@ Who are you?`,
     private registerAdminCommands() {
         this.bot.command('force_release', async (ctx) => {
             const [, campaignTargetId] = ctx.message.text.split(' ');
-            if (!campaignTargetId) return ctx.reply('Usage: /force_release <campaignTargetId>');
+            if (!campaignTargetId) return replySafe(ctx, 'Usage: /force_release <campaignTargetId>');
             return this.adminHandler.forceRelease(ctx, campaignTargetId);
         });
 
         this.bot.command('force_refund', async (ctx) => {
             const [, campaignTargetId, reason] = ctx.message.text.split(' ');
-            if (!campaignTargetId) return ctx.reply('Usage: /force_refund <campaignTargetId> [reason]');
+            if (!campaignTargetId) return replySafe(ctx, 'Usage: /force_refund <campaignTargetId> [reason]');
             return this.adminHandler.forceRefund(ctx, campaignTargetId, reason ?? 'admin_force');
         });
 
         this.bot.command('retry_post', async (ctx) => {
             const [, postJobId] = ctx.message.text.split(' ');
-            if (!postJobId) return ctx.reply('Usage: /retry_post <postJobId>');
+            if (!postJobId) return replySafe(ctx, 'Usage: /retry_post <postJobId>');
             return this.adminHandler.retryPost(ctx, postJobId);
         });
 
         this.bot.command('freeze_campaign', async (ctx) => {
             const [, campaignId] = ctx.message.text.split(' ');
-            if (!campaignId) return ctx.reply('Usage: /freeze_campaign <campaignId>');
+            if (!campaignId) return replySafe(ctx, 'Usage: /freeze_campaign <campaignId>');
             return this.adminHandler.freezeCampaign(ctx, campaignId);
         });
 
         this.bot.command('unfreeze_campaign', async (ctx) => {
             const [, campaignId] = ctx.message.text.split(' ');
-            if (!campaignId) return ctx.reply('Usage: /unfreeze_campaign <campaignId>');
+            if (!campaignId) return replySafe(ctx, 'Usage: /unfreeze_campaign <campaignId>');
             return this.adminHandler.unfreezeCampaign(ctx, campaignId);
         });
     }

@@ -8,6 +8,7 @@ import { ChannelsService } from '@/modules/channels/channels.service';
 import { resetDatabase } from '../utils/test-helpers';
 import { ChannelStatus, UserRole, UserStatus } from '@prisma/client';
 import { InternalTokenGuard } from '@/common/guards/internal-token.guard';
+import { ConfigService } from '@nestjs/config';
 
 describe('InternalTelegramController resolvePublisher', () => {
     let prisma: PrismaService;
@@ -23,6 +24,10 @@ describe('InternalTelegramController resolvePublisher', () => {
                 { provide: IdentityResolverService, useValue: {} },
                 { provide: TelegramService, useValue: {} },
                 { provide: ChannelsService, useValue: {} },
+                {
+                    provide: ConfigService,
+                    useValue: { get: jest.fn().mockReturnValue('adtech_bot') },
+                },
                 { provide: 'LOGGER', useValue: { log: jest.fn(), warn: jest.fn(), error: jest.fn() } },
             ],
         })
@@ -52,7 +57,7 @@ describe('InternalTelegramController resolvePublisher', () => {
         }
     });
 
-    it('returns INVALID_IDENTIFIER for invite links', async () => {
+    it('returns INVALID_PUBLISHER_IDENTIFIER for invite links', async () => {
         if (!dbAvailable) {
             return;
         }
@@ -62,7 +67,7 @@ describe('InternalTelegramController resolvePublisher', () => {
 
         expect(result.ok).toBe(false);
         if (!result.ok) {
-            expect(result.reason).toBe('INVALID_IDENTIFIER');
+            expect(result.reason).toBe('INVALID_PUBLISHER_IDENTIFIER');
         }
     });
 

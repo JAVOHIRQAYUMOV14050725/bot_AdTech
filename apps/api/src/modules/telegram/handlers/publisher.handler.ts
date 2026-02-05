@@ -5,8 +5,11 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { addChannelOptions, publisherHome, verifyPrivateChannelKeyboard } from '../keyboards';
 import { Logger } from '@nestjs/common';
-import { telegramSafeErrorMessageWithCorrelation } from '@/modules/telegram/telegram-error.util';
+import { ConfigService } from '@nestjs/config';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
+import { formatTelegramBotUsernameMention } from '@/common/utils/telegram-bot-username.util';
+import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
 @Update()
 export class PublisherHandler {
     private readonly logger = new Logger(PublisherHandler.name);
@@ -14,6 +17,7 @@ export class PublisherHandler {
     constructor(
         private readonly fsm: TelegramFSMService,
         private readonly backendClient: TelegramBackendClient,
+        private readonly configService: ConfigService,
     ) { }
 
     @Action('ROLE_PUBLISHER')
@@ -30,7 +34,8 @@ export class PublisherHandler {
             TelegramState.PUB_DASHBOARD,
         );
 
-        await ctx.reply(
+        await replySafe(
+            ctx,
             `📢 Publisher Panel\n\n📈 Earnings: $0\n📣 Channels: 0`,
             publisherHome,
         );
@@ -49,7 +54,8 @@ export class PublisherHandler {
             TelegramState.PUB_ADD_CHANNEL,
         );
 
-        await ctx.reply(
+        await replySafe(
+            ctx,
             '📣 Add a channel\n\nChoose how you want to onboard your channel:',
             addChannelOptions,
         );
@@ -68,7 +74,7 @@ export class PublisherHandler {
             TelegramState.PUB_ADD_CHANNEL_PUBLIC,
         );
 
-        await ctx.reply('🔓 Send your channel @username or public t.me link:');
+        await replySafe(ctx, '🔓 Send your channel @username or public t.me link:');
     }
 
     @Action('PUB_ADD_CHANNEL_PRIVATE')
@@ -84,9 +90,13 @@ export class PublisherHandler {
             TelegramState.PUB_ADD_CHANNEL_PRIVATE,
         );
 
-        await ctx.reply(
+        const botMention = formatTelegramBotUsernameMention(
+            this.configService.get<string>('TELEGRAM_BOT_USERNAME'),
+        );
+        await replySafe(
+            ctx,
             '🔒 Your channel has no username.\n\n' +
-            'Please add @AdTechBot as an ADMIN to your channel, then press "Verify Channel".',
+            `Please add ${botMention} as an ADMIN to your channel, then press "Verify Channel".`,
             verifyPrivateChannelKeyboard,
         );
     }
@@ -113,10 +123,18 @@ export class PublisherHandler {
                 });
             }
 
-            return ctx.reply(response.message, verifyPrivateChannelKeyboard);
+            return replySafe(ctx, response.message, verifyPrivateChannelKeyboard);
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            return ctx.reply(`❌ ${message}`, verifyPrivateChannelKeyboard);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_verify_private_channel_failed',
+                userId,
+                code,
+                correlationId,
+                error: message,
+            });
+            return replySafe(ctx, message, verifyPrivateChannelKeyboard);
         }
     }
 
@@ -140,14 +158,15 @@ export class PublisherHandler {
                 const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
 
                 if (adDeal.adDeal.publisherId !== context.user.id) {
-                    return ctx.reply('❌ AdDeal not found for publisher');
+                    return replySafe(ctx, '❌ AdDeal not found for publisher');
                 }
 
                 await this.backendClient.acceptAdDeal(adDealId);
 
-                return ctx.reply(`✅ AdDeal accepted\nID: ${adDealId}`);
+                return replySafe(ctx, `✅ AdDeal accepted\nID: ${adDealId}`);
             } catch (err) {
-                const message = telegramSafeErrorMessageWithCorrelation(err);
+                const message = mapBackendErrorToTelegramMessage(err);
+                const { code, correlationId } = extractTelegramErrorMeta(err);
                 this.logger.error({
                     event: 'telegram_accept_failed',
                     adDealId,
@@ -155,8 +174,10 @@ export class PublisherHandler {
                     role: fsm.role,
                     state: fsm.state,
                     error: message,
+                    code,
+                    correlationId,
                 });
-                return ctx.reply(`❌ ${message}`);
+                return replySafe(ctx, message);
             }
         }
 
@@ -173,7 +194,7 @@ export class PublisherHandler {
                     TelegramState.PUB_ADDEAL_PROOF,
                     { adDealId },
                 );
-                return ctx.reply('🧾 Send proof details:');
+                return replySafe(ctx, '🧾 Send proof details:');
             }
 
             return this.handleProofSubmission(ctx, adDealId, proofText);
@@ -199,7 +220,8 @@ export class PublisherHandler {
                     userId,
                     TelegramState.PUB_DASHBOARD,
                 );
-                return ctx.reply(
+                return replySafe(
+                    ctx,
                     '⚠️ Session expired. Please restart proof submission with /submit_proof.',
                 );
             }
@@ -214,7 +236,7 @@ export class PublisherHandler {
             fsm.state === TelegramState.IDLE
             || fsm.state === TelegramState.SELECT_ROLE
         ) {
-            await ctx.reply('ℹ️ Session expired. Use /start to choose your role.');
+            await replySafe(ctx, 'ℹ️ Session expired. Use /start to choose your role.');
             return;
         }
 
@@ -238,7 +260,7 @@ export class PublisherHandler {
             const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
 
             if (adDeal.adDeal.publisherId !== publisher.user.id) {
-                return ctx.reply('❌ AdDeal not found for publisher');
+                return replySafe(ctx, '❌ AdDeal not found for publisher');
             }
 
             await this.backendClient.submitProof({
@@ -260,9 +282,10 @@ export class PublisherHandler {
                 publisherId: publisher.user.id,
             });
 
-            return ctx.reply(`✅ Proof submitted & settled\nID: ${adDealId}`);
+            return replySafe(ctx, `✅ Proof submitted & settled\nID: ${adDealId}`);
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_proof_failed',
                 adDealId,
@@ -270,8 +293,10 @@ export class PublisherHandler {
                 role: fsm.role,
                 state: fsm.state,
                 error: message,
+                code,
+                correlationId,
             });
-            return ctx.reply(`❌ ${message}`);
+            return replySafe(ctx, message);
         }
     }
 
@@ -286,17 +311,25 @@ export class PublisherHandler {
                 telegramUserId: ctx.from!.id.toString(),
                 identifier: value,
             });
-            return ctx.reply(response.message);
+            return replySafe(ctx, response.message);
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            return ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_public_channel_verify_failed',
+                publisherId,
+                code,
+                correlationId,
+                error: message,
+            });
+            return replySafe(ctx, message);
         }
     }
 
     private async ensurePublisher(ctx: Context) {
         const userId = ctx.from?.id;
         if (!userId) {
-            await ctx.reply('❌ Telegram user not found.');
+            await replySafe(ctx, '❌ Telegram user not found.');
             return null;
         }
 
@@ -306,8 +339,16 @@ export class PublisherHandler {
                 telegramId: userId.toString(),
             });
         } catch (err) {
-            const message = telegramSafeErrorMessageWithCorrelation(err);
-            await ctx.reply(`❌ ${message}`);
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_publisher_ensure_failed',
+                userId,
+                code,
+                correlationId,
+                error: message,
+            });
+            await replySafe(ctx, message);
             return null;
         }
 

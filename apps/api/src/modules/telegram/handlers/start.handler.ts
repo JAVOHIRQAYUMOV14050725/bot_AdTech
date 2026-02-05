@@ -7,7 +7,8 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome, publisherHome } from '../keyboards';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { extractTelegramErrorMeta, telegramSafeErrorMessageWithCorrelation } from '@/modules/telegram/telegram-error.util';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
+import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
 
 @Update()
 export class StartHandler {
@@ -53,7 +54,8 @@ export class StartHandler {
                 const intro = response.created || response.linkedInvite
                     ? '👋 Welcome to AdTech!'
                     : '✅ Welcome back!';
-                await ctx.reply(
+                await replySafe(
+                    ctx,
                     `${intro}\n\n📢 Publisher Panel\n\n📈 Earnings: $0\n📣 Channels: 0`,
                     publisherHome,
                 );
@@ -70,7 +72,8 @@ export class StartHandler {
                     linkedInvite: response.linkedInvite,
                 });
                 const intro = response.created ? '👋 Welcome to AdTech!' : '✅ Welcome back!';
-                await ctx.reply(
+                await replySafe(
+                    ctx,
                     `${intro}\n\n🧑‍💼 Advertiser Panel\n\n💰 Balance: $0\n📊 Active campaigns: 0`,
                     advertiserHome,
                 );
@@ -85,20 +88,19 @@ export class StartHandler {
                 role: response.user.role,
                 linkedInvite: response.linkedInvite,
             });
-            await ctx.reply('✅ Welcome back! Admin mode enabled.');
+            await replySafe(ctx, '✅ Welcome back! Admin mode enabled.');
             return;
         } catch (err) {
-            const { code } = extractTelegramErrorMeta(err);
-            const message =
-                code === 'INVITE_NOT_FOR_YOU'
-                    ? '❌ Bu taklif sizga tegishli emas.'
-                    : `❌ ${telegramSafeErrorMessageWithCorrelation(err)}`;
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            const message = mapBackendErrorToTelegramMessage(err);
             this.logger.error({
                 event: 'telegram_start_failed',
                 telegramUserId: userId,
-                error: typeof message === 'string' ? message : 'telegram_start_failed',
+                code,
+                correlationId,
+                error: message,
             });
-            await ctx.reply(message);
+            await replySafe(ctx, message);
         }
     }
 }

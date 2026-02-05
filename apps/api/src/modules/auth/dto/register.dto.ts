@@ -5,8 +5,11 @@ import {
     IsIn,
     IsNotEmpty,
     IsOptional,
+    IsString,
+    MaxLength,
 } from 'class-validator';
 import { UserRole } from '@/modules/domain/contracts';
+import { TrimString } from '@/common/transformers/trim-string.transformer';
 export const PUBLIC_ROLES = [
     UserRole.publisher,
 ] as const;
@@ -32,4 +35,14 @@ export class RegisterDto {
     @IsEnum(UserRole)
     @IsIn(PUBLIC_ROLES)
     role?: PublicRole;
+
+    @ApiPropertyOptional({
+        example: 'publisher_handle',
+        description: 'Telegram @username (required for account-bound invites).',
+    })
+    @TrimString()
+    @IsOptional()
+    @IsString()
+    @MaxLength(64)
+    username?: string;
 }

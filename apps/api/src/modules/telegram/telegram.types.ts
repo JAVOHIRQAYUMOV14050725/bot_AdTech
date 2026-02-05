@@ -26,8 +26,8 @@ export type TelegramResolvePublisherFailureReason =
     | 'INVALID_IDENTIFIER'
     | 'CHANNEL_NOT_FOUND'
     | 'CHANNEL_NOT_APPROVED'
-    | 'OWNER_NOT_PUBLISHER'
-    | 'PUBLISHER_USER_NOT_FOUND';
+    | 'CHANNEL_OWNER_NOT_PUBLISHER'
+    | 'PUBLISHER_NOT_REGISTERED';
 
 export type TelegramResolvePublisherResult =
     | {

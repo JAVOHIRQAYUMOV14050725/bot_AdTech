@@ -1,4 +1,4 @@
-import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { normalizeTelegramUsername, parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 
 describe('normalizeTelegramUsername', () => {
     it('normalizes @Name and name to same value', () => {
@@ -9,5 +9,11 @@ describe('normalizeTelegramUsername', () => {
     it('normalizes t.me links', () => {
         expect(normalizeTelegramUsername('https://t.me/Name')).toBe('name');
         expect(normalizeTelegramUsername('t.me/Name')).toBe('name');
+    });
+
+    it('parses identifiers with @, casing, and links', () => {
+        expect(parseTelegramIdentifier('@Javohir_Qayumov').normalized).toBe('javohir_qayumov');
+        expect(parseTelegramIdentifier('javohir_qayumov').normalized).toBe('javohir_qayumov');
+        expect(parseTelegramIdentifier('t.me/Javohir_Qayumov').normalized).toBe('javohir_qayumov');
     });
 });

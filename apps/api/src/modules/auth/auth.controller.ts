@@ -38,8 +38,8 @@ export class AuthController {
     })
     @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
-    register(@Body() dto: RegisterDto) {
-        return this.authService.register(dto);
+    register(@Actor() actor: { id: string }, @Body() dto: RegisterDto) {
+        return this.authService.register(dto, actor.id);
     }
 
     @Post('invite-publisher')
@@ -51,8 +51,8 @@ export class AuthController {
     })
     @ApiCreatedResponse({ type: RegisterResponseDto })
     @ApiStandardErrorResponses()
-    invitePublisher(@Body() dto: InvitePublisherDto) {
-        return this.authService.invitePublisher(dto);
+    invitePublisher(@Actor() actor: { id: string }, @Body() dto: InvitePublisherDto) {
+        return this.authService.invitePublisher({ ...dto, actorId: actor.id });
     }
 
     @Post('bootstrap-super-admin')

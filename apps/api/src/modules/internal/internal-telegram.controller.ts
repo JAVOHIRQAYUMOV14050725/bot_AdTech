@@ -17,7 +17,7 @@ import { assertCampaignTransition, assertPostJobTransition } from '@/modules/lif
 import { InternalTelegramAdminForceDto } from './dto/internal-telegram-admin-force.dto';
 import { InternalTelegramAdminPostDto } from './dto/internal-telegram-admin-post.dto';
 import { InternalTelegramAdminCampaignDto } from './dto/internal-telegram-admin-campaign.dto';
-import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { normalizeTelegramUsername, parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 import { TelegramResolvePublisherResult } from '@/modules/telegram/telegram.types';
 
 @ApiTags('Internal')
@@ -46,13 +46,15 @@ export class InternalTelegramController {
     async ensureAdvertiser(@Body() dto: InternalTelegramEnsureDto) {
         const user = await this.prisma.user.findUnique({
             where: { telegramId: BigInt(dto.telegramId) },
+            include: { roleGrants: { select: { role: true } } },
         });
 
         if (!user) {
             throw new BadRequestException('Advertiser account not found');
         }
 
-        if (user.role !== UserRole.advertiser) {
+        const roles = new Set([user.role, ...user.roleGrants.map((grant) => grant.role)]);
+        if (!roles.has(UserRole.advertiser)) {
             throw new ForbiddenException(`Role mismatch: ${user.role}`);
         }
 
@@ -70,13 +72,15 @@ export class InternalTelegramController {
     async ensurePublisher(@Body() dto: InternalTelegramEnsureDto) {
         const user = await this.prisma.user.findUnique({
             where: { telegramId: BigInt(dto.telegramId) },
+            include: { roleGrants: { select: { role: true } } },
         });
 
         if (!user) {
             throw new BadRequestException('Publisher account not found');
         }
 
-        if (user.role !== UserRole.publisher) {
+        const roles = new Set([user.role, ...user.roleGrants.map((grant) => grant.role)]);
+        if (!roles.has(UserRole.publisher)) {
             throw new ForbiddenException(`Role mismatch: ${user.role}`);
         }
 
@@ -93,8 +97,8 @@ export class InternalTelegramController {
     @Post('advertiser/resolve-publisher')
     async resolvePublisher(@Body() dto: InternalTelegramResolvePublisherDto): Promise<TelegramResolvePublisherResult> {
         const trimmed = dto.identifier.trim();
-        const normalized = normalizeTelegramUsername(trimmed);
-        const parsed = this.parsePublisherIdentifier(normalized ?? trimmed);
+        const parsedIdentifier = parseTelegramIdentifier(trimmed);
+        const parsed = this.parsePublisherIdentifier(parsedIdentifier.normalized ?? trimmed);
         if (!parsed) {
             return {
                 ok: false as const,
@@ -117,20 +121,22 @@ export class InternalTelegramController {
             where: {
                 username: { equals: username, mode: 'insensitive' },
             },
+            include: { roleGrants: { select: { role: true } } },
         });
 
         if (publisherByUsername) {
-            if (publisherByUsername.role !== UserRole.publisher) {
+            const roles = new Set([publisherByUsername.role, ...publisherByUsername.roleGrants.map((grant) => grant.role)]);
+            if (!roles.has(UserRole.publisher)) {
                 return {
                     ok: false as const,
-                    reason: 'OWNER_NOT_PUBLISHER',
-                    message: 'Owner must complete publisher onboarding.',
+                    reason: 'PUBLISHER_NOT_REGISTERED',
+                    message: 'Publisher account not registered yet.',
                 };
             }
             if (!publisherByUsername.telegramId) {
                 return {
                     ok: false as const,
-                    reason: 'PUBLISHER_USER_NOT_FOUND',
+                    reason: 'PUBLISHER_NOT_REGISTERED',
                     message: 'Publisher account not linked yet. Use invite deep link.',
                 };
             }
@@ -149,7 +155,7 @@ export class InternalTelegramController {
             where: {
                 username: { equals: username, mode: 'insensitive' },
             },
-            include: { owner: true },
+            include: { owner: { include: { roleGrants: { select: { role: true } } } } },
         });
 
         if (channel) {
@@ -160,17 +166,21 @@ export class InternalTelegramController {
                     message: 'Channel submitted but not approved yet.',
                 };
             }
-            if (channel.owner.role !== UserRole.publisher) {
+            const ownerRoles = new Set([channel.owner.role]);
+            if (channel.owner.roleGrants) {
+                channel.owner.roleGrants.forEach((grant) => ownerRoles.add(grant.role));
+            }
+            if (!ownerRoles.has(UserRole.publisher)) {
                 return {
                     ok: false as const,
-                    reason: 'OWNER_NOT_PUBLISHER',
-                    message: 'Owner must complete publisher onboarding.',
+                    reason: 'CHANNEL_OWNER_NOT_PUBLISHER',
+                    message: 'Channel owner must complete publisher onboarding.',
                 };
             }
             if (!channel.owner.telegramId) {
                 return {
                     ok: false as const,
-                    reason: 'PUBLISHER_USER_NOT_FOUND',
+                    reason: 'PUBLISHER_NOT_REGISTERED',
                     message: 'Publisher account not linked yet. Use invite deep link.',
                 };
             }
@@ -192,11 +202,11 @@ export class InternalTelegramController {
 
         return {
             ok: false as const,
-            reason: parsed.source === 'link' ? 'CHANNEL_NOT_FOUND' : 'PUBLISHER_USER_NOT_FOUND',
+            reason: parsed.source === 'link' ? 'CHANNEL_NOT_FOUND' : 'PUBLISHER_NOT_REGISTERED',
             message:
                 parsed.source === 'link'
                     ? 'This channel isn’t onboarded. Ask the owner to onboard + verify.'
-                    : 'Publisher account not linked yet. Use invite deep link.',
+                    : 'Publisher account not registered yet. Use invite deep link.',
         };
     }
 

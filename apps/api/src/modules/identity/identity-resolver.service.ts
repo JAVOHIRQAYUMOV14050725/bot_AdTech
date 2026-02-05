@@ -1,8 +1,9 @@
+
 import { Injectable, LoggerService, BadRequestException, Inject, ServiceUnavailableException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '@/prisma/prisma.service';
 import { TelegramCheckReason } from '@/modules/telegram/telegram.types';
-import { normalizeTelegramUsername } from '@/common/utils/telegram-username.util';
+import { parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
 import { TELEGRAM_IDENTITY_ADAPTER, TelegramIdentityAdapter } from './telegram-identity.adapter';
 
 type ParsedIdentifier =
@@ -60,7 +61,8 @@ export class IdentityResolverService {
             }
         }
 
-        const normalized = normalizeTelegramUsername(trimmed);
+        const parsedIdentifier = parseTelegramIdentifier(trimmed);
+        const normalized = parsedIdentifier.normalized;
         if (!normalized) {
             return null;
         }

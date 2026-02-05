@@ -1,15 +1,15 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { TrimString } from '@/common/transformers/trim-string.transformer';
 
 export class InvitePublisherDto {
-    @ApiPropertyOptional({
+    @ApiProperty({
         example: 'publisher_handle',
-        description: 'Optional username hint to prefill the account.',
+        description: 'Telegram @username to bind the invite to a specific Telegram account.',
     })
     @TrimString()
-    @IsOptional()
     @IsString()
+    @IsNotEmpty()
     @MaxLength(64)
-    username?: string;
+    username!: string;
 }

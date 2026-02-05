@@ -7,7 +7,7 @@ import { TelegramFSMService } from '../../application/telegram/telegram-fsm.serv
 import { TelegramState } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome, publisherHome } from '../keyboards';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { telegramSafeErrorMessage } from '@/modules/telegram/telegram-error.util';
+import { extractTelegramErrorMeta, telegramSafeErrorMessageWithCorrelation } from '@/modules/telegram/telegram-error.util';
 
 @Update()
 export class StartHandler {
@@ -88,13 +88,17 @@ export class StartHandler {
             await ctx.reply('✅ Welcome back! Admin mode enabled.');
             return;
         } catch (err) {
-            const message = telegramSafeErrorMessage(err);
+            const { code } = extractTelegramErrorMeta(err);
+            const message =
+                code === 'INVITE_NOT_FOR_YOU'
+                    ? '❌ Bu taklif sizga tegishli emas.'
+                    : `❌ ${telegramSafeErrorMessageWithCorrelation(err)}`;
             this.logger.error({
                 event: 'telegram_start_failed',
                 telegramUserId: userId,
-                error: message,
+                error: typeof message === 'string' ? message : 'telegram_start_failed',
             });
-            await ctx.reply(`❌ ${message}`);
+            await ctx.reply(message);
         }
     }
 }

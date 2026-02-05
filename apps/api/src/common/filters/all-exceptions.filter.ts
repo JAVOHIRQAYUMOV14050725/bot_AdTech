@@ -82,11 +82,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
         const correlationId =
             request.correlationId ?? RequestContext.getCorrelationId() ?? null;
+        const errorCode =
+            typeof (errorResponse as { code?: unknown }).code === 'string'
+                ? (errorResponse as { code?: string }).code
+                : typeof (normalizedError.details as { code?: unknown } | undefined)?.code === 'string'
+                    ? (normalizedError.details as { code?: string }).code
+                    : null;
         const payload = sanitizeForJson({
             statusCode: status,
             timestamp: new Date().toISOString(),
             path: request.originalUrl,
             correlationId,
+            code: errorCode,
+            message: normalizedError.message,
             error: normalizedError,
         });
 

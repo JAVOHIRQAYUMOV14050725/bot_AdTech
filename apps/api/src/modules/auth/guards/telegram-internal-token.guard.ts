@@ -16,7 +16,14 @@ export class TelegramInternalTokenGuard implements CanActivate {
         const signature = request.headers['x-telegram-signature'];
         const expected = this.configService.get<string>('TELEGRAM_INTERNAL_TOKEN');
 
-        if (!expected || !token || token !== expected) {
+        const tokenValue = typeof token === 'string' ? token : Array.isArray(token) ? token[0] : null;
+        const tokenValid =
+            typeof expected === 'string'
+            && typeof tokenValue === 'string'
+            && tokenValue.length === expected.length
+            && timingSafeEqual(Buffer.from(tokenValue, 'utf8'), Buffer.from(expected, 'utf8'));
+
+        if (!expected || !tokenValue || !tokenValid) {
             this.logger.warn(
                 {
                     event: 'telegram_internal_auth_failed',
@@ -28,7 +35,10 @@ export class TelegramInternalTokenGuard implements CanActivate {
             throw new UnauthorizedException('Invalid telegram internal token');
         }
 
-        if (!timestamp || !signature) {
+        const timestampValueRaw = Array.isArray(timestamp) ? timestamp[0] : timestamp;
+        const signatureValue = Array.isArray(signature) ? signature[0] : signature;
+
+        if (!timestampValueRaw || !signatureValue) {
             this.logger.warn(
                 {
                     event: 'telegram_internal_auth_failed',
@@ -40,7 +50,7 @@ export class TelegramInternalTokenGuard implements CanActivate {
             throw new UnauthorizedException('Missing telegram signature headers');
         }
 
-        const timestampValue = Number(timestamp);
+        const timestampValue = Number(timestampValueRaw);
         if (!Number.isFinite(timestampValue)) {
             this.logger.warn(
                 {
@@ -73,7 +83,7 @@ export class TelegramInternalTokenGuard implements CanActivate {
         const expectedSignature = createHmac('sha256', expected)
             .update(`${timestamp}.${rawBody}`)
             .digest('hex');
-        const signatureBuffer = Buffer.from(signature, 'utf8');
+        const signatureBuffer = Buffer.from(signatureValue, 'utf8');
         const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
         const signatureValid =
             signatureBuffer.length === expectedBuffer.length &&

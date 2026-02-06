@@ -1,4 +1,4 @@
-import { telegramUserMessage } from '@/modules/telegram/telegram-safe-text.util';
+import { hasTelegramReplyBeenSent, replySafe, telegramUserMessage } from '@/modules/telegram/telegram-safe-text.util';
 
 describe('telegramUserMessage', () => {
     it('does not return [object Object] for plain objects', () => {
@@ -38,5 +38,18 @@ describe('telegramUserMessage', () => {
             const result = telegramUserMessage(input, 'uz');
             expect(result).not.toBe('[object Object]');
         }
+    });
+
+    it('marks replies as sent even when ctx.state is missing', async () => {
+        const reply = jest.fn().mockResolvedValue(undefined);
+        const ctx = {
+            reply,
+            from: { language_code: 'uz' },
+        } as any;
+
+        await replySafe(ctx, 'OK');
+
+        expect(reply).toHaveBeenCalledWith('OK', undefined);
+        expect(hasTelegramReplyBeenSent(ctx)).toBe(true);
     });
 });

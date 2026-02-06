@@ -1,15 +1,26 @@
 import { AdvertiserHandler } from '@/modules/telegram/handlers/advertiser.handler';
+import { TelegramState } from '@/modules/application/telegram/telegram-fsm.types';
 
 describe('Telegram resolve publisher error handling', () => {
     it('replies once with a safe Uzbek message on resolve failure', async () => {
         const backendClient = {
+            ensureAdvertiser: jest.fn().mockResolvedValue({
+                user: { id: 'adv-1', role: 'advertiser', telegramId: '1001', username: 'adv' },
+            }),
             resolvePublisher: jest.fn().mockResolvedValue({
                 ok: false,
                 reason: 'PUBLISHER_NOT_REGISTERED',
                 message: 'Publisher account not registered yet.',
             }),
         };
-        const fsm = {};
+        const fsm = {
+            get: jest.fn().mockResolvedValue({
+                role: 'advertiser',
+                state: TelegramState.ADV_ADDEAL_PUBLISHER,
+                payload: {},
+            }),
+            updateRole: jest.fn(),
+        };
         const handler = new AdvertiserHandler(fsm as any, backendClient as any);
         const reply = jest.fn().mockResolvedValue(undefined);
 

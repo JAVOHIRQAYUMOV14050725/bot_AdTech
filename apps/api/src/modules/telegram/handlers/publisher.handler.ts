@@ -145,6 +145,10 @@ export class PublisherHandler {
         if (!text) return;
 
         const userId = ctx.from!.id;
+        const fsmSnapshot = await this.fsm.get(userId);
+        if (fsmSnapshot.role !== 'publisher') {
+            return;
+        }
         const context = await this.ensurePublisher(ctx);
         if (!context) {
             return;

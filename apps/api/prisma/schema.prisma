@@ -95,7 +95,10 @@ enum AdDealStatus {
   created
   funded
   escrow_locked
+  publisher_requested
+  publisher_declined
   accepted
+  advertiser_confirmed
   proof_submitted
   settled
   refunded
@@ -426,7 +429,10 @@ model AdDeal {
   createdAt        DateTime @default(now())
   fundedAt         DateTime?
   lockedAt         DateTime?
+  publisherRequestedAt DateTime?
+  publisherDeclinedAt  DateTime?
   acceptedAt       DateTime?
+  advertiserConfirmedAt DateTime?
   proofSubmittedAt DateTime?
   proofPayload     Json?
   settledAt        DateTime?

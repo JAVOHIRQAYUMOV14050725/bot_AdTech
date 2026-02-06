@@ -132,8 +132,8 @@ export class InternalTelegramController {
             if (!roles.has(UserRole.publisher)) {
                 return {
                     ok: false as const,
-                    reason: 'PUBLISHER_NOT_REGISTERED',
-                    message: 'Publisher account not registered yet.',
+                    reason: 'CHANNEL_OWNER_NOT_PUBLISHER',
+                    message: 'Channel owner must be a publisher account.',
                 };
             }
             if (!publisherByUsername.telegramId) {
@@ -176,7 +176,7 @@ export class InternalTelegramController {
             if (!ownerRoles.has(UserRole.publisher)) {
                 return {
                     ok: false as const,
-                    reason: 'CHANNEL_NOT_OWNED_BY_PUBLISHER',
+                    reason: 'CHANNEL_OWNER_NOT_PUBLISHER',
                     message: 'Channel owner must complete publisher onboarding.',
                 };
             }

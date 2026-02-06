@@ -273,6 +273,7 @@ export class AuthService {
                 where: {
                     intendedRole: UserRole.publisher,
                     intendedUsernameNormalized: normalizedUsername,
+                    boundTelegramId: session.telegramId,
                     usedAt: null,
                     expiresAt: { gt: now },
                 },

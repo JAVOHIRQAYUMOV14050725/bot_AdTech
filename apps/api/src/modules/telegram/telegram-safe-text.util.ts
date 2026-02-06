@@ -1,64 +1,101 @@
 import { Context } from 'telegraf';
 
-const DEFAULT_FALLBACK = 'Xatolik yuz berdi.';
-const ERROR_FALLBACK = 'Unknown error';
 const REPLY_SENT_STATE_KEY = '__adtechReplySent';
 
-const safeJsonStringify = (value: unknown): string | null => {
-    const seen = new WeakSet<object>();
-    let hasCircular = false;
-    try {
-        const serialized = JSON.stringify(value, (_, nextValue) => {
-            if (nextValue && typeof nextValue === 'object') {
-                if (seen.has(nextValue)) {
-                    hasCircular = true;
-                    return undefined;
-                }
-                seen.add(nextValue);
-            }
-            return nextValue;
-        });
-        if (hasCircular) {
-            return null;
-        }
-        return serialized ?? null;
-    } catch {
-        return null;
-    }
+export type TelegramLocale = 'uz' | 'en';
+
+const FALLBACK_MESSAGES: Record<TelegramLocale, string> = {
+    uz: '❌ Xatolik yuz berdi. Iltimos qayta urinib ko‘ring.',
+    en: '❌ Something went wrong. Please try again.',
 };
 
-export function telegramSafeText(input: unknown): string {
-    if (typeof input === 'string') {
-        return input.trim() || DEFAULT_FALLBACK;
+const isNonEmptyText = (value: unknown): value is string => {
+    if (typeof value !== 'string') {
+        return false;
     }
+    const trimmed = value.trim();
+    return Boolean(trimmed) && trimmed !== '[object Object]';
+};
 
-    if (input instanceof Error) {
-        const message = typeof input.message === 'string' ? input.message.trim() : '';
-        if (message && message !== '[object Object]') {
-            return message;
-        }
-        const serialized = safeJsonStringify({
-            name: input.name,
-            message: input.message,
-            cause: (input as { cause?: unknown }).cause,
-        });
-        return serialized || ERROR_FALLBACK;
+const coercePrimitiveText = (value: unknown): string | null => {
+    if (value === null || typeof value === 'undefined') {
+        return null;
     }
-
-    if (input && typeof input === 'object') {
-        const serialized = safeJsonStringify(input);
-        if (serialized && serialized !== '{}' && serialized !== '[object Object]') {
-            return serialized;
-        }
-        const stringified = String(input);
-        if (stringified && stringified !== '[object Object]') {
-            return stringified;
-        }
-        return DEFAULT_FALLBACK;
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        const text = String(value).trim();
+        return text && text !== '[object Object]' ? text : null;
     }
+    return null;
+};
 
-    const fallback = String(input ?? '').trim();
-    return fallback || DEFAULT_FALLBACK;
+const extractMessageField = (value: unknown): string | null => {
+    if (isNonEmptyText(value)) {
+        return value.trim();
+    }
+    if (Array.isArray(value)) {
+        const parts = value
+            .map((entry) => extractMessageField(entry))
+            .filter((entry): entry is string => Boolean(entry));
+        if (parts.length) {
+            return parts.join('; ');
+        }
+        return null;
+    }
+    if (value && typeof value === 'object') {
+        const record = value as {
+            userMessage?: unknown;
+            message?: unknown;
+            error?: { message?: unknown };
+            details?: { userMessage?: unknown; message?: unknown };
+        };
+        return (
+            extractMessageField(record.userMessage)
+            ?? extractMessageField(record.message)
+            ?? extractMessageField(record.details?.userMessage)
+            ?? extractMessageField(record.details?.message)
+            ?? extractMessageField(record.error?.message)
+        );
+    }
+    return null;
+};
+
+export function resolveTelegramLocale(locale?: string | null): TelegramLocale {
+    if (!locale) {
+        return 'uz';
+    }
+    const normalized = locale.toLowerCase();
+    return normalized.startsWith('en') ? 'en' : 'uz';
+}
+
+export function telegramUserMessage(
+    input: unknown,
+    locale: TelegramLocale,
+    _correlationId?: string,
+): string {
+    const fallback = FALLBACK_MESSAGES[locale] ?? FALLBACK_MESSAGES.uz;
+    try {
+        if (input instanceof Error) {
+            const extracted = extractMessageField(input.message)
+                ?? extractMessageField((input as { userMessage?: unknown }).userMessage)
+                ?? extractMessageField((input as { cause?: unknown }).cause);
+            if (extracted) {
+                return extracted;
+            }
+        }
+
+        const primitive = coercePrimitiveText(input);
+        if (primitive) {
+            return primitive;
+        }
+
+        const extracted = extractMessageField(input);
+        if (extracted) {
+            return extracted;
+        }
+    } catch {
+        return fallback;
+    }
+    return fallback;
 }
 
 export function replySafe(
@@ -69,7 +106,8 @@ export function replySafe(
     if (ctx.state) {
         (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
     }
-    return ctx.reply(telegramSafeText(textOrUnknown), extra);
+    const locale = resolveTelegramLocale(ctx.from?.language_code);
+    return ctx.reply(telegramUserMessage(textOrUnknown, locale), extra);
 }
 
 export function answerCbQuerySafe(
@@ -78,12 +116,16 @@ export function answerCbQuerySafe(
     extra?: Parameters<Context['answerCbQuery']>[1],
 ) {
     if (typeof textOrUnknown === 'undefined') {
+        if (ctx.state) {
+            (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
+        }
         return ctx.answerCbQuery();
     }
     if (ctx.state) {
         (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
     }
-    return ctx.answerCbQuery(telegramSafeText(textOrUnknown), extra);
+    const locale = resolveTelegramLocale(ctx.from?.language_code);
+    return ctx.answerCbQuery(telegramUserMessage(textOrUnknown, locale), extra);
 }
 
 export function editMessageTextSafe(
@@ -94,7 +136,8 @@ export function editMessageTextSafe(
     if (ctx.state) {
         (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
     }
-    return ctx.editMessageText(telegramSafeText(textOrUnknown), extra);
+    const locale = resolveTelegramLocale(ctx.from?.language_code);
+    return ctx.editMessageText(telegramUserMessage(textOrUnknown, locale), extra);
 }
 
 export function hasTelegramReplyBeenSent(ctx: Context): boolean {

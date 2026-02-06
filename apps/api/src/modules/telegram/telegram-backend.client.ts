@@ -6,6 +6,7 @@ import { TelegramResolvePublisherResult } from './telegram.types';
 type BackendErrorPayload = {
     message: string;
     code: string | null;
+    userMessage: string | null;
     correlationId: string;
     raw?: unknown;
 };
@@ -14,7 +15,9 @@ type ParsedBackendErrorShape = {
     message?: unknown;
     code?: unknown;
     correlationId?: unknown;
-    error?: { message?: unknown; details?: { code?: unknown } };
+    userMessage?: unknown;
+    statusCode?: unknown;
+    error?: { message?: unknown; details?: { code?: unknown; userMessage?: unknown; message?: unknown } };
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -83,6 +86,7 @@ export class BackendApiError extends Error {
     code: string | null;
     correlationId: string | null;
     httpStatus: number;
+    userMessage: string | null;
     raw?: unknown;
 
     constructor(params: {
@@ -90,6 +94,7 @@ export class BackendApiError extends Error {
         code?: string | null;
         correlationId: string | null;
         message: string;
+        userMessage?: string | null;
         raw?: unknown;
     }) {
         super(params.message);
@@ -98,6 +103,7 @@ export class BackendApiError extends Error {
         this.httpStatus = params.status;
         this.code = params.code ?? null;
         this.correlationId = params.correlationId ?? null;
+        this.userMessage = params.userMessage ?? null;
         this.raw = params.raw;
     }
 }
@@ -111,6 +117,7 @@ export const parseBackendErrorResponse = (
     const fallbackMessage = `Backend request failed (${status})`;
     let message = fallbackMessage;
     let code: string | null = null;
+    let userMessage: string | null = null;
     let correlationId = headerCorrelationId ?? requestCorrelationId;
     let raw: unknown = undefined;
 
@@ -124,13 +131,24 @@ export const parseBackendErrorResponse = (
                     : typeof parsed.error?.message !== 'undefined'
                         ? toErrorMessage(parsed.error.message, '')
                         : '';
+            const details = isRecord(parsed.error?.details)
+                ? (parsed.error?.details as Record<string, unknown>)
+                : null;
             message = parsedMessage || toErrorMessage(parsed, fallbackMessage);
             code =
                 typeof parsed.code === 'string'
                     ? parsed.code
-                    : typeof parsed.error?.details?.code === 'string'
-                        ? parsed.error.details.code
+                    : typeof details?.code === 'string'
+                        ? (details.code as string)
                         : null;
+            userMessage =
+                typeof parsed.userMessage === 'string'
+                    ? parsed.userMessage
+                    : typeof details?.userMessage === 'string'
+                        ? (details.userMessage as string)
+                        : typeof details?.message !== 'undefined'
+                            ? toErrorMessage(details?.message, '')
+                            : null;
             if (!headerCorrelationId) {
                 correlationId =
                     typeof parsed.correlationId === 'string' ? parsed.correlationId : requestCorrelationId;
@@ -146,6 +164,7 @@ export const parseBackendErrorResponse = (
     return {
         message,
         code,
+        userMessage,
         correlationId,
         raw,
     };
@@ -264,11 +283,22 @@ export class TelegramBackendClient {
                 requestCorrelationId,
                 response.status,
             );
+            this.logger.error(
+                {
+                    event: 'telegram_backend_request_failed',
+                    path,
+                    status: response.status,
+                    code: parsed.code,
+                    correlationId: parsed.correlationId,
+                },
+                'TelegramBackendClient',
+            );
             throw new BackendApiError({
                 status: response.status,
                 code: parsed.code,
                 correlationId: parsed.correlationId,
                 message: parsed.message,
+                userMessage: parsed.userMessage,
                 raw: parsed.raw,
             });
         }
@@ -479,6 +509,18 @@ export class TelegramBackendClient {
 
     acceptAdDeal(adDealId: string) {
         return this.request<{ ok: boolean }>(`/internal/addeals/${adDealId}/accept`, {
+            method: 'POST',
+        });
+    }
+
+    declineAdDeal(adDealId: string) {
+        return this.request<{ ok: boolean }>(`/internal/addeals/${adDealId}/decline`, {
+            method: 'POST',
+        });
+    }
+
+    confirmAdDeal(adDealId: string) {
+        return this.request<{ ok: boolean }>(`/internal/addeals/${adDealId}/confirm`, {
             method: 'POST',
         });
     }

@@ -6,7 +6,6 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { OpsModule } from '@/modules/ops/ops.module';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { loadEnv } from '@/config/env';
-import { TelegramUpdate } from './telegram.update';
 import { TelegramFSMService } from '../application/telegram/telegram-fsm.service';
 import { RedisModule } from '../redis/redis.module';
 import { StartHandler } from './handlers/start.handler';

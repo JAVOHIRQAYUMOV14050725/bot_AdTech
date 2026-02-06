@@ -85,7 +85,7 @@ export class AdvertiserHandler {
         if (!text) return;
 
         const userId = ctx.from!.id;
-        const commandMatch = text.match(/^\/(fund_addeal|lock_addeal)\s+(\S+)/);
+        const commandMatch = text.match(/^\/(fund_addeal|lock_addeal|confirm_addeal)\s+(\S+)/);
         if (commandMatch) {
             const [, command, adDealId] = commandMatch;
             const context = await this.ensureAdvertiser(ctx);
@@ -113,6 +113,14 @@ export class AdvertiserHandler {
                 if (command === 'lock_addeal') {
                     await this.backendClient.lockAdDeal(adDealId);
                     return replySafe(ctx, `🔒 Escrow locked\nID: ${adDealId}`);
+                }
+
+                if (command === 'confirm_addeal') {
+                    if (adDeal.adDeal.advertiserId !== context.user.id) {
+                        return replySafe(ctx, '❌ AdDeal not found for advertiser');
+                    }
+                    await this.backendClient.confirmAdDeal(adDealId);
+                    return replySafe(ctx, `✅ AdDeal confirmed\nID: ${adDealId}`);
                 }
             } catch (err) {
                 const message = mapBackendErrorToTelegramMessage(err);
@@ -310,7 +318,9 @@ export class AdvertiserHandler {
                     `✅ AdDeal created & escrow locked\nID: ${adDeal.id}\n\n` +
                     `Next steps:\n` +
                     `• Publisher: /accept_addeal ${adDeal.id}\n` +
-                    `• Publisher: /submit_proof ${adDeal.id} <proof>`,
+                    `• Publisher: /decline_addeal ${adDeal.id}\n` +
+                    `• Advertiser: /confirm_addeal ${adDeal.id}\n` +
+                    `• Publisher (after confirm): /submit_proof ${adDeal.id} <proof>`,
                 );
             } catch (err) {
                 const message = mapBackendErrorToTelegramMessage(err);
@@ -356,8 +366,8 @@ export class AdvertiserHandler {
             case 'CHANNEL_NOT_FOUND':
                 return '❌ Bu kanal hali marketplace’da yo‘q. Egasi onboarding + verifikatsiya qilsin.';
             case 'CHANNEL_NOT_APPROVED':
-                return '⏳ Kanal hali marketplace’da tasdiqlanmagan. Admin ko‘rib chiqmoqda.';
-            case 'CHANNEL_NOT_OWNED_BY_PUBLISHER':
+                return '⏳ Kanal hali marketplace’da tasdiqlanmagan (pending).';
+            case 'CHANNEL_OWNER_NOT_PUBLISHER':
                 return '❌ Kanal egasi publisher akkaunt emas.';
             case 'PUBLISHER_NOT_REGISTERED':
                 return '❌ Publisher ro‘yxatdan o‘tmagan. Invite link orqali kiring.';

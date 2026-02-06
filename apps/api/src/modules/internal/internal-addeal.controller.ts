@@ -5,6 +5,8 @@ import { CreateAdDealUseCase } from '@/modules/application/addeal/create-addeal.
 import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usecase';
 import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
 import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usecase';
+import { AdvertiserConfirmUseCase } from '@/modules/application/addeal/advertiser-confirm.usecase';
+import { PublisherDeclineUseCase } from '@/modules/application/addeal/publisher-decline.usecase';
 import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.usecase';
 import { SettleAdDealUseCase } from '@/modules/application/addeal/settle-addeal.usecase';
 import { CreateAdDealDto } from './dto/create-addeal.dto';
@@ -21,6 +23,8 @@ export class InternalAdDealController {
         private readonly fundAdDeal: FundAdDealUseCase,
         private readonly lockEscrow: LockEscrowUseCase,
         private readonly acceptDeal: AcceptDealUseCase,
+        private readonly advertiserConfirm: AdvertiserConfirmUseCase,
+        private readonly publisherDecline: PublisherDeclineUseCase,
         private readonly submitProof: SubmitProofUseCase,
         private readonly settleAdDeal: SettleAdDealUseCase,
     ) { }
@@ -59,6 +63,22 @@ export class InternalAdDealController {
         return this.acceptDeal.execute({
             adDealId: id,
             actor: TransitionActor.publisher,
+        });
+    }
+
+    @Post(':id/decline')
+    decline(@Param('id') id: string) {
+        return this.publisherDecline.execute({
+            adDealId: id,
+            actor: TransitionActor.publisher,
+        });
+    }
+
+    @Post(':id/confirm')
+    confirm(@Param('id') id: string) {
+        return this.advertiserConfirm.execute({
+            adDealId: id,
+            actor: TransitionActor.advertiser,
         });
     }
 

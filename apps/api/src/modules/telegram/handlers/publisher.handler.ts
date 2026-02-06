@@ -163,12 +163,47 @@ export class PublisherHandler {
 
                 await this.backendClient.acceptAdDeal(adDealId);
 
-                return replySafe(ctx, `✅ AdDeal accepted\nID: ${adDealId}`);
+                return replySafe(
+                    ctx,
+                    `✅ AdDeal accepted\nID: ${adDealId}\n\n` +
+                    `Advertiser must confirm before you can submit proof:\n` +
+                    `• Advertiser: /confirm_addeal ${adDealId}`,
+                );
             } catch (err) {
                 const message = mapBackendErrorToTelegramMessage(err);
                 const { code, correlationId } = extractTelegramErrorMeta(err);
                 this.logger.error({
                     event: 'telegram_accept_failed',
+                    adDealId,
+                    userId,
+                    role: fsm.role,
+                    state: fsm.state,
+                    error: message,
+                    code,
+                    correlationId,
+                });
+                return replySafe(ctx, message);
+            }
+        }
+
+        const declineMatch = text.match(/^\/(decline_addeal)\s+(\S+)/);
+        if (declineMatch) {
+            const adDealId = declineMatch[2];
+            try {
+                const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
+
+                if (adDeal.adDeal.publisherId !== context.user.id) {
+                    return replySafe(ctx, '❌ AdDeal not found for publisher');
+                }
+
+                await this.backendClient.declineAdDeal(adDealId);
+
+                return replySafe(ctx, `🚫 AdDeal declined\nID: ${adDealId}`);
+            } catch (err) {
+                const message = mapBackendErrorToTelegramMessage(err);
+                const { code, correlationId } = extractTelegramErrorMeta(err);
+                this.logger.error({
+                    event: 'telegram_decline_failed',
                     adDealId,
                     userId,
                     role: fsm.role,

@@ -36,11 +36,11 @@ export class LockEscrowUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === DealState.escrow_locked) {
+            if (adDeal.status === DealState.publisher_requested) {
                 return adDeal;
             }
 
-            if (adDeal.status !== DealState.funded) {
+            if (adDeal.status !== DealState.funded && adDeal.status !== DealState.escrow_locked) {
                 throw new BadRequestException(
                     `AdDeal cannot lock escrow from status ${adDeal.status}`,
                 );
@@ -75,50 +75,59 @@ export class LockEscrowUseCase {
             const transition = assertAdDealTransition({
                 adDealId: adDeal.id,
                 from: adDeal.status as DealState,
-                to: DealState.escrow_locked,
+                to: DealState.publisher_requested,
                 actor: params.actor ?? TransitionActor.system,
-                correlationId: `addeal:${adDeal.id}:escrow_lock`,
+                correlationId: `addeal:${adDeal.id}:publisher_request`,
             });
 
             if (!transition.noop) {
+                const reasons =
+                    adDeal.status === DealState.funded
+                        ? [LedgerReason.escrow_hold]
+                        : [];
                 assertAdDealMoneyMovement({
                     adDealId: adDeal.id,
                     rule: transition.rule,
-                    reasons: [LedgerReason.escrow_hold],
+                    reasons,
                 });
             }
 
-            await this.paymentsService.recordWalletMovement({
-                tx,
-                walletId: advertiserWallet.id,
-                amount: adDeal.amount,
-                type: LedgerType.debit,
-                reason: LedgerReason.escrow_hold,
-                idempotencyKey: `addeal:${adDeal.id}:escrow_lock`,
-                actor: params.actor ?? TransitionActor.system,
-                correlationId: `addeal:${adDeal.id}:escrow_lock`,
-                referenceId: adDeal.id,
-            });
-
-            await tx.adDealEscrow.upsert({
-                where: { adDealId: adDeal.id },
-                update: {},
-                create: {
-                    adDealId: adDeal.id,
-                    advertiserWalletId: advertiserWallet.id,
-                    publisherWalletId: publisherWallet.id,
+            if (adDeal.status === DealState.funded) {
+                await this.paymentsService.recordWalletMovement({
+                    tx,
+                    walletId: advertiserWallet.id,
                     amount: adDeal.amount,
-                },
-            });
+                    type: LedgerType.debit,
+                    reason: LedgerReason.escrow_hold,
+                    idempotencyKey: `addeal:${adDeal.id}:escrow_lock`,
+                    actor: params.actor ?? TransitionActor.system,
+                    correlationId: `addeal:${adDeal.id}:escrow_lock`,
+                    referenceId: adDeal.id,
+                });
+
+                await tx.adDealEscrow.upsert({
+                    where: { adDealId: adDeal.id },
+                    update: {},
+                    create: {
+                        adDealId: adDeal.id,
+                        advertiserWalletId: advertiserWallet.id,
+                        publisherWalletId: publisherWallet.id,
+                        amount: adDeal.amount,
+                    },
+                });
+            }
 
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
-            const locked = domain.lockEscrow().toSnapshot();
+            const requested = domain
+                .requestPublisher(new Date(), adDeal.lockedAt ?? new Date())
+                .toSnapshot();
 
             const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
-                    status: locked.status,
-                    lockedAt: locked.lockedAt,
+                    status: requested.status,
+                    lockedAt: requested.lockedAt,
+                    publisherRequestedAt: requested.publisherRequestedAt,
                 },
             });
 
@@ -128,7 +137,8 @@ export class LockEscrowUseCase {
                     action: 'addeal_escrow_locked',
                     metadata: {
                         adDealId: adDeal.id,
-                        lockedAt: locked.lockedAt,
+                        lockedAt: requested.lockedAt,
+                        publisherRequestedAt: requested.publisherRequestedAt,
                     },
                 },
             });

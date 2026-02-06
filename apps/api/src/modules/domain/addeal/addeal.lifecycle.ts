@@ -46,11 +46,22 @@ const AD_DEAL_TRANSITIONS: TransitionMap = {
                 required: [LedgerReason.escrow_hold],
             },
         },
+        [DealState.publisher_requested]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: {
+                type: 'ledger',
+                required: [LedgerReason.escrow_hold],
+            },
+        },
     },
     [DealState.escrow_locked]: {
-        [DealState.accepted]: {
+        [DealState.publisher_requested]: {
             actors: [
-                TransitionActor.publisher,
+                TransitionActor.advertiser,
                 TransitionActor.admin,
                 TransitionActor.system,
             ],
@@ -77,7 +88,79 @@ const AD_DEAL_TRANSITIONS: TransitionMap = {
             moneyMovement: NO_MONEY_MOVEMENT,
         },
     },
+    [DealState.publisher_requested]: {
+        [DealState.accepted]: {
+            actors: [
+                TransitionActor.publisher,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: NO_MONEY_MOVEMENT,
+        },
+        [DealState.publisher_declined]: {
+            actors: [
+                TransitionActor.publisher,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: {
+                type: 'ledger',
+                required: [LedgerReason.refund],
+            },
+        },
+        [DealState.refunded]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: {
+                type: 'ledger',
+                required: [LedgerReason.refund],
+            },
+        },
+        [DealState.disputed]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.publisher,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: NO_MONEY_MOVEMENT,
+        },
+    },
     [DealState.accepted]: {
+        [DealState.advertiser_confirmed]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: NO_MONEY_MOVEMENT,
+        },
+        [DealState.refunded]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: {
+                type: 'ledger',
+                required: [LedgerReason.refund],
+            },
+        },
+        [DealState.disputed]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.publisher,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: NO_MONEY_MOVEMENT,
+        },
+    },
+    [DealState.publisher_declined]: {},
+    [DealState.advertiser_confirmed]: {
         [DealState.proof_submitted]: {
             actors: [
                 TransitionActor.publisher,
@@ -85,6 +168,17 @@ const AD_DEAL_TRANSITIONS: TransitionMap = {
                 TransitionActor.system,
             ],
             moneyMovement: NO_MONEY_MOVEMENT,
+        },
+        [DealState.refunded]: {
+            actors: [
+                TransitionActor.advertiser,
+                TransitionActor.admin,
+                TransitionActor.system,
+            ],
+            moneyMovement: {
+                type: 'ledger',
+                required: [LedgerReason.refund],
+            },
         },
         [DealState.disputed]: {
             actors: [

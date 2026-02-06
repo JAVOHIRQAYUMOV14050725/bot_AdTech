@@ -37,7 +37,7 @@ describe('Telegram start handler error mapping', () => {
 
         await handler.start(ctx);
 
-        expect(reply).toHaveBeenCalled();
+        expect(reply).toHaveBeenCalledTimes(1);
         const [message] = reply.mock.calls[0];
         expect(typeof message).toBe('string');
         expect(message).toBe('❌ Bu taklif sizga tegishli emas.');

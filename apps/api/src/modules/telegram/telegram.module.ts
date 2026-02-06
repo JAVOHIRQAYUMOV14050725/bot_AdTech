@@ -15,6 +15,7 @@ import { PublisherHandler } from './handlers/publisher.handler';
 import { IdentityModule } from '@/modules/identity/identity.module';
 import { TELEGRAM_IDENTITY_ADAPTER } from '@/modules/identity/telegram-identity.adapter';
 import { TelegramBackendClient } from './telegram-backend.client';
+import { TelegramUserLockService } from './telegram-user-lock.service';
 
 const env = loadEnv();
 const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
@@ -31,6 +32,7 @@ const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
     providers: [
         TelegramFSMService,
         TelegramBackendClient,
+        TelegramUserLockService,
         StartHandler,
         AdvertiserHandler,
         PublisherHandler,

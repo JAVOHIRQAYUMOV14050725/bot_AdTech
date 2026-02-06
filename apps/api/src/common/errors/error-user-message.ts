@@ -52,6 +52,10 @@ export const ERROR_USER_MESSAGES: Record<
         uz: '❌ Xatolik yuz berdi. Iltimos qayta urinib ko‘ring.',
         en: '❌ Something went wrong. Please try again.',
     },
+    REQUEST_TIMEOUT: {
+        uz: '⏳ So‘rov vaqti tugadi. Iltimos qayta urinib ko‘ring.',
+        en: '⏳ Request timed out. Please try again.',
+    },
 };
 
 export function resolveErrorUserMessage(

@@ -18,6 +18,10 @@ export const confirmKeyboard = Markup.inlineKeyboard([
     Markup.button.callback('❌ Cancel', 'CANCEL'),
 ]);
 
+export const cancelFlowKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'CANCEL_FLOW')],
+]);
+
 export const publisherHome = Markup.inlineKeyboard([
     [Markup.button.callback('➕ Add channel', 'PUB_ADD_CHANNEL')],
     [Markup.button.callback('📊 My channels', 'PUB_MY_CHANNELS')],
@@ -26,9 +30,11 @@ export const publisherHome = Markup.inlineKeyboard([
 export const addChannelOptions = Markup.inlineKeyboard([
     [Markup.button.callback('🔓 Public channel (@username)', 'PUB_ADD_CHANNEL_PUBLIC')],
     [Markup.button.callback('🔒 My channel has no username', 'PUB_ADD_CHANNEL_PRIVATE')],
+    [Markup.button.callback('❌ Cancel', 'CANCEL_FLOW')],
 ]);
 
 export const verifyPrivateChannelKeyboard = Markup.inlineKeyboard([
     [Markup.button.callback('✅ Verify Channel', 'PUB_VERIFY_PRIVATE_CHANNEL')],
     [Markup.button.callback('⬅️ Back', 'PUB_ADD_CHANNEL')],
+    [Markup.button.callback('❌ Cancel', 'CANCEL_FLOW')],
 ]);

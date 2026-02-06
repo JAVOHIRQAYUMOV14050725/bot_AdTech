@@ -1,4 +1,6 @@
 import { resolveErrorUserMessage } from '@/common/errors/error-user-message';
+import { shortCorrelationId } from '@/modules/telegram/telegram-context.util';
+import { TelegramLocale } from '@/modules/telegram/telegram-safe-text.util';
 
 type TelegramBackendErrorLike = {
     code?: unknown;
@@ -33,21 +35,17 @@ export function extractTelegramErrorMeta(err: unknown): {
     return { code, correlationId, status, userMessage };
 }
 
-export function mapBackendErrorToTelegramMessage(err: unknown): string {
-    const { code, status } = extractTelegramErrorMeta(err);
-    if (code) {
-        return resolveErrorUserMessage(code, 'uz');
+export function mapBackendErrorToTelegramMessage(
+    err: unknown,
+    locale: TelegramLocale = 'uz',
+): string {
+    const { code, correlationId } = extractTelegramErrorMeta(err);
+    const message = resolveErrorUserMessage(code ?? 'REQUEST_FAILED', locale);
+    if (code === 'REQUEST_TIMEOUT') {
+        const suffix = shortCorrelationId(correlationId);
+        if (suffix) {
+            return `${message}\n🆔 ${suffix}`;
+        }
     }
-
-    if (status === 400) {
-        return resolveErrorUserMessage('REQUEST_FAILED', 'uz');
-    }
-    if (status === 401 || status === 403) {
-        return resolveErrorUserMessage('UNAUTHORIZED', 'uz');
-    }
-    if (status === 429) {
-        return '⏳ Juda ko‘p urinish. Keyinroq qayta urinib ko‘ring.';
-    }
-
-    return resolveErrorUserMessage('REQUEST_FAILED', 'uz');
+    return message;
 }

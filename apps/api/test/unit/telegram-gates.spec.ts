@@ -58,4 +58,25 @@ describe('Telegram safety gates', () => {
 
         expect(startHandlers).toBe(1);
     });
+
+    it('GATE-C: enforces answerCbQuerySafe in @Action handlers', () => {
+        const root = path.join(process.cwd(), 'src', 'modules', 'telegram', 'handlers');
+        const files = collectFiles(root);
+
+        const violations: string[] = [];
+
+        for (const file of files) {
+            const content = fs.readFileSync(file, 'utf8');
+            const actionCount = (content.match(/@Action\(/g) ?? []).length;
+            if (!actionCount) {
+                continue;
+            }
+            const ackCount = (content.match(/answerCbQuerySafe\(/g) ?? []).length;
+            if (ackCount < actionCount) {
+                violations.push(`${file} missing answerCbQuerySafe for @Action handlers`);
+            }
+        }
+
+        expect(violations).toEqual([]);
+    });
 });

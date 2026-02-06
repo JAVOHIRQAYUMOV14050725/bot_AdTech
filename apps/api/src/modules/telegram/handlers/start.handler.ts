@@ -4,11 +4,12 @@ import { Update, Start, Ctx } from 'nestjs-telegraf';
 import { Context } from 'telegraf';
 import { Logger } from '@nestjs/common';
 import { TelegramFSMService } from '../../application/telegram/telegram-fsm.service';
-import { TelegramState } from '../../application/telegram/telegram-fsm.types';
+import { TelegramFlow, TelegramFlowStep } from '../../application/telegram/telegram-fsm.types';
 import { advertiserHome, publisherHome } from '../keyboards';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
-import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
+import { replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
+import { resolveTelegramCorrelationId } from '@/modules/telegram/telegram-context.util';
 
 @Update()
 export class StartHandler {
@@ -33,17 +34,23 @@ export class StartHandler {
                 : '';
         const startPayload = payload?.trim() || null;
 
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const correlationId = resolveTelegramCorrelationId(ctx);
+        const progress = await startTelegramProgress(ctx);
         try {
-            const response = await this.backendClient.startTelegramSession({
-                telegramId: userId.toString(),
-                username,
-                startPayload,
-                updateId,
-            });
+            const response = await this.backendClient.runWithCorrelationId(
+                correlationId,
+                () => this.backendClient.startTelegramSession({
+                    telegramId: userId.toString(),
+                    username,
+                    startPayload,
+                    updateId,
+                }),
+            );
 
             const roles = response.user.roles ?? [response.user.role];
             if (roles.includes('publisher')) {
-                await this.fsm.set(userId, 'publisher', TelegramState.PUB_DASHBOARD);
+                await this.fsm.set(userId, 'publisher', TelegramFlow.NONE, TelegramFlowStep.NONE);
                 this.logger.log({
                     event: 'user_state_recovered',
                     userId: response.user.id,
@@ -54,8 +61,7 @@ export class StartHandler {
                 const intro = response.created || response.linkedInvite
                     ? '👋 Welcome to AdTech!'
                     : '✅ Welcome back!';
-                await replySafe(
-                    ctx,
+                await progress.finish(
                     `${intro}\n\n📢 Publisher Panel\n\n📈 Earnings: $0\n📣 Channels: 0`,
                     publisherHome,
                 );
@@ -63,7 +69,7 @@ export class StartHandler {
             }
 
             if (roles.includes('advertiser')) {
-                await this.fsm.set(userId, 'advertiser', TelegramState.ADV_DASHBOARD);
+                await this.fsm.set(userId, 'advertiser', TelegramFlow.NONE, TelegramFlowStep.NONE);
                 this.logger.log({
                     event: 'user_state_recovered',
                     userId: response.user.id,
@@ -72,15 +78,14 @@ export class StartHandler {
                     linkedInvite: response.linkedInvite,
                 });
                 const intro = response.created ? '👋 Welcome to AdTech!' : '✅ Welcome back!';
-                await replySafe(
-                    ctx,
+                await progress.finish(
                     `${intro}\n\n🧑‍💼 Advertiser Panel\n\n💰 Balance: $0\n📊 Active campaigns: 0`,
                     advertiserHome,
                 );
                 return;
             }
 
-            await this.fsm.set(userId, 'admin', TelegramState.ADMIN_PANEL);
+            await this.fsm.set(userId, 'admin', TelegramFlow.NONE, TelegramFlowStep.NONE);
             this.logger.log({
                 event: 'user_state_recovered',
                 userId: response.user.id,
@@ -88,11 +93,11 @@ export class StartHandler {
                 role: response.user.role,
                 linkedInvite: response.linkedInvite,
             });
-            await replySafe(ctx, '✅ Welcome back! Admin mode enabled.');
+            await progress.finish('✅ Welcome back! Admin mode enabled.');
             return;
         } catch (err) {
             const { code, correlationId } = extractTelegramErrorMeta(err);
-            const message = mapBackendErrorToTelegramMessage(err);
+            const message = mapBackendErrorToTelegramMessage(err, locale);
             this.logger.error({
                 event: 'telegram_start_failed',
                 telegramUserId: userId,
@@ -100,7 +105,7 @@ export class StartHandler {
                 correlationId,
                 error: message,
             });
-            await replySafe(ctx, message);
+            await progress.finish(message);
         }
     }
 }

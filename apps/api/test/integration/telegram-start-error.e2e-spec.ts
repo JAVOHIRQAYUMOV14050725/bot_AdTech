@@ -20,25 +20,31 @@ describe('Telegram start handler error mapping', () => {
                     message: 'Invite token does not belong to this Telegram account.',
                 }),
             ),
+            runWithCorrelationId: jest.fn((_, fn) => fn()),
         };
         const fsm = {
             set: jest.fn(),
         };
 
         const handler = new StartHandler(fsm as any, backendClient as any);
-        const reply = jest.fn().mockResolvedValue(undefined);
+        const reply = jest.fn().mockResolvedValue({ chat: { id: 1001 }, message_id: 10 });
+        const editMessageText = jest.fn().mockResolvedValue(true);
+        const sendChatAction = jest.fn().mockResolvedValue(undefined);
 
         const ctx = {
             from: { id: 1001, username: 'testuser' },
             update: { update_id: 42 },
             message: { text: '/start payload' },
             reply,
+            sendChatAction,
+            telegram: { editMessageText },
         } as any;
 
         await handler.start(ctx);
 
         expect(reply).toHaveBeenCalledTimes(1);
-        const [message] = reply.mock.calls[0];
+        expect(editMessageText).toHaveBeenCalledTimes(1);
+        const [, , , message] = editMessageText.mock.calls[0];
         expect(typeof message).toBe('string');
         expect(message).toBe('❌ Bu taklif sizga tegishli emas.');
         expect(message).not.toBe('[object Object]');

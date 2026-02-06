@@ -7,7 +7,7 @@ import {
 import { Context } from 'telegraf';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
-import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
+import { replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
 
 @Injectable()
 export class AdminHandler {
@@ -29,17 +29,18 @@ export class AdminHandler {
     // ===============================
     async forceRelease(ctx: Context, campaignTargetId: string) {
         const adminTelegramId = await this.assertAdmin(ctx);
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const progress = await startTelegramProgress(ctx);
         try {
             await this.backendClient.adminForceRelease({
                 telegramId: adminTelegramId.toString(),
                 campaignTargetId,
             });
-            await replySafe(
-                ctx,
+            await progress.finish(
                 `⏳ Escrow release queued for manual review.\nTarget: ${campaignTargetId}`,
             );
         } catch (err) {
-            const message = mapBackendErrorToTelegramMessage(err);
+            const message = mapBackendErrorToTelegramMessage(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_force_release_failed',
@@ -48,7 +49,7 @@ export class AdminHandler {
                 correlationId,
                 error: message,
             });
-            await replySafe(ctx, message);
+            await progress.finish(message);
         }
     }
 
@@ -61,18 +62,19 @@ export class AdminHandler {
         reason = 'admin_force',
     ) {
         const adminTelegramId = await this.assertAdmin(ctx);
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const progress = await startTelegramProgress(ctx);
         try {
             await this.backendClient.adminForceRefund({
                 telegramId: adminTelegramId.toString(),
                 campaignTargetId,
                 reason,
             });
-            await replySafe(
-                ctx,
+            await progress.finish(
                 `⏳ Escrow refund queued for manual review.\nTarget: ${campaignTargetId}\nReason: ${reason}`,
             );
         } catch (err) {
-            const message = mapBackendErrorToTelegramMessage(err);
+            const message = mapBackendErrorToTelegramMessage(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_force_refund_failed',
@@ -81,7 +83,7 @@ export class AdminHandler {
                 correlationId,
                 error: message,
             });
-            await replySafe(ctx, message);
+            await progress.finish(message);
         }
     }
 
@@ -90,17 +92,19 @@ export class AdminHandler {
     // ===============================
     async retryPost(ctx: Context, postJobId: string) {
         const adminTelegramId = await this.assertAdmin(ctx);
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const progress = await startTelegramProgress(ctx);
         try {
             await this.backendClient.adminRetryPost({
                 telegramId: adminTelegramId.toString(),
                 postJobId,
             });
-            await replySafe(ctx, `♻️ PostJob re-queued\nID: ${postJobId}`);
+            await progress.finish(`♻️ PostJob re-queued\nID: ${postJobId}`);
         } catch (err) {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = mapBackendErrorToTelegramMessage(err);
+            const message = mapBackendErrorToTelegramMessage(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_retry_post_failed',
@@ -109,7 +113,7 @@ export class AdminHandler {
                 correlationId,
                 error: message,
             });
-            await replySafe(ctx, message);
+            await progress.finish(message);
         }
     }
 
@@ -118,17 +122,19 @@ export class AdminHandler {
     // ===============================
     async freezeCampaign(ctx: Context, campaignId: string) {
         const adminTelegramId = await this.assertAdmin(ctx);
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const progress = await startTelegramProgress(ctx);
         try {
             await this.backendClient.adminFreezeCampaign({
                 telegramId: adminTelegramId.toString(),
                 campaignId,
             });
-            await replySafe(ctx, `⛔ Campaign frozen\nID: ${campaignId}`);
+            await progress.finish(`⛔ Campaign frozen\nID: ${campaignId}`);
         } catch (err) {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = mapBackendErrorToTelegramMessage(err);
+            const message = mapBackendErrorToTelegramMessage(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_freeze_campaign_failed',
@@ -137,23 +143,25 @@ export class AdminHandler {
                 correlationId,
                 error: message,
             });
-            await replySafe(ctx, message);
+            await progress.finish(message);
         }
     }
 
     async unfreezeCampaign(ctx: Context, campaignId: string) {
         const adminTelegramId = await this.assertAdmin(ctx);
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const progress = await startTelegramProgress(ctx);
         try {
             await this.backendClient.adminUnfreezeCampaign({
                 telegramId: adminTelegramId.toString(),
                 campaignId,
             });
-            await replySafe(ctx, `▶️ Campaign resumed\nID: ${campaignId}`);
+            await progress.finish(`▶️ Campaign resumed\nID: ${campaignId}`);
         } catch (err) {
             if (err instanceof BadRequestException) {
                 throw err;
             }
-            const message = mapBackendErrorToTelegramMessage(err);
+            const message = mapBackendErrorToTelegramMessage(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_unfreeze_campaign_failed',
@@ -162,7 +170,7 @@ export class AdminHandler {
                 correlationId,
                 error: message,
             });
-            await replySafe(ctx, message);
+            await progress.finish(message);
         }
     }
 }

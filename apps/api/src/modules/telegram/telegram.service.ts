@@ -14,7 +14,7 @@ import { AppConfig, appConfig } from '@/config/app.config';
 import CircuitBreaker from 'opossum';
 import { TelegramTimeoutError, withTelegramTimeout } from './telegram-timeout';
 import { TelegramIdentityAdapter } from '@/modules/identity/telegram-identity.adapter';
-import { hasTelegramReplyBeenSent, replySafe } from '@/modules/telegram/telegram-safe-text.util';
+import { hasTelegramReplyBeenSent, replySafe, resolveTelegramLocale } from '@/modules/telegram/telegram-safe-text.util';
 import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
@@ -134,7 +134,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramI
             if (hasTelegramReplyBeenSent(ctx)) {
                 return;
             }
-            await replySafe(ctx, mapBackendErrorToTelegramMessage(err));
+            const locale = resolveTelegramLocale(ctx.from?.language_code);
+            await replySafe(ctx, mapBackendErrorToTelegramMessage(err, locale));
         });
     }
 

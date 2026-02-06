@@ -1,28 +1,30 @@
 export type TelegramRole = 'advertiser' | 'publisher' | 'admin' | null;
 
-export enum TelegramState {
-    IDLE = 'IDLE',
-    SELECT_ROLE = 'SELECT_ROLE',
+export enum TelegramFlow {
+    NONE = 'NONE',
+    CREATE_CAMPAIGN = 'CREATE_CAMPAIGN',
+    CREATE_AD_DEAL = 'CREATE_AD_DEAL',
+    ADD_BALANCE = 'ADD_BALANCE',
+    PUBLISHER_ONBOARDING = 'PUBLISHER_ONBOARDING',
+}
+
+export enum TelegramFlowStep {
+    NONE = 'NONE',
 
     // Advertiser
-    ADV_DASHBOARD = 'ADV_DASHBOARD',
-    ADV_ADD_BALANCE_AMOUNT = 'ADV_ADD_BALANCE_AMOUNT',
     ADV_CREATE_CAMPAIGN_NAME = 'ADV_CREATE_CAMPAIGN_NAME',
     ADV_ADDEAL_PUBLISHER = 'ADV_ADDEAL_PUBLISHER',
     ADV_ADDEAL_AMOUNT = 'ADV_ADDEAL_AMOUNT',
+    ADV_ADD_BALANCE_AMOUNT = 'ADV_ADD_BALANCE_AMOUNT',
 
     // Publisher
-    PUB_DASHBOARD = 'PUB_DASHBOARD',
-    PUB_ADD_CHANNEL = 'PUB_ADD_CHANNEL',
     PUB_ADD_CHANNEL_PUBLIC = 'PUB_ADD_CHANNEL_PUBLIC',
     PUB_ADD_CHANNEL_PRIVATE = 'PUB_ADD_CHANNEL_PRIVATE',
     PUB_ADDEAL_PROOF = 'PUB_ADDEAL_PROOF',
-
-    // Admin
-    ADMIN_PANEL = 'ADMIN_PANEL',
 }
 
 export interface FSMContext {
-    state: TelegramState;
+    flow: TelegramFlow;
+    step: TelegramFlowStep;
     payload: Record<string, any>;
 }

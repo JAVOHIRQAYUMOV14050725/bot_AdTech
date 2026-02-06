@@ -1,4 +1,5 @@
-import { parseBackendErrorResponse, toErrorMessage, BackendApiError } from '@/modules/telegram/telegram-backend.client';
+import { parseBackendErrorResponse, toErrorMessage, BackendApiError, TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
+import { ConfigService } from '@nestjs/config';
 
 describe('TelegramBackendClient error parsing', () => {
     it('coerces array messages into a string', () => {
@@ -31,6 +32,22 @@ describe('TelegramBackendClient error parsing', () => {
         expect(parsed.userMessage).toBe('Safe user text');
     });
 
+    it('parses nested error detail codes', () => {
+        const payload = JSON.stringify({
+            error: {
+                message: 'Deep failure',
+                details: { code: 'INVITE_NOT_FOR_YOU', userMessage: 'custom message' },
+            },
+            correlationId: 'corr-123',
+        });
+
+        const parsed = parseBackendErrorResponse(payload, null, 'req-corr', 400);
+
+        expect(parsed.code).toBe('INVITE_NOT_FOR_YOU');
+        expect(parsed.userMessage).toBe('custom message');
+        expect(parsed.correlationId).toBe('corr-123');
+    });
+
     it('ensures BackendApiError messages are always strings', () => {
         const message = toErrorMessage({ detail: 'Oops' }, 'fallback');
         const err = new BackendApiError({
@@ -45,5 +62,41 @@ describe('TelegramBackendClient error parsing', () => {
         expect(err.message).not.toBe('[object Object]');
         expect(err.httpStatus).toBe(500);
         expect(err.userMessage).toBe('❌ Something went wrong.');
+    });
+
+    it('times out and throws a typed error', async () => {
+        jest.useFakeTimers();
+        const fetchMock = jest.fn((_url: string, options: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+            options.signal?.addEventListener('abort', () => {
+                const error = new Error('Aborted');
+                (error as Error & { name?: string }).name = 'AbortError';
+                reject(error);
+            });
+        }));
+        (global as any).fetch = fetchMock;
+
+        const configService = {
+            get: (key: string, fallback?: string) => {
+                if (key === 'TELEGRAM_BACKEND_TIMEOUT_MS') {
+                    return '5';
+                }
+                if (key === 'TELEGRAM_INTERNAL_TOKEN') {
+                    return 'internal-token';
+                }
+                if (key === 'INTERNAL_API_TOKEN') {
+                    return 'internal-api-token';
+                }
+                return fallback ?? '';
+            },
+        } as ConfigService;
+
+        const logger = { log: jest.fn(), error: jest.fn(), warn: jest.fn() };
+        const client = new TelegramBackendClient(configService, logger as any);
+
+        const promise = client.lookupAdDeal({ adDealId: 'deal-1' });
+
+        jest.advanceTimersByTime(10);
+        await expect(promise).rejects.toMatchObject({ code: 'REQUEST_TIMEOUT' });
+        jest.useRealTimers();
     });
 });

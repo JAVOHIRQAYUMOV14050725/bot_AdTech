@@ -2,6 +2,7 @@ import { Inject, Injectable, LoggerService } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, randomUUID } from 'crypto';
 import { TelegramResolvePublisherResult } from './telegram.types';
+import { AsyncLocalStorage } from 'async_hooks';
 
 type BackendErrorPayload = {
     message: string;
@@ -172,6 +173,12 @@ export const parseBackendErrorResponse = (
 
 type BackendResponse<T> = T;
 
+type TelegramRequestContext = {
+    correlationId: string;
+};
+
+const telegramRequestContext = new AsyncLocalStorage<TelegramRequestContext>();
+
 @Injectable()
 export class TelegramBackendClient {
     constructor(
@@ -220,6 +227,15 @@ export class TelegramBackendClient {
         return this.configService.get<string>('INTERNAL_API_TOKEN', '');
     }
 
+    private get requestTimeoutMs() {
+        const raw = this.configService.get<string>('TELEGRAM_BACKEND_TIMEOUT_MS', '9000');
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+        return 9000;
+    }
+
     private get telegramInternalToken() {
         return this.configService.get<string>('TELEGRAM_INTERNAL_TOKEN', '');
     }
@@ -243,67 +259,154 @@ export class TelegramBackendClient {
 
     private async request<T>(
         path: string,
-        options: { method: string; body?: unknown; headers?: Record<string, string> },
+        options: {
+            method: string;
+            body?: unknown;
+            headers?: Record<string, string>;
+            idempotent?: boolean;
+        },
     ): Promise<BackendResponse<T>> {
         const rawBody = options.body ? JSON.stringify(options.body) : undefined;
-        const requestCorrelationId = randomUUID();
+        const storedCorrelationId = telegramRequestContext.getStore()?.correlationId;
+        const requestCorrelationId = storedCorrelationId ?? randomUUID();
         const signatureHeaders =
             options.headers?.['X-Telegram-Internal-Token']
                 ? {}
                 : this.buildTelegramSignatureHeaders(rawBody ?? '{}');
-        const response = await fetch(`${this.baseUrl}${path}`, {
-            method: options.method,
-            headers: {
-                'Content-Type': 'application/json',
-                'x-internal-token': this.token,
-                'x-correlation-id': requestCorrelationId,
-                ...signatureHeaders,
-                ...options.headers,
-            },
-            body: rawBody,
-        });
+        const maxAttempts = options.idempotent ? 2 : 1;
+        let attempt = 0;
 
-        const headerCorrelationId = response.headers.get('x-correlation-id');
-        const responseCorrelationId = headerCorrelationId ?? requestCorrelationId;
-        this.logger.log(
-            {
-                event: 'telegram_backend_request',
-                path,
-                status: response.status,
-                correlationId: responseCorrelationId,
-            },
-            'TelegramBackendClient',
-        );
+        while (attempt < maxAttempts) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+            try {
+                const response = await fetch(`${this.baseUrl}${path}`, {
+                    method: options.method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-internal-token': this.token,
+                        'x-correlation-id': requestCorrelationId,
+                        ...signatureHeaders,
+                        ...options.headers,
+                    },
+                    body: rawBody,
+                    signal: controller.signal,
+                });
 
-        if (!response.ok) {
-            const text = await response.text();
-            const parsed = parseBackendErrorResponse(
-                text,
-                headerCorrelationId,
-                requestCorrelationId,
-                response.status,
-            );
-            this.logger.error(
-                {
-                    event: 'telegram_backend_request_failed',
-                    path,
-                    statusCode: response.status,
-                    code: parsed.code,
-                    correlationId: parsed.correlationId,
-                },
-                'TelegramBackendClient',
-            );
-            throw new BackendApiError({
-                status: response.status,
-                code: parsed.code,
-                correlationId: parsed.correlationId,
-                message: parsed.message,
-                userMessage: parsed.userMessage,
-                raw: parsed.raw,
-            });
+                const headerCorrelationId = response.headers.get('x-correlation-id');
+                const responseCorrelationId = headerCorrelationId ?? requestCorrelationId;
+                this.logger.log(
+                    {
+                        event: 'telegram_backend_request',
+                        path,
+                        status: response.status,
+                        correlationId: responseCorrelationId,
+                        attempt,
+                    },
+                    'TelegramBackendClient',
+                );
+
+                if (!response.ok) {
+                    if (options.idempotent && response.status >= 500 && attempt + 1 < maxAttempts) {
+                        attempt += 1;
+                        continue;
+                    }
+                    const text = await response.text();
+                    const parsed = parseBackendErrorResponse(
+                        text,
+                        headerCorrelationId,
+                        requestCorrelationId,
+                        response.status,
+                    );
+                    this.logger.error(
+                        {
+                            event: 'telegram_backend_request_failed',
+                            path,
+                            statusCode: response.status,
+                            code: parsed.code,
+                            correlationId: parsed.correlationId,
+                        },
+                        'TelegramBackendClient',
+                    );
+                    throw new BackendApiError({
+                        status: response.status,
+                        code: parsed.code,
+                        correlationId: parsed.correlationId,
+                        message: parsed.message,
+                        userMessage: parsed.userMessage,
+                        raw: parsed.raw,
+                    });
+                }
+
+                return (await response.json()) as BackendResponse<T>;
+            } catch (err) {
+                if ((err as { name?: string }).name === 'AbortError') {
+                    this.logger.error(
+                        {
+                            event: 'telegram_backend_timeout',
+                            path,
+                            correlationId: requestCorrelationId,
+                            timeoutMs: this.requestTimeoutMs,
+                        },
+                        'TelegramBackendClient',
+                    );
+                    throw new BackendApiError({
+                        status: 504,
+                        code: 'REQUEST_TIMEOUT',
+                        correlationId: requestCorrelationId,
+                        message: `Backend request timed out after ${this.requestTimeoutMs}ms`,
+                        userMessage: null,
+                        raw: null,
+                    });
+                }
+                if (options.idempotent && attempt + 1 < maxAttempts) {
+                    this.logger.error(
+                        {
+                            event: 'telegram_backend_retry',
+                            path,
+                            correlationId: requestCorrelationId,
+                            attempt,
+                            error: err instanceof Error ? err.message : String(err),
+                        },
+                        'TelegramBackendClient',
+                    );
+                    attempt += 1;
+                    continue;
+                }
+                this.logger.error(
+                    {
+                        event: 'telegram_backend_request_error',
+                        path,
+                        correlationId: requestCorrelationId,
+                        error: err instanceof Error ? err.message : String(err),
+                    },
+                    'TelegramBackendClient',
+                );
+                throw new BackendApiError({
+                    status: 500,
+                    code: 'REQUEST_FAILED',
+                    correlationId: requestCorrelationId,
+                    message: err instanceof Error ? err.message : String(err),
+                    userMessage: null,
+                    raw: null,
+                });
+            } finally {
+                clearTimeout(timeoutId);
+            }
         }
 
-        return (await response.json()) as BackendResponse<T>;
+        throw new BackendApiError({
+            status: 500,
+            code: 'REQUEST_FAILED',
+            correlationId: requestCorrelationId,
+            message: 'Backend request failed after retries',
+            userMessage: null,
+            raw: null,
+        });
+    }
+
+    runWithCorrelationId<T>(correlationId: string, fn: () => Promise<T>): Promise<T> {
+        return telegramRequestContext.run({ correlationId }, fn);
     }
 
     createDepositIntent(params: {
@@ -350,6 +453,7 @@ export class TelegramBackendClient {
                 ...signatureHeaders,
             },
             body,
+            idempotent: true,
         });
     }
 
@@ -374,6 +478,7 @@ export class TelegramBackendClient {
         }>('/internal/telegram/advertiser/ensure', {
             method: 'POST',
             body: params,
+            idempotent: true,
         });
     }
 
@@ -383,6 +488,7 @@ export class TelegramBackendClient {
         }>('/internal/telegram/publisher/ensure', {
             method: 'POST',
             body: params,
+            idempotent: true,
         });
     }
 
@@ -390,6 +496,7 @@ export class TelegramBackendClient {
         return this.request<TelegramResolvePublisherResult>('/internal/telegram/advertiser/resolve-publisher', {
             method: 'POST',
             body: params,
+            idempotent: true,
         });
     }
 
@@ -404,6 +511,7 @@ export class TelegramBackendClient {
         }>('/internal/telegram/addeals/lookup', {
             method: 'POST',
             body: params,
+            idempotent: true,
         });
     }
 
@@ -414,7 +522,7 @@ export class TelegramBackendClient {
     }) {
         return this.request<{ ok: boolean; message: string }>(
             '/internal/telegram/publisher/verify-channel',
-            { method: 'POST', body: params },
+            { method: 'POST', body: params, idempotent: true },
         );
     }
 
@@ -424,7 +532,7 @@ export class TelegramBackendClient {
     }) {
         return this.request<{ ok: boolean; message: string }>(
             '/internal/telegram/publisher/verify-private-channel',
-            { method: 'POST', body: params },
+            { method: 'POST', body: params, idempotent: true },
         );
     }
 

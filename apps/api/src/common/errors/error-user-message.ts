@@ -48,6 +48,22 @@ export const ERROR_USER_MESSAGES: Record<
         uz: '⏳ Juda ko‘p urinish. Keyinroq qayta urinib ko‘ring.',
         en: '⏳ Too many attempts. Please try again later.',
     },
+    INSUFFICIENT_WALLET_BALANCE: {
+        uz: "❌ Balansingiz yetarli emas. Avval 'Add balance' qiling.",
+        en: '❌ Insufficient balance. Please add funds first.',
+    },
+    PAYMENTS_DISABLED: {
+        uz: '⛔ To‘lovlar hozir o‘chirilgan. Keyinroq urinib ko‘ring.',
+        en: '⛔ Payments are currently disabled. Please try again later.',
+    },
+    PUBLISHER_NOT_FOUND: {
+        uz: '❌ Publisher topilmadi. @username yoki t.me link yuboring.',
+        en: '❌ Publisher not found. Send a valid @username or t.me link.',
+    },
+    INVALID_CHANNEL_INPUT: {
+        uz: '❌ @username yoki t.me link noto‘g‘ri.',
+        en: '❌ Invalid @username or t.me link.',
+    },
     REQUEST_FAILED: {
         uz: '❌ Xatolik yuz berdi. Iltimos qayta urinib ko‘ring.',
         en: '❌ Something went wrong. Please try again.',

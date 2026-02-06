@@ -72,8 +72,9 @@ describe('Telegram safety gates', () => {
                 continue;
             }
             const ackCount = (content.match(/answerCbQuerySafe\(/g) ?? []).length;
-            if (ackCount < actionCount) {
-                violations.push(`${file} missing answerCbQuerySafe for @Action handlers`);
+            const ackNowCount = (content.match(/ackNow\(/g) ?? []).length;
+            if (ackCount + ackNowCount < actionCount) {
+                violations.push(`${file} missing answerCbQuerySafe/ackNow for @Action handlers`);
             }
         }
 

@@ -79,6 +79,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
                 return {
                     message,
                     details,
+                    userMessage: (errorResponse as { userMessage?: unknown }).userMessage,
                 };
             }
 
@@ -95,6 +96,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
                 : typeof (normalizedError.details as { code?: unknown } | undefined)?.code === 'string'
                     ? (normalizedError.details as { code?: string }).code
                     : null;
+        const rawUserMessage =
+            typeof (errorResponse as { userMessage?: unknown }).userMessage === 'string'
+                ? (errorResponse as { userMessage?: string }).userMessage
+                : typeof (normalizedError as { userMessage?: unknown }).userMessage === 'string'
+                    ? (normalizedError as { userMessage?: string }).userMessage
+                    : typeof (normalizedError.details as { userMessage?: unknown } | undefined)?.userMessage === 'string'
+                        ? (normalizedError.details as { userMessage?: string }).userMessage
+                        : null;
 
         const isValidation =
             (errorResponse as { event?: unknown })?.event === 'validation_failed'
@@ -108,7 +117,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             ?? (status === HttpStatus.TOO_MANY_REQUESTS ? 'RATE_LIMITED' : null)
             ?? (status >= HttpStatus.INTERNAL_SERVER_ERROR ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED');
 
-        const userMessage = resolveErrorUserMessage(errorCode, 'uz');
+        const userMessage = rawUserMessage ?? resolveErrorUserMessage(errorCode, 'uz');
 
         const payload = sanitizeForJson({
             statusCode: status,

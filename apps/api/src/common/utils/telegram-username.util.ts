@@ -3,7 +3,7 @@ export function normalizeTelegramUsername(input?: string | null): string | null 
         return null;
     }
 
-    const trimmed = input.trim();
+    const trimmed = input.trim().replace(/\s+/g, ' ');
     if (!trimmed) {
         return null;
     }
@@ -27,7 +27,7 @@ export function parseTelegramIdentifier(input?: string | null): {
         return { normalized: null, source: null };
     }
 
-    const trimmed = input.trim();
+    const trimmed = input.trim().replace(/\s+/g, ' ');
     if (!trimmed) {
         return { normalized: null, source: null };
     }
@@ -38,4 +38,20 @@ export function parseTelegramIdentifier(input?: string | null): {
     const normalized = normalizeTelegramUsername(candidate);
 
     return { normalized, source: normalized ? source : null };
+}
+
+export function normalizeTelegramIdentifierInput(input?: string | null): {
+    canonical: string | null;
+    username: string | null;
+    source: 'link' | 'username' | null;
+} {
+    const parsed = parseTelegramIdentifier(input ?? null);
+    if (!parsed.normalized) {
+        return { canonical: null, username: null, source: null };
+    }
+    return {
+        canonical: `@${parsed.normalized}`,
+        username: parsed.normalized,
+        source: parsed.source,
+    };
 }

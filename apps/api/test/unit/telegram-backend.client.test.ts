@@ -99,4 +99,80 @@ describe('TelegramBackendClient error parsing', () => {
         await expect(promise).rejects.toMatchObject({ code: 'REQUEST_TIMEOUT' });
         jest.useRealTimers();
     });
+
+    it('passes through insufficient balance error code and userMessage', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: false,
+            status: 400,
+            headers: { get: jest.fn().mockReturnValue(null) },
+            text: jest.fn().mockResolvedValue(JSON.stringify({
+                message: 'Insufficient wallet balance',
+                code: 'INSUFFICIENT_WALLET_BALANCE',
+                userMessage: "❌ Balansingiz yetarli emas. Avval 'Add balance' qiling.",
+                correlationId: 'corr-400',
+            })),
+        });
+        (global as any).fetch = fetchMock;
+
+        const configService = {
+            get: (key: string, fallback?: string) => {
+                if (key === 'TELEGRAM_INTERNAL_TOKEN') {
+                    return 'internal-token';
+                }
+                if (key === 'INTERNAL_API_TOKEN') {
+                    return 'internal-api-token';
+                }
+                return fallback ?? '';
+            },
+        } as ConfigService;
+
+        const logger = { log: jest.fn(), error: jest.fn(), warn: jest.fn() };
+        const client = new TelegramBackendClient(configService, logger as any);
+
+        await expect(client.lookupAdDeal({ adDealId: 'deal-400' })).rejects.toMatchObject({
+            code: 'INSUFFICIENT_WALLET_BALANCE',
+            userMessage: "❌ Balansingiz yetarli emas. Avval 'Add balance' qiling.",
+            httpStatus: 400,
+        });
+    });
+
+    it('passes through payments disabled error code and userMessage', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: false,
+            status: 503,
+            headers: { get: jest.fn().mockReturnValue(null) },
+            text: jest.fn().mockResolvedValue(JSON.stringify({
+                message: 'Click payments are disabled',
+                code: 'PAYMENTS_DISABLED',
+                userMessage: '⛔ To‘lovlar hozir o‘chirilgan. Keyinroq urinib ko‘ring.',
+                correlationId: 'corr-503',
+            })),
+        });
+        (global as any).fetch = fetchMock;
+
+        const configService = {
+            get: (key: string, fallback?: string) => {
+                if (key === 'TELEGRAM_INTERNAL_TOKEN') {
+                    return 'internal-token';
+                }
+                if (key === 'INTERNAL_API_TOKEN') {
+                    return 'internal-api-token';
+                }
+                return fallback ?? '';
+            },
+        } as ConfigService;
+
+        const logger = { log: jest.fn(), error: jest.fn(), warn: jest.fn() };
+        const client = new TelegramBackendClient(configService, logger as any);
+
+        await expect(client.createDepositIntent({
+            userId: 'user-1',
+            amount: '10.00',
+            idempotencyKey: 'intent-1',
+        })).rejects.toMatchObject({
+            code: 'PAYMENTS_DISABLED',
+            userMessage: '⛔ To‘lovlar hozir o‘chirilgan. Keyinroq urinib ko‘ring.',
+            httpStatus: 503,
+        });
+    });
 });

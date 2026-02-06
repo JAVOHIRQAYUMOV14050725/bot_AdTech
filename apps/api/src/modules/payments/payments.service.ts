@@ -337,7 +337,11 @@ export class PaymentsService {
             this.configService.get<boolean>('ENABLE_CLICK', false)
             || this.configService.get<boolean>('ENABLE_CLICK_PAYMENTS', false);
         if (!enableClick) {
-            throw new ServiceUnavailableException('Click payments are disabled');
+            throw new ServiceUnavailableException({
+                message: 'Click payments are disabled',
+                code: 'PAYMENTS_DISABLED',
+                userMessage: '⛔ To‘lovlar hozir o‘chirilgan. Keyinroq urinib ko‘ring.',
+            });
         }
 
         const intent = await this.prisma.$transaction(async (tx) => {

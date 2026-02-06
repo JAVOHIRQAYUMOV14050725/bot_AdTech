@@ -13,6 +13,16 @@ export const advertiserHome = Markup.inlineKeyboard([
     [Markup.button.callback('📊 My campaigns', 'MY_CAMPAIGNS')],
 ]);
 
+export const backToAdvertiserMenuKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('⬅️ Back to menu', 'ROLE_ADVERTISER')],
+]);
+
+export const insufficientBalanceKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('💰 Add balance', 'ADD_BALANCE')],
+    [Markup.button.callback('❌ Cancel', 'CANCEL_FLOW')],
+    [Markup.button.callback('⬅️ Back to menu', 'ROLE_ADVERTISER')],
+]);
+
 export const confirmKeyboard = Markup.inlineKeyboard([
     Markup.button.callback('✅ Confirm', 'CONFIRM'),
     Markup.button.callback('❌ Cancel', 'CANCEL'),

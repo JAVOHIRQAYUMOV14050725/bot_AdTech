@@ -33,7 +33,7 @@ export class SubmitProofUseCase {
                 return adDeal;
             }
 
-            if (adDeal.status !== DealState.accepted) {
+            if (adDeal.status !== DealState.advertiser_confirmed) {
                 throw new BadRequestException(
                     `AdDeal cannot submit proof from status ${adDeal.status}`,
                 );

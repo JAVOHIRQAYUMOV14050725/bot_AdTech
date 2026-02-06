@@ -1,27 +1,42 @@
-import { telegramSafeText } from '@/modules/telegram/telegram-safe-text.util';
+import { telegramUserMessage } from '@/modules/telegram/telegram-safe-text.util';
 
-describe('telegramSafeText', () => {
+describe('telegramUserMessage', () => {
     it('does not return [object Object] for plain objects', () => {
-        const result = telegramSafeText({});
+        const result = telegramUserMessage({}, 'uz');
 
         expect(result).not.toBe('[object Object]');
-        expect(result).toBe('Xatolik yuz berdi.');
+        expect(result).toBe('❌ Xatolik yuz berdi. Iltimos qayta urinib ko‘ring.');
     });
 
     it('does not return [object Object] for Error with object message', () => {
         const err = new Error({} as any);
-        const result = telegramSafeText(err);
+        const result = telegramUserMessage(err, 'uz');
 
         expect(result).not.toBe('[object Object]');
         expect(typeof result).toBe('string');
     });
 
-    it('returns fallback for circular objects', () => {
-        const value: { self?: unknown } = {};
-        value.self = value;
+    it('returns English fallback when locale is en', () => {
+        const result = telegramUserMessage(null, 'en');
 
-        const result = telegramSafeText(value);
+        expect(result).toBe('❌ Something went wrong. Please try again.');
+    });
 
-        expect(result).toBe('Xatolik yuz berdi.');
+    it('never returns [object Object] for any input', () => {
+        const inputs: unknown[] = [
+            '[object Object]',
+            {},
+            new Error('[object Object]'),
+            { message: '[object Object]' },
+            { userMessage: '[object Object]' },
+            null,
+            undefined,
+            [],
+        ];
+
+        for (const input of inputs) {
+            const result = telegramUserMessage(input, 'uz');
+            expect(result).not.toBe('[object Object]');
+        }
     });
 });

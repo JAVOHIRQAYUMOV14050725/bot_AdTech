@@ -11,6 +11,8 @@ import { sanitizeForJson } from '@/common/serialization/sanitize';
 import { Prisma } from '@prisma/client';
 import { RequestContext } from '@/common/context/request-context';
 import { loadEnv } from '@/config/env';
+import { resolveErrorUserMessage } from '@/common/errors/error-user-message';
+import { randomUUID } from 'crypto';
 
 const env = loadEnv();
 
@@ -67,7 +69,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             if (typeof errorResponse === 'object' && errorResponse !== null) {
                 const messageValue = (errorResponse as { message?: unknown }).message;
                 const message = Array.isArray(messageValue)
-                    ? messageValue
+                    ? messageValue.join('; ')
                     : typeof messageValue === 'string'
                         ? messageValue
                         : 'Request failed';
@@ -84,7 +86,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
         })();
 
         const correlationId =
-            request.correlationId ?? RequestContext.getCorrelationId() ?? 'unknown';
+            (request as Request & { correlationId?: string }).correlationId
+            ?? RequestContext.getCorrelationId()
+            ?? randomUUID();
         const rawCode =
             typeof (errorResponse as { code?: unknown }).code === 'string'
                 ? (errorResponse as { code?: string }).code
@@ -104,12 +108,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
             ?? (status === HttpStatus.TOO_MANY_REQUESTS ? 'RATE_LIMITED' : null)
             ?? (status >= HttpStatus.INTERNAL_SERVER_ERROR ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED');
 
+        const userMessage = resolveErrorUserMessage(errorCode, 'uz');
+
         const payload = sanitizeForJson({
-            event: 'error',
+            statusCode: status,
             code: errorCode,
             message: normalizedError.message,
+            userMessage,
             correlationId,
-            ...(typeof normalizedError.details === 'undefined' ? null : { details: normalizedError.details }),
         });
 
         const stack = exception instanceof Error ? exception.stack : undefined;

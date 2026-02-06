@@ -43,7 +43,9 @@ export class OpenDisputeUseCase {
 
             const disputeAllowedStatuses: DealState[] = [
                 DealState.escrow_locked,
+                DealState.publisher_requested,
                 DealState.accepted,
+                DealState.advertiser_confirmed,
                 DealState.proof_submitted,
             ];
 

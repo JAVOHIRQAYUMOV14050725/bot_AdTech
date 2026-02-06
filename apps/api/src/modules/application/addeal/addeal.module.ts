@@ -6,6 +6,8 @@ import { CreateAdDealUseCase } from './create-addeal.usecase';
 import { FundAdDealUseCase } from './fund-addeal.usecase';
 import { LockEscrowUseCase } from './lock-escrow.usecase';
 import { AcceptDealUseCase } from './accept-deal.usecase';
+import { AdvertiserConfirmUseCase } from './advertiser-confirm.usecase';
+import { PublisherDeclineUseCase } from './publisher-decline.usecase';
 import { SubmitProofUseCase } from './submit-proof.usecase';
 import { SettleAdDealUseCase } from './settle-addeal.usecase';
 import { RefundAdDealUseCase } from './refund-addeal.usecase';
@@ -20,6 +22,8 @@ import { PaymentsCoreModule } from '@/modules/payments/payments-core.module';
         FundAdDealUseCase,
         LockEscrowUseCase,
         AcceptDealUseCase,
+        AdvertiserConfirmUseCase,
+        PublisherDeclineUseCase,
         SubmitProofUseCase,
         SettleAdDealUseCase,
         RefundAdDealUseCase,
@@ -31,6 +35,8 @@ import { PaymentsCoreModule } from '@/modules/payments/payments-core.module';
         FundAdDealUseCase,
         LockEscrowUseCase,
         AcceptDealUseCase,
+        AdvertiserConfirmUseCase,
+        PublisherDeclineUseCase,
         SubmitProofUseCase,
         SettleAdDealUseCase,
         RefundAdDealUseCase,

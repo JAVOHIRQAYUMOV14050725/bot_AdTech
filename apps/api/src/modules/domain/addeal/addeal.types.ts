@@ -10,7 +10,10 @@ export type AdDealSnapshot = {
     createdAt: Date;
     fundedAt?: Date | null;
     lockedAt?: Date | null;
+    publisherRequestedAt?: Date | null;
+    publisherDeclinedAt?: Date | null;
     acceptedAt?: Date | null;
+    advertiserConfirmedAt?: Date | null;
     proofSubmittedAt?: Date | null;
     settledAt?: Date | null;
     refundedAt?: Date | null;

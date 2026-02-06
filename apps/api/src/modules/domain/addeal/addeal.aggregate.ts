@@ -49,9 +49,28 @@ export class AdDeal {
         });
     }
 
+    requestPublisher(requestedAt?: Date, lockedAt?: Date) {
+        return this.transition(DealState.publisher_requested, {
+            publisherRequestedAt: requestedAt ?? new Date(),
+            lockedAt: this.snapshot.lockedAt ?? lockedAt ?? new Date(),
+        });
+    }
+
+    declineByPublisher(declinedAt?: Date) {
+        return this.transition(DealState.publisher_declined, {
+            publisherDeclinedAt: declinedAt ?? new Date(),
+        });
+    }
+
     accept(acceptedAt?: Date) {
         return this.transition(DealState.accepted, {
             acceptedAt: acceptedAt ?? new Date(),
+        });
+    }
+
+    confirmByAdvertiser(confirmedAt?: Date) {
+        return this.transition(DealState.advertiser_confirmed, {
+            advertiserConfirmedAt: confirmedAt ?? new Date(),
         });
     }
 
@@ -120,7 +139,10 @@ export class AdDeal {
 
         const lockedStatuses: DealState[] = [
             DealState.escrow_locked,
+            DealState.publisher_requested,
+            DealState.publisher_declined,
             DealState.accepted,
+            DealState.advertiser_confirmed,
             DealState.proof_submitted,
             DealState.settled,
             DealState.disputed,
@@ -132,14 +154,38 @@ export class AdDeal {
             );
         }
 
+        const requestedStatuses: DealState[] = [
+            DealState.publisher_requested,
+            DealState.publisher_declined,
+            DealState.accepted,
+            DealState.advertiser_confirmed,
+            DealState.proof_submitted,
+            DealState.settled,
+        ];
+
+        if (requestedStatuses.includes(snapshot.status) && !snapshot.publisherRequestedAt) {
+            throw new BadRequestException('Publisher request timestamp required');
+        }
+
         const acceptedStatuses: DealState[] = [
             DealState.accepted,
+            DealState.advertiser_confirmed,
             DealState.proof_submitted,
             DealState.settled,
         ];
 
         if (acceptedStatuses.includes(snapshot.status) && !snapshot.acceptedAt) {
-            throw new BadRequestException('AdDeal accept timestamp required');
+            throw new BadRequestException('Publisher accept timestamp required');
+        }
+
+        const confirmedStatuses: DealState[] = [
+            DealState.advertiser_confirmed,
+            DealState.proof_submitted,
+            DealState.settled,
+        ];
+
+        if (confirmedStatuses.includes(snapshot.status) && !snapshot.advertiserConfirmedAt) {
+            throw new BadRequestException('Advertiser confirmation timestamp required');
         }
 
         const proofStatuses: DealState[] = [
@@ -153,6 +199,10 @@ export class AdDeal {
 
         if (snapshot.status === DealState.settled && !snapshot.settledAt) {
             throw new BadRequestException('Settlement timestamp required');
+        }
+
+        if (snapshot.status === DealState.publisher_declined && !snapshot.publisherDeclinedAt) {
+            throw new BadRequestException('Publisher decline timestamp required');
         }
 
         if (snapshot.status === DealState.refunded && !snapshot.refundedAt) {

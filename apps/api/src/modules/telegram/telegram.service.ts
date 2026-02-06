@@ -14,7 +14,7 @@ import { AppConfig, appConfig } from '@/config/app.config';
 import CircuitBreaker from 'opossum';
 import { TelegramTimeoutError, withTelegramTimeout } from './telegram-timeout';
 import { TelegramIdentityAdapter } from '@/modules/identity/telegram-identity.adapter';
-import { answerCbQuerySafe, hasTelegramReplyBeenSent, replySafe } from '@/modules/telegram/telegram-safe-text.util';
+import { hasTelegramReplyBeenSent, replySafe } from '@/modules/telegram/telegram-safe-text.util';
 import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
@@ -146,7 +146,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramI
 
         this.registerAdminCommands();
 
-        this.registerUserHandlers(); // 👈 SHU MUHIM
+        this.registerSystemHandlers();
 
 
         const autostart = this.telegramConfig.autostart;
@@ -182,37 +182,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramI
 
 
     // ===============================
-    // USER HANDLERS
+    // SYSTEM HANDLERS
     // ===============================
-    private registerUserHandlers() {
-        this.bot.start(async (ctx) => {
-            await replySafe(
-                ctx,
-                `👋 Welcome to AdTech
-
-Safe Telegram advertising with escrow protection.
-
-Who are you?`,
-                {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '🧑‍💼 Advertiser', callback_data: 'ROLE_ADVERTISER' }],
-                            [{ text: '📢 Publisher', callback_data: 'ROLE_PUBLISHER' }],
-                        ],
-                    },
-                },
-            );
-        });
-
-        this.bot.action('ROLE_ADVERTISER', async (ctx) => {
-            await answerCbQuerySafe(ctx);
-            await replySafe(ctx, '🧑‍💼 Advertiser panel (coming soon)');
-        });
-
-        this.bot.action('ROLE_PUBLISHER', async (ctx) => {
-            await answerCbQuerySafe(ctx);
-            await replySafe(ctx, '📢 Publisher panel (coming soon)');
-        });
+    private registerSystemHandlers() {
+        // User interaction handlers are wired via NestJS @Update handlers.
     }
 
 

@@ -1,23 +1,17 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AdDealEscrowStatus, Prisma } from '@prisma/client';
-
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
-import {
-    DealState,
-    LedgerReason,
-    LedgerType,
-    TransitionActor,
-} from '@/modules/domain/contracts';
-import { toAdDealSnapshot } from './addeal.mapper';
+import { AdDealEscrowStatus } from '@prisma/client';
+import { DealState, LedgerReason, LedgerType, TransitionActor } from '@/modules/domain/contracts';
 import {
     assertAdDealMoneyMovement,
     assertAdDealTransition,
 } from '@/modules/domain/addeal/addeal.lifecycle';
+import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
-export class RefundAdDealUseCase {
+export class PublisherDeclineUseCase {
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentsService: PaymentsService,
@@ -25,10 +19,10 @@ export class RefundAdDealUseCase {
 
     async execute(params: {
         adDealId: string;
+        declinedAt?: Date;
         actor?: TransitionActor;
-        transaction?: Prisma.TransactionClient;
     }) {
-        const execute = async (tx: Prisma.TransactionClient) => {
+        return this.prisma.$transaction(async (tx) => {
             const adDeal = await tx.adDeal.findUnique({
                 where: { id: params.adDealId },
             });
@@ -37,33 +31,22 @@ export class RefundAdDealUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === DealState.refunded) {
+            if (adDeal.status === DealState.publisher_declined) {
                 return adDeal;
             }
 
-            const refundableStatuses: DealState[] = [
-                DealState.escrow_locked,
-                DealState.publisher_requested,
-                DealState.accepted,
-                DealState.advertiser_confirmed,
-                DealState.proof_submitted,
-                DealState.disputed,
-            ];
-
-            if (!refundableStatuses.includes(adDeal.status as DealState)) {
+            if (adDeal.status !== DealState.publisher_requested) {
                 throw new BadRequestException(
-                    `AdDeal cannot be refunded from status ${adDeal.status}`,
+                    `AdDeal cannot be declined from status ${adDeal.status}`,
                 );
             }
 
             const escrow = await tx.adDealEscrow.findUnique({
                 where: { adDealId: adDeal.id },
             });
-
             if (!escrow) {
-                throw new BadRequestException('Escrow not found for deal');
+                throw new BadRequestException('AdDeal escrow not found');
             }
-
             if (escrow.status !== AdDealEscrowStatus.locked) {
                 throw new BadRequestException(
                     `Escrow cannot be refunded from status ${escrow.status}`,
@@ -73,9 +56,9 @@ export class RefundAdDealUseCase {
             const transition = assertAdDealTransition({
                 adDealId: adDeal.id,
                 from: adDeal.status as DealState,
-                to: DealState.refunded,
+                to: DealState.publisher_declined,
                 actor: params.actor ?? TransitionActor.system,
-                correlationId: `addeal:${adDeal.id}:refund`,
+                correlationId: `addeal:${adDeal.id}:publisher_decline`,
             });
 
             if (!transition.noop) {
@@ -89,40 +72,45 @@ export class RefundAdDealUseCase {
             await this.paymentsService.recordWalletMovement({
                 tx,
                 walletId: escrow.advertiserWalletId,
-                amount: escrow.amount,
+                amount: adDeal.amount,
                 type: LedgerType.credit,
                 reason: LedgerReason.refund,
-                idempotencyKey: `addeal:${adDeal.id}:refund`,
-                referenceId: adDeal.id,
-                settlementStatus: 'settled',
+                idempotencyKey: `addeal:${adDeal.id}:publisher_decline_refund`,
                 actor: params.actor ?? TransitionActor.system,
-                correlationId: `addeal:${adDeal.id}:refund`,
+                correlationId: `addeal:${adDeal.id}:publisher_decline`,
+                referenceId: adDeal.id,
             });
-
-            const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
-            const refunded = domain.refund().toSnapshot();
 
             await tx.adDealEscrow.update({
                 where: { adDealId: adDeal.id },
-                data: {
-                    status: AdDealEscrowStatus.refunded,
-                    refundedAt: new Date(),
-                },
+                data: { status: AdDealEscrowStatus.refunded },
             });
 
-            return tx.adDeal.update({
+            const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
+            const declined = domain
+                .declineByPublisher(params.declinedAt)
+                .toSnapshot();
+
+            const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
-                    status: refunded.status,
-                    refundedAt: refunded.refundedAt,
+                    status: declined.status,
+                    publisherDeclinedAt: declined.publisherDeclinedAt,
                 },
             });
-        };
 
-        if (params.transaction) {
-            return execute(params.transaction);
-        }
+            await tx.userAuditLog.create({
+                data: {
+                    userId: adDeal.publisherId,
+                    action: 'addeal_publisher_declined',
+                    metadata: {
+                        adDealId: adDeal.id,
+                        publisherDeclinedAt: declined.publisherDeclinedAt,
+                    },
+                },
+            });
 
-        return this.prisma.$transaction(execute);
+            return updated;
+        });
     }
 }

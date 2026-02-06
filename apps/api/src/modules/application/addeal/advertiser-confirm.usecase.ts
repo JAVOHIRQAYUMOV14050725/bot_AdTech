@@ -3,7 +3,6 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '@/prisma/prisma.service';
 import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
 import { DealState, TransitionActor } from '@/modules/domain/contracts';
-
 import {
     assertAdDealMoneyMovement,
     assertAdDealTransition,
@@ -11,12 +10,12 @@ import {
 import { toAdDealSnapshot } from './addeal.mapper';
 
 @Injectable()
-export class AcceptDealUseCase {
+export class AdvertiserConfirmUseCase {
     constructor(private readonly prisma: PrismaService) { }
 
     async execute(params: {
         adDealId: string;
-        acceptedAt?: Date;
+        confirmedAt?: Date;
         actor?: TransitionActor;
     }) {
         return this.prisma.$transaction(async (tx) => {
@@ -28,22 +27,22 @@ export class AcceptDealUseCase {
                 throw new NotFoundException('AdDeal not found');
             }
 
-            if (adDeal.status === DealState.accepted) {
+            if (adDeal.status === DealState.advertiser_confirmed) {
                 return adDeal;
             }
 
-            if (adDeal.status !== DealState.publisher_requested) {
+            if (adDeal.status !== DealState.accepted) {
                 throw new BadRequestException(
-                    `AdDeal cannot be accepted from status ${adDeal.status}`,
+                    `AdDeal cannot be confirmed from status ${adDeal.status}`,
                 );
             }
 
             const transition = assertAdDealTransition({
                 adDealId: adDeal.id,
                 from: adDeal.status as DealState,
-                to: DealState.accepted,
+                to: DealState.advertiser_confirmed,
                 actor: params.actor ?? TransitionActor.system,
-                correlationId: `addeal:${adDeal.id}:accept`,
+                correlationId: `addeal:${adDeal.id}:advertiser_confirm`,
             });
 
             if (!transition.noop) {
@@ -55,24 +54,25 @@ export class AcceptDealUseCase {
             }
 
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
-            const accepted = domain.accept(params.acceptedAt).toSnapshot();
+            const confirmed = domain
+                .confirmByAdvertiser(params.confirmedAt)
+                .toSnapshot();
 
             const updated = await tx.adDeal.update({
                 where: { id: adDeal.id },
                 data: {
-                    status: accepted.status,
-                    acceptedAt: accepted.acceptedAt,
+                    status: confirmed.status,
+                    advertiserConfirmedAt: confirmed.advertiserConfirmedAt,
                 },
             });
 
             await tx.userAuditLog.create({
                 data: {
-                    userId: adDeal.publisherId,
-                    action: 'addeal_accepted',
+                    userId: adDeal.advertiserId,
+                    action: 'addeal_advertiser_confirmed',
                     metadata: {
                         adDealId: adDeal.id,
-                        status: accepted.status,
-                        acceptedAt: accepted.acceptedAt,
+                        advertiserConfirmedAt: confirmed.advertiserConfirmedAt,
                     },
                 },
             });

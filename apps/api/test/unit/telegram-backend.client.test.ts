@@ -18,7 +18,7 @@ describe('TelegramBackendClient error parsing', () => {
         const payload = JSON.stringify({
             error: {
                 message: { detail: 'Deep failure' },
-                details: { code: 'REQUEST_FAILED' },
+                details: { code: 'REQUEST_FAILED', message: 'Safe user text' },
             },
             correlationId: 'body-corr',
         });
@@ -28,6 +28,7 @@ describe('TelegramBackendClient error parsing', () => {
         expect(parsed.message).not.toBe('[object Object]');
         expect(typeof parsed.message).toBe('string');
         expect(parsed.correlationId).toBe('body-corr');
+        expect(parsed.userMessage).toBe('Safe user text');
     });
 
     it('ensures BackendApiError messages are always strings', () => {
@@ -37,10 +38,12 @@ describe('TelegramBackendClient error parsing', () => {
             code: 'REQUEST_FAILED',
             correlationId: 'corr-1',
             message,
+            userMessage: '❌ Something went wrong.',
         });
 
         expect(typeof err.message).toBe('string');
         expect(err.message).not.toBe('[object Object]');
         expect(err.httpStatus).toBe(500);
+        expect(err.userMessage).toBe('❌ Something went wrong.');
     });
 });

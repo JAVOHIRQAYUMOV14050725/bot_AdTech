@@ -14,7 +14,8 @@ import { AppConfig, appConfig } from '@/config/app.config';
 import CircuitBreaker from 'opossum';
 import { TelegramTimeoutError, withTelegramTimeout } from './telegram-timeout';
 import { TelegramIdentityAdapter } from '@/modules/identity/telegram-identity.adapter';
-import { answerCbQuerySafe, replySafe } from '@/modules/telegram/telegram-safe-text.util';
+import { answerCbQuerySafe, hasTelegramReplyBeenSent, replySafe } from '@/modules/telegram/telegram-safe-text.util';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 
 const bigintToSafeNumber = (value: bigint, field: string): number => {
     const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
@@ -111,6 +112,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramI
                 },
                 'TelegramService',
             );
+        });
+
+        this.bot.catch(async (err, ctx) => {
+            const { code, correlationId, status } = extractTelegramErrorMeta(err);
+            this.logger.error(
+                {
+                    event: 'telegram_unhandled_error',
+                    code,
+                    correlationId,
+                    status,
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                err instanceof Error ? err.stack : undefined,
+                'TelegramService',
+            );
+
+            if (!ctx) {
+                return;
+            }
+            if (hasTelegramReplyBeenSent(ctx)) {
+                return;
+            }
+            await replySafe(ctx, mapBackendErrorToTelegramMessage(err));
         });
     }
 

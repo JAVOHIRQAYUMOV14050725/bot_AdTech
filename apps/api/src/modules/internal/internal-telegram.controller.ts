@@ -105,7 +105,7 @@ export class InternalTelegramController {
         if (!parsed) {
             return {
                 ok: false as const,
-                reason: 'INVALID_PUBLISHER_IDENTIFIER',
+                reason: 'IDENTIFIER_INVALID',
                 message: 'Please send a valid @username or t.me link.',
             };
         }
@@ -113,7 +113,7 @@ export class InternalTelegramController {
         if ('error' in parsed) {
             return {
                 ok: false as const,
-                reason: 'INVALID_PUBLISHER_IDENTIFIER',
+                reason: 'IDENTIFIER_INVALID',
                 message: parsed.error ?? 'Invalid identifier.',
             };
         }

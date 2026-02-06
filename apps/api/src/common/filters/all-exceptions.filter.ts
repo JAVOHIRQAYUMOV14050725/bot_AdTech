@@ -67,7 +67,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             if (typeof errorResponse === 'object' && errorResponse !== null) {
                 const messageValue = (errorResponse as { message?: unknown }).message;
                 const message = Array.isArray(messageValue)
-                    ? 'Validation failed'
+                    ? messageValue
                     : typeof messageValue === 'string'
                         ? messageValue
                         : 'Request failed';
@@ -84,7 +84,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         })();
 
         const correlationId =
-            request.correlationId ?? RequestContext.getCorrelationId() ?? null;
+            request.correlationId ?? RequestContext.getCorrelationId() ?? 'unknown';
         const rawCode =
             typeof (errorResponse as { code?: unknown }).code === 'string'
                 ? (errorResponse as { code?: string }).code
@@ -94,7 +94,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
         const isValidation =
             (errorResponse as { event?: unknown })?.event === 'validation_failed'
-            || normalizedError.message === 'Validation failed';
+            || normalizedError.message === 'Validation failed'
+            || Array.isArray(normalizedError.message);
 
         const errorCode = rawCode
             ?? (isValidation ? 'VALIDATION_FAILED' : null)
@@ -108,7 +109,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             code: errorCode,
             message: normalizedError.message,
             correlationId,
-            details: normalizedError.details,
+            ...(typeof normalizedError.details === 'undefined' ? null : { details: normalizedError.details }),
         });
 
         const stack = exception instanceof Error ? exception.stack : undefined;

@@ -57,7 +57,7 @@ describe('InternalTelegramController resolvePublisher', () => {
         }
     });
 
-    it('returns INVALID_PUBLISHER_IDENTIFIER for invite links', async () => {
+    it('returns IDENTIFIER_INVALID for invite links', async () => {
         if (!dbAvailable) {
             return;
         }
@@ -67,7 +67,7 @@ describe('InternalTelegramController resolvePublisher', () => {
 
         expect(result.ok).toBe(false);
         if (!result.ok) {
-            expect(result.reason).toBe('INVALID_PUBLISHER_IDENTIFIER');
+            expect(result.reason).toBe('IDENTIFIER_INVALID');
         }
     });
 

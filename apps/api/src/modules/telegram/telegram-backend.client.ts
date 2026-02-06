@@ -287,7 +287,7 @@ export class TelegramBackendClient {
                 {
                     event: 'telegram_backend_request_failed',
                     path,
-                    status: response.status,
+                    statusCode: response.status,
                     code: parsed.code,
                     correlationId: parsed.correlationId,
                 },

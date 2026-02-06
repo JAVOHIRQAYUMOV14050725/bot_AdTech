@@ -85,14 +85,18 @@ export class AdvertiserHandler {
         if (!text) return;
 
         const userId = ctx.from!.id;
+        const fsmSnapshot = await this.fsm.get(userId);
+        if (fsmSnapshot.role !== 'advertiser') {
+            return;
+        }
+        const context = await this.ensureAdvertiser(ctx);
+        if (!context) {
+            return;
+        }
+        const fsm = context.fsm;
         const commandMatch = text.match(/^\/(fund_addeal|lock_addeal|confirm_addeal)\s+(\S+)/);
         if (commandMatch) {
             const [, command, adDealId] = commandMatch;
-            const context = await this.ensureAdvertiser(ctx);
-            if (!context) {
-                return;
-            }
-            const fsm = context.fsm;
             try {
                 const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
 
@@ -140,70 +144,61 @@ export class AdvertiserHandler {
             }
         }
 
-        let publisherResolution: TelegramResolvePublisherResult | null = null;
-        try {
-            publisherResolution = await this.resolvePublisherInput(text);
-        } catch (err) {
-            const message = mapBackendErrorToTelegramMessage(err);
-            const { code, correlationId } = extractTelegramErrorMeta(err);
-            this.logger.error({
-                event: 'telegram_resolve_publisher_failed',
-                userId,
-                error: message,
-                code,
-                correlationId,
-            });
-            return replySafe(ctx, message);
+        if (fsm.state === TelegramState.ADV_ADDEAL_PUBLISHER) {
+            let publisherResolution: TelegramResolvePublisherResult | null = null;
+            try {
+                publisherResolution = await this.resolvePublisherInput(text);
+            } catch (err) {
+                const message = mapBackendErrorToTelegramMessage(err);
+                const { code, correlationId } = extractTelegramErrorMeta(err);
+                this.logger.error({
+                    event: 'telegram_resolve_publisher_failed',
+                    userId,
+                    error: message,
+                    code,
+                    correlationId,
+                });
+                return replySafe(ctx, message);
+            }
+            if (publisherResolution) {
+                if (!publisherResolution.ok) {
+                    return replySafe(ctx, this.mapResolvePublisherReason(publisherResolution));
+                }
+
+                const publisher = publisherResolution.publisher;
+                if (!publisher) {
+                    return replySafe(ctx, '❌ Publisher not found. Send a valid @username or a public channel/group link.');
+                }
+                if (publisher.id === context.user.id) {
+                    return replySafe(ctx, '❌ You cannot create a deal with yourself.');
+                }
+
+                this.logger.log({
+                    event: 'publisher_resolved',
+                    advertiserId: context.user.id,
+                    publisherId: publisher.id,
+                    publisherTelegramId: publisher.telegramId?.toString(),
+                    source: publisherResolution.source,
+                    channelId: publisherResolution.channel?.id ?? null,
+                });
+
+                await this.fsm.transition(
+                    userId,
+                    TelegramState.ADV_ADDEAL_AMOUNT,
+                    { publisherId: publisher.id },
+                );
+
+                const publisherLabel =
+                    publisher.username
+                        ? `@${publisher.username}`
+                        : publisherResolution.channel?.title ?? 'publisher';
+
+                return replySafe(
+                    ctx,
+                    `✅ Publisher selected: ${publisherLabel}\n💵 Enter deal amount (USD):`,
+                );
+            }
         }
-        if (publisherResolution) {
-            if (!publisherResolution.ok) {
-                return replySafe(ctx, this.mapResolvePublisherReason(publisherResolution));
-            }
-
-            const context = await this.ensureAdvertiser(ctx);
-            if (!context) {
-                return;
-            }
-
-            const publisher = publisherResolution.publisher;
-            if (!publisher) {
-                return replySafe(ctx, '❌ Publisher not found. Send a valid @username or a public channel/group link.');
-            }
-            if (publisher.id === context.user.id) {
-                return replySafe(ctx, '❌ You cannot create a deal with yourself.');
-            }
-
-            this.logger.log({
-                event: 'publisher_resolved',
-                advertiserId: context.user.id,
-                publisherId: publisher.id,
-                publisherTelegramId: publisher.telegramId?.toString(),
-                source: publisherResolution.source,
-                channelId: publisherResolution.channel?.id ?? null,
-            });
-
-            await this.fsm.transition(
-                userId,
-                TelegramState.ADV_ADDEAL_AMOUNT,
-                { publisherId: publisher.id },
-            );
-
-            const publisherLabel =
-                publisher.username
-                    ? `@${publisher.username}`
-                    : publisherResolution.channel?.title ?? 'publisher';
-
-            return replySafe(
-                ctx,
-                `✅ Publisher selected: ${publisherLabel}\n💵 Enter deal amount (USD):`,
-            );
-        }
-
-        const context = await this.ensureAdvertiser(ctx);
-        if (!context) {
-            return;
-        }
-        const fsm = context.fsm;
 
         if (fsm.state === TelegramState.ADV_ADD_BALANCE_AMOUNT) {
             const amountText = text.trim();

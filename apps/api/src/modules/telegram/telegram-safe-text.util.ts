@@ -28,6 +28,13 @@ const coercePrimitiveText = (value: unknown): string | null => {
     return null;
 };
 
+const ensureReplyState = (ctx: Context) => {
+    if (!ctx.state) {
+        (ctx as Context & { state: Record<string, unknown> }).state = {};
+    }
+    return ctx.state as Record<string, unknown>;
+};
+
 const extractMessageField = (value: unknown): string | null => {
     if (isNonEmptyText(value)) {
         return value.trim();
@@ -103,9 +110,8 @@ export function replySafe(
     textOrUnknown: unknown,
     extra?: Parameters<Context['reply']>[1],
 ) {
-    if (ctx.state) {
-        (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
-    }
+    const state = ensureReplyState(ctx);
+    state[REPLY_SENT_STATE_KEY] = true;
     const locale = resolveTelegramLocale(ctx.from?.language_code);
     return ctx.reply(telegramUserMessage(textOrUnknown, locale), extra);
 }
@@ -116,14 +122,12 @@ export function answerCbQuerySafe(
     extra?: Parameters<Context['answerCbQuery']>[1],
 ) {
     if (typeof textOrUnknown === 'undefined') {
-        if (ctx.state) {
-            (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
-        }
+        const state = ensureReplyState(ctx);
+        state[REPLY_SENT_STATE_KEY] = true;
         return ctx.answerCbQuery();
     }
-    if (ctx.state) {
-        (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
-    }
+    const state = ensureReplyState(ctx);
+    state[REPLY_SENT_STATE_KEY] = true;
     const locale = resolveTelegramLocale(ctx.from?.language_code);
     return ctx.answerCbQuery(telegramUserMessage(textOrUnknown, locale), extra);
 }
@@ -133,9 +137,8 @@ export function editMessageTextSafe(
     textOrUnknown: unknown,
     extra?: Parameters<Context['editMessageText']>[1],
 ) {
-    if (ctx.state) {
-        (ctx.state as Record<string, unknown>)[REPLY_SENT_STATE_KEY] = true;
-    }
+    const state = ensureReplyState(ctx);
+    state[REPLY_SENT_STATE_KEY] = true;
     const locale = resolveTelegramLocale(ctx.from?.language_code);
     return ctx.editMessageText(telegramUserMessage(textOrUnknown, locale), extra);
 }

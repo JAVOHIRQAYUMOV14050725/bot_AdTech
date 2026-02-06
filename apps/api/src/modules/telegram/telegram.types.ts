@@ -23,7 +23,7 @@ export interface TelegramCheckResult {
 }
 
 export type TelegramResolvePublisherFailureReason =
-    | 'INVALID_PUBLISHER_IDENTIFIER'
+    | 'IDENTIFIER_INVALID'
     | 'CHANNEL_NOT_FOUND'
     | 'CHANNEL_NOT_APPROVED'
     | 'CHANNEL_NOT_OWNED_BY_PUBLISHER'

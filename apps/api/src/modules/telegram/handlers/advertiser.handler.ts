@@ -8,7 +8,7 @@ import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
 import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 import { parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
-import { TelegramResolvePublisherFailureReason } from '@/modules/telegram/telegram.types';
+import { TelegramResolvePublisherFailureReason, TelegramResolvePublisherResult } from '@/modules/telegram/telegram.types';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 import { replySafe } from '@/modules/telegram/telegram-safe-text.util';
 
@@ -132,7 +132,21 @@ export class AdvertiserHandler {
             }
         }
 
-        const publisherResolution = await this.resolvePublisherInput(text);
+        let publisherResolution: TelegramResolvePublisherResult | null = null;
+        try {
+            publisherResolution = await this.resolvePublisherInput(text);
+        } catch (err) {
+            const message = mapBackendErrorToTelegramMessage(err);
+            const { code, correlationId } = extractTelegramErrorMeta(err);
+            this.logger.error({
+                event: 'telegram_resolve_publisher_failed',
+                userId,
+                error: message,
+                code,
+                correlationId,
+            });
+            return replySafe(ctx, message);
+        }
         if (publisherResolution) {
             if (!publisherResolution.ok) {
                 return replySafe(ctx, this.mapResolvePublisherReason(publisherResolution));
@@ -347,7 +361,7 @@ export class AdvertiserHandler {
                 return '❌ Kanal egasi publisher akkaunt emas.';
             case 'PUBLISHER_NOT_REGISTERED':
                 return '❌ Publisher ro‘yxatdan o‘tmagan. Invite link orqali kiring.';
-            case 'INVALID_PUBLISHER_IDENTIFIER':
+            case 'IDENTIFIER_INVALID':
                 return '❌ @username yoki t.me link noto‘g‘ri.';
             default:
                 return '❌ Iltimos, to‘g‘ri @username yoki t.me link yuboring.';

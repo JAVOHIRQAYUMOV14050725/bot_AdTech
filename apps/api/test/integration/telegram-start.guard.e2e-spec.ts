@@ -194,7 +194,7 @@ describe('Telegram start guard (e2e)', () => {
             body: JSON.stringify(body),
         });
         expect(response.status).toBe(201);
-        const payload = await response.json();
+        const payload = (await response.json()) as { user: { role: string } };
         expect(payload.user.role).toBe('publisher');
         const linkedUser = await prisma.user.findUnique({
             where: { telegramId: BigInt(9310) },

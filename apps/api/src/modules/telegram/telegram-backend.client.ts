@@ -10,90 +10,138 @@ type BackendErrorPayload = {
     raw?: unknown;
 };
 
-const toNonEmptyString = (value: unknown): string | null => {
+type ParsedBackendErrorShape = {
+    message?: unknown;
+    code?: unknown;
+    correlationId?: unknown;
+    error?: { message?: unknown; details?: { code?: unknown } };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const safeJsonStringify = (value: unknown): string | null => {
+    const seen = new WeakSet<object>();
+    let hasCircular = false;
+    try {
+        const serialized = JSON.stringify(value, (_, nextValue) => {
+            if (nextValue && typeof nextValue === 'object') {
+                if (seen.has(nextValue)) {
+                    hasCircular = true;
+                    return undefined;
+                }
+                seen.add(nextValue);
+            }
+            return nextValue;
+        });
+        if (hasCircular) {
+            return null;
+        }
+        return serialized ?? null;
+    } catch {
+        return null;
+    }
+};
+
+export const toErrorMessage = (value: unknown, fallback: string): string => {
     if (typeof value === 'string') {
         const trimmed = value.trim();
-        return trimmed ? trimmed : null;
+        return trimmed || fallback;
     }
+
     if (Array.isArray(value)) {
         const parts = value
-            .map((entry) => toNonEmptyString(entry))
-            .filter((entry): entry is string => Boolean(entry));
+            .map((entry) => toErrorMessage(entry, ''))
+            .filter((entry) => entry);
         if (parts.length) {
             return parts.join('; ');
         }
+        return fallback;
     }
-    if (value && typeof value === 'object') {
-        try {
-            const serialized = JSON.stringify(value);
-            if (serialized && serialized !== '{}') {
-                return serialized;
+
+    if (isRecord(value)) {
+        const nestedMessage = value.message ?? (value.error as { message?: unknown } | undefined)?.message;
+        if (typeof nestedMessage !== 'undefined') {
+            const extracted = toErrorMessage(nestedMessage, '');
+            if (extracted) {
+                return extracted;
             }
-        } catch {
-            return null;
         }
+        const serialized = safeJsonStringify(value);
+        if (serialized && serialized !== '{}' && serialized !== '[object Object]') {
+            return serialized;
+        }
+        return fallback;
     }
-    return null;
+
+    const coerced = String(value ?? '').trim();
+    return coerced || fallback;
 };
 
 export class BackendApiError extends Error {
     status: number;
     code: string | null;
-    correlationId: string;
+    correlationId: string | null;
+    httpStatus: number;
     raw?: unknown;
 
-    constructor(params: { status: number; code?: string | null; correlationId: string; message: string; raw?: unknown }) {
+    constructor(params: {
+        status: number;
+        code?: string | null;
+        correlationId: string | null;
+        message: string;
+        raw?: unknown;
+    }) {
         super(params.message);
         this.name = 'BackendApiError';
         this.status = params.status;
+        this.httpStatus = params.status;
         this.code = params.code ?? null;
-        this.correlationId = params.correlationId;
+        this.correlationId = params.correlationId ?? null;
         this.raw = params.raw;
     }
 }
 
 export const parseBackendErrorResponse = (
     text: string,
-    responseCorrelationId: string,
+    headerCorrelationId: string | null,
+    requestCorrelationId: string,
     status: number,
 ): BackendErrorPayload => {
-    let message = `Backend request failed (${status})`;
+    const fallbackMessage = `Backend request failed (${status})`;
+    let message = fallbackMessage;
     let code: string | null = null;
-    let correlationId = responseCorrelationId;
+    let correlationId = headerCorrelationId ?? requestCorrelationId;
     let raw: unknown = undefined;
 
     if (text) {
         try {
-            const parsed = JSON.parse(text) as {
-                message?: unknown;
-                code?: unknown;
-                correlationId?: unknown;
-                error?: { message?: unknown; details?: { code?: unknown } };
-            };
+            const parsed = JSON.parse(text) as ParsedBackendErrorShape;
             raw = parsed;
             const parsedMessage =
-                toNonEmptyString(parsed.message) ??
-                toNonEmptyString(parsed.error?.message) ??
-                toNonEmptyString(parsed);
-
-            message = parsedMessage ?? message;
+                typeof parsed.message !== 'undefined'
+                    ? toErrorMessage(parsed.message, '')
+                    : typeof parsed.error?.message !== 'undefined'
+                        ? toErrorMessage(parsed.error.message, '')
+                        : '';
+            message = parsedMessage || toErrorMessage(parsed, fallbackMessage);
             code =
                 typeof parsed.code === 'string'
                     ? parsed.code
                     : typeof parsed.error?.details?.code === 'string'
                         ? parsed.error.details.code
                         : null;
-            correlationId =
-                typeof parsed.correlationId === 'string' ? parsed.correlationId : responseCorrelationId;
+            if (!headerCorrelationId) {
+                correlationId =
+                    typeof parsed.correlationId === 'string' ? parsed.correlationId : requestCorrelationId;
+            }
         } catch {
             const fallback = text.trim();
-            message = fallback || message;
+            message = fallback || fallbackMessage;
         }
     }
 
-    if (!message.trim()) {
-        message = `Backend request failed (${status})`;
-    }
+    message = toErrorMessage(message, fallbackMessage);
 
     return {
         message,
@@ -196,8 +244,8 @@ export class TelegramBackendClient {
             body: rawBody,
         });
 
-        const responseCorrelationId =
-            response.headers.get('x-correlation-id') ?? requestCorrelationId;
+        const headerCorrelationId = response.headers.get('x-correlation-id');
+        const responseCorrelationId = headerCorrelationId ?? requestCorrelationId;
         this.logger.log(
             {
                 event: 'telegram_backend_request',
@@ -210,7 +258,12 @@ export class TelegramBackendClient {
 
         if (!response.ok) {
             const text = await response.text();
-            const parsed = parseBackendErrorResponse(text, responseCorrelationId, response.status);
+            const parsed = parseBackendErrorResponse(
+                text,
+                headerCorrelationId,
+                requestCorrelationId,
+                response.status,
+            );
             throw new BackendApiError({
                 status: response.status,
                 code: parsed.code,

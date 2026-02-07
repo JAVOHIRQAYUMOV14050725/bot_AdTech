@@ -141,6 +141,14 @@ export function answerCbQuerySafe(
     return ctx.answerCbQuery(telegramUserMessage(textOrUnknown, locale), extra);
 }
 
+export async function ackNow(ctx: Context) {
+    try {
+        await answerCbQuerySafe(ctx, '✅');
+    } catch {
+        // ignore ack failures
+    }
+}
+
 export function editMessageTextSafe(
     ctx: Context,
     textOrUnknown: unknown,
@@ -182,14 +190,28 @@ export async function startTelegramProgress(
     const progressMessage = await replySafe(ctx, textOrUnknown, extra);
     const chatId = progressMessage?.chat?.id ?? ctx.chat?.id;
     const messageId = progressMessage?.message_id;
+    let finalSent = false;
     return {
         chatId,
         messageId,
         async finish(text: unknown, finishExtra?: Parameters<Context['telegram']['editMessageText']>[4]) {
-            if (chatId && messageId) {
-                return editMessageTextByIdSafe(ctx, chatId, messageId, text, finishExtra);
+            if (finalSent) {
+                return;
             }
-            return replySafe(ctx, text, finishExtra);
+            if (chatId && messageId) {
+                try {
+                    await editMessageTextByIdSafe(ctx, chatId, messageId, text, finishExtra);
+                    finalSent = true;
+                    return;
+                } catch {
+                    // fallback to reply below
+                }
+            }
+            if (finalSent) {
+                return;
+            }
+            finalSent = true;
+            await replySafe(ctx, text, finishExtra);
         },
     };
 }

@@ -6,12 +6,13 @@ import { TelegramFlow, TelegramFlowStep } from '../../application/telegram/teleg
 import { addChannelOptions, cancelFlowKeyboard, publisherHome, verifyPrivateChannelKeyboard } from '../keyboards';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramResponse } from '@/modules/telegram/telegram-error.util';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 import { formatTelegramBotUsernameMention } from '@/common/utils/telegram-bot-username.util';
-import { answerCbQuerySafe, replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
+import { ackNow, replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
 import { TelegramUserLockService } from '@/modules/telegram/telegram-user-lock.service';
 import { resolveTelegramCorrelationId } from '@/modules/telegram/telegram-context.util';
+import { normalizeTelegramIdentifierInput } from '@/common/utils/telegram-username.util';
 @Update()
 export class PublisherHandler {
     private readonly logger = new Logger(PublisherHandler.name);
@@ -25,7 +26,7 @@ export class PublisherHandler {
 
     @Action('ROLE_PUBLISHER')
     async enter(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -53,8 +54,8 @@ export class PublisherHandler {
                         publisherHome,
                     );
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -62,7 +63,7 @@ export class PublisherHandler {
 
     @Action('PUB_ADD_CHANNEL')
     async addChannel(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -89,8 +90,8 @@ export class PublisherHandler {
                         addChannelOptions,
                     );
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -98,7 +99,7 @@ export class PublisherHandler {
 
     @Action('PUB_ADD_CHANNEL_PUBLIC')
     async addChannelPublic(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -122,8 +123,8 @@ export class PublisherHandler {
                     );
                     await progress.finish('🔓 Send your channel @username or public t.me link:', cancelFlowKeyboard);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -131,7 +132,7 @@ export class PublisherHandler {
 
     @Action('PUB_ADD_CHANNEL_PRIVATE')
     async addChannelPrivate(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -164,8 +165,8 @@ export class PublisherHandler {
                         verifyPrivateChannelKeyboard,
                     );
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -173,7 +174,7 @@ export class PublisherHandler {
 
     @Action('PUB_VERIFY_PRIVATE_CHANNEL')
     async verifyPrivateChannel(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -188,8 +189,8 @@ export class PublisherHandler {
                 try {
                     context = await this.ensurePublisher(ctx);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message, verifyPrivateChannelKeyboard);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, verifyPrivateChannelKeyboard);
                     return;
                 }
                 if (!context) {
@@ -213,16 +214,16 @@ export class PublisherHandler {
 
                     await progress.finish(response.message, verifyPrivateChannelKeyboard);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
                     const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
                     this.logger.error({
                         event: 'telegram_verify_private_channel_failed',
                         userId,
                         code,
                         correlationId: errorCorrelationId,
-                        error: message,
+                        error: presentation.message,
                     });
-                    await progress.finish(message, verifyPrivateChannelKeyboard);
+                    await progress.finish(presentation.message, verifyPrivateChannelKeyboard);
                 }
             });
         });
@@ -230,7 +231,7 @@ export class PublisherHandler {
 
     @Action('CANCEL_FLOW')
     async cancelFlow(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -254,11 +255,11 @@ export class PublisherHandler {
             return;
         }
         const locale = resolveTelegramLocale(ctx.from?.language_code);
-        const fsmSnapshot = await this.fsm.get(userId);
-        if (fsmSnapshot.role !== 'publisher') {
-            return;
-        }
         await this.withUserLock(ctx, async () => {
+            const fsmSnapshot = await this.fsm.get(userId);
+            if (fsmSnapshot.role !== 'publisher') {
+                return;
+            }
             const correlationId = resolveTelegramCorrelationId(ctx);
             await this.backendClient.runWithCorrelationId(correlationId, async () => {
                 const progress = await startTelegramProgress(ctx);
@@ -266,8 +267,8 @@ export class PublisherHandler {
                 try {
                     context = await this.ensurePublisher(ctx);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                     return;
                 }
                 if (!context) {
@@ -296,7 +297,7 @@ export class PublisherHandler {
                         );
                         return;
                     } catch (err) {
-                        const message = mapBackendErrorToTelegramMessage(err, locale);
+                        const presentation = mapBackendErrorToTelegramResponse(err, locale);
                         const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
                         this.logger.error({
                             event: 'telegram_accept_failed',
@@ -305,11 +306,11 @@ export class PublisherHandler {
                             role: fsm.role,
                             flow: fsm.flow,
                             step: fsm.step,
-                            error: message,
+                            error: presentation.message,
                             code,
                             correlationId: errorCorrelationId,
                         });
-                        await progress.finish(message);
+                        await progress.finish(presentation.message, presentation.keyboard);
                         return;
                     }
                 }
@@ -330,7 +331,7 @@ export class PublisherHandler {
                         await progress.finish(`🚫 AdDeal declined\nID: ${adDealId}`);
                         return;
                     } catch (err) {
-                        const message = mapBackendErrorToTelegramMessage(err, locale);
+                        const presentation = mapBackendErrorToTelegramResponse(err, locale);
                         const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
                         this.logger.error({
                             event: 'telegram_decline_failed',
@@ -339,11 +340,11 @@ export class PublisherHandler {
                             role: fsm.role,
                             flow: fsm.flow,
                             step: fsm.step,
-                            error: message,
+                            error: presentation.message,
                             code,
                             correlationId: errorCorrelationId,
                         });
-                        await progress.finish(message);
+                        await progress.finish(presentation.message, presentation.keyboard);
                         return;
                     }
                 }
@@ -374,7 +375,6 @@ export class PublisherHandler {
                     fsm.flow === TelegramFlow.PUBLISHER_ONBOARDING
                     && fsm.step === TelegramFlowStep.PUB_ADD_CHANNEL_PUBLIC
                 ) {
-                    await this.fsm.clearFlow(userId);
                     await this.handlePublicChannelInput(ctx, context.user.id, text, progress);
                     return;
                 }
@@ -389,13 +389,27 @@ export class PublisherHandler {
                         );
                         return;
                     }
-                    await this.fsm.clearFlow(userId);
                     await this.handleProofSubmission(ctx, adDealId, text, progress);
                     return;
                 }
 
-                if (fsm.flow === TelegramFlow.NONE) {
-                    await progress.finish('ℹ️ Session expired. Use /start to choose your role.');
+                const expectedSteps = new Set([
+                    `${TelegramFlow.PUBLISHER_ONBOARDING}:${TelegramFlowStep.PUB_ADD_CHANNEL_PUBLIC}`,
+                    `${TelegramFlow.PUBLISHER_ONBOARDING}:${TelegramFlowStep.PUB_ADDEAL_PROOF}`,
+                ]);
+                if (!expectedSteps.has(`${fsm.flow}:${fsm.step}`)) {
+                    if (fsm.flow === TelegramFlow.NONE) {
+                        await progress.finish('ℹ️ Session expired. Use /start to choose your role.', publisherHome);
+                        return;
+                    }
+                    if (fsm.flow === TelegramFlow.PUBLISHER_ONBOARDING && fsm.step === TelegramFlowStep.PUB_ADD_CHANNEL_PRIVATE) {
+                        await progress.finish(
+                            '🔒 Avval botni kanalga admin qiling va "Verify Channel" tugmasini bosing.',
+                            verifyPrivateChannelKeyboard,
+                        );
+                        return;
+                    }
+                    await progress.finish('❌ Iltimos, ko‘rsatilgan qadamlardan foydalaning.', cancelFlowKeyboard);
                     return;
                 }
 
@@ -424,7 +438,8 @@ export class PublisherHandler {
             const adDeal = await this.backendClient.lookupAdDeal({ adDealId });
 
             if (adDeal.adDeal.publisherId !== publisher.user.id) {
-                return replySafe(ctx, '❌ AdDeal not found for publisher');
+                await progress.finish('❌ AdDeal not found for publisher');
+                return;
             }
 
             await this.backendClient.submitProof({
@@ -446,10 +461,11 @@ export class PublisherHandler {
                 publisherId: publisher.user.id,
             });
 
+            await this.fsm.clearFlow(userId);
             await progress.finish(`✅ Proof submitted & settled\nID: ${adDealId}`);
             return;
         } catch (err) {
-            const message = mapBackendErrorToTelegramMessage(err, locale);
+            const presentation = mapBackendErrorToTelegramResponse(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_proof_failed',
@@ -458,11 +474,11 @@ export class PublisherHandler {
                 role: fsm.role,
                 flow: fsm.flow,
                 step: fsm.step,
-                error: message,
+                error: presentation.message,
                 code,
                 correlationId,
             });
-            await progress.finish(message);
+            await progress.finish(presentation.message, presentation.keyboard);
             return;
         }
     }
@@ -476,24 +492,32 @@ export class PublisherHandler {
         const locale = resolveTelegramLocale(ctx.from?.language_code);
         const progress = progressParam ?? await startTelegramProgress(ctx);
         try {
+            const normalized = normalizeTelegramIdentifierInput(value);
+            if (!normalized.canonical) {
+                const error = new Error('Invalid channel input');
+                (error as Error & { code?: string; userMessage?: string }).code = 'INVALID_CHANNEL_INPUT';
+                (error as Error & { code?: string; userMessage?: string }).userMessage = '❌ @username yoki t.me link noto‘g‘ri.';
+                throw error;
+            }
             const response = await this.backendClient.verifyPublisherChannel({
                 publisherId,
                 telegramUserId: ctx.from!.id.toString(),
-                identifier: value,
+                identifier: normalized.canonical,
             });
+            await this.fsm.clearFlow(ctx.from!.id);
             await progress.finish(response.message);
             return;
         } catch (err) {
-            const message = mapBackendErrorToTelegramMessage(err, locale);
+            const presentation = mapBackendErrorToTelegramResponse(err, locale);
             const { code, correlationId } = extractTelegramErrorMeta(err);
             this.logger.error({
                 event: 'telegram_public_channel_verify_failed',
                 publisherId,
                 code,
                 correlationId,
-                error: message,
+                error: presentation.message,
             });
-            await progress.finish(message);
+            await progress.finish(presentation.message, presentation.keyboard ?? cancelFlowKeyboard);
             return;
         }
     }
@@ -527,6 +551,9 @@ export class PublisherHandler {
         }
         const acquired = await this.lockService.tryAcquire(userId);
         if (!acquired) {
+            if (ctx.callbackQuery) {
+                await ackNow(ctx);
+            }
             await replySafe(ctx, '⏳ Iltimos kuting…');
             return;
         }

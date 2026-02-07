@@ -109,9 +109,11 @@ export class FundAdDealUseCase {
             }
 
             if (useWalletBalance && wallet.balance.lt(fundingAmount)) {
-                throw new BadRequestException(
-                    'Insufficient wallet balance to fund deal',
-                );
+                throw new BadRequestException({
+                    message: 'Insufficient wallet balance to fund deal',
+                    code: 'INSUFFICIENT_WALLET_BALANCE',
+                    userMessage: "❌ Balansingiz yetarli emas. Avval 'Add balance' qiling.",
+                });
             }
 
             const transition = assertAdDealTransition({

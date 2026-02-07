@@ -6,11 +6,11 @@ import { TelegramFlow, TelegramFlowStep } from '../../application/telegram/teleg
 import { advertiserHome, cancelFlowKeyboard } from '../keyboards';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
-import { extractTelegramErrorMeta, mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
-import { parseTelegramIdentifier } from '@/common/utils/telegram-username.util';
+import { extractTelegramErrorMeta, mapBackendErrorToTelegramResponse } from '@/modules/telegram/telegram-error.util';
+import { normalizeTelegramIdentifierInput } from '@/common/utils/telegram-username.util';
 import { TelegramResolvePublisherFailureReason, TelegramResolvePublisherResult } from '@/modules/telegram/telegram.types';
 import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
-import { answerCbQuerySafe, replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
+import { ackNow, replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
 import { TelegramUserLockService } from '@/modules/telegram/telegram-user-lock.service';
 import { resolveTelegramCorrelationId } from '@/modules/telegram/telegram-context.util';
 
@@ -26,7 +26,7 @@ export class AdvertiserHandler {
 
     @Action('ROLE_ADVERTISER')
     async enter(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -54,8 +54,8 @@ export class AdvertiserHandler {
                         advertiserHome,
                     );
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -63,7 +63,7 @@ export class AdvertiserHandler {
 
     @Action('ADD_BALANCE')
     async addBalance(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -87,8 +87,8 @@ export class AdvertiserHandler {
                     );
                     await progress.finish('💰 Enter amount (USD):', cancelFlowKeyboard);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -96,7 +96,7 @@ export class AdvertiserHandler {
 
     @Action('CREATE_ADDEAL')
     async beginCreateAdDeal(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -123,8 +123,8 @@ export class AdvertiserHandler {
                         cancelFlowKeyboard,
                     );
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -132,7 +132,7 @@ export class AdvertiserHandler {
 
     @Action('CREATE_CAMPAIGN')
     async beginCreateCampaign(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -156,8 +156,8 @@ export class AdvertiserHandler {
                     );
                     await progress.finish('📝 Campaign name kiriting:', cancelFlowKeyboard);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
-                    await progress.finish(message);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
                 }
             });
         });
@@ -165,7 +165,7 @@ export class AdvertiserHandler {
 
     @Action('CANCEL_FLOW')
     async cancelFlow(@Ctx() ctx: Context) {
-        await answerCbQuerySafe(ctx);
+        await ackNow(ctx);
         const userId = ctx.from?.id;
         if (!userId) {
             await replySafe(ctx, '❌ Telegram user not found.');
@@ -189,11 +189,11 @@ export class AdvertiserHandler {
             return;
         }
         const locale = resolveTelegramLocale(ctx.from?.language_code);
-        const fsmSnapshot = await this.fsm.get(userId);
-        if (fsmSnapshot.role !== 'advertiser') {
-            return;
-        }
         await this.withUserLock(ctx, async () => {
+            const fsmSnapshot = await this.fsm.get(userId);
+            if (fsmSnapshot.role !== 'advertiser') {
+                return;
+            }
             const correlationId = resolveTelegramCorrelationId(ctx);
             await this.backendClient.runWithCorrelationId(correlationId, async () => {
                 const progress = await startTelegramProgress(ctx);
@@ -201,16 +201,16 @@ export class AdvertiserHandler {
                 try {
                     context = await this.ensureAdvertiser(ctx);
                 } catch (err) {
-                    const message = mapBackendErrorToTelegramMessage(err, locale);
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
                     const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
                     this.logger.error({
                         event: 'telegram_advertiser_ensure_failed',
                         userId,
                         code,
                         correlationId: errorCorrelationId,
-                        error: message,
+                        error: presentation.message,
                     });
-                    await progress.finish(message);
+                    await progress.finish(presentation.message, presentation.keyboard);
                     return;
                 }
                 if (!context) {
@@ -257,7 +257,7 @@ export class AdvertiserHandler {
                             return;
                         }
                     } catch (err) {
-                        const message = mapBackendErrorToTelegramMessage(err, locale);
+                        const presentation = mapBackendErrorToTelegramResponse(err, locale);
                         const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
                         this.logger.error({
                             event: 'telegram_addeal_command_failed',
@@ -267,13 +267,29 @@ export class AdvertiserHandler {
                             role: fsm.role,
                             flow: fsm.flow,
                             step: fsm.step,
-                            error: message,
+                            error: presentation.message,
                             code,
                             correlationId: errorCorrelationId,
                         });
-                        await progress.finish(message);
+                        await progress.finish(presentation.message, presentation.keyboard);
                         return;
                     }
+                }
+
+                const expectedSteps = new Set([
+                    `${TelegramFlow.ADD_BALANCE}:${TelegramFlowStep.ADV_ADD_BALANCE_AMOUNT}`,
+                    `${TelegramFlow.CREATE_AD_DEAL}:${TelegramFlowStep.ADV_ADDEAL_PUBLISHER}`,
+                    `${TelegramFlow.CREATE_AD_DEAL}:${TelegramFlowStep.ADV_ADDEAL_AMOUNT}`,
+                    `${TelegramFlow.CREATE_CAMPAIGN}:${TelegramFlowStep.ADV_CREATE_CAMPAIGN_NAME}`,
+                ]);
+
+                if (!expectedSteps.has(`${fsm.flow}:${fsm.step}`)) {
+                    if (fsm.flow === TelegramFlow.NONE) {
+                        await progress.finish('ℹ️ Session expired. Use /start to choose your role.', advertiserHome);
+                        return;
+                    }
+                    await progress.finish('❌ Iltimos, ko‘rsatilgan qadamlardan foydalaning.', cancelFlowKeyboard);
+                    return;
                 }
 
                 if (fsm.flow === TelegramFlow.CREATE_AD_DEAL && fsm.step === TelegramFlowStep.ADV_ADDEAL_PUBLISHER) {
@@ -281,30 +297,34 @@ export class AdvertiserHandler {
                     try {
                         publisherResolution = await this.resolvePublisherInput(text);
                     } catch (err) {
-                        const message = mapBackendErrorToTelegramMessage(err, locale);
+                        const presentation = mapBackendErrorToTelegramResponse(err, locale);
                         const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
                         this.logger.error({
                             event: 'telegram_resolve_publisher_failed',
                             userId,
-                            error: message,
+                            error: presentation.message,
                             code,
                             correlationId: errorCorrelationId,
                         });
-                        await progress.finish(message);
+                        await progress.finish(presentation.message, presentation.keyboard);
                         return;
                     }
                     if (publisherResolution) {
                         if (!publisherResolution.ok) {
+                            const mappedCode = this.mapResolvePublisherErrorCode(publisherResolution.reason);
+                            if (mappedCode) {
+                                const presentation = mapBackendErrorToTelegramResponse({ code: mappedCode }, locale);
+                                await progress.finish(presentation.message, presentation.keyboard);
+                                return;
+                            }
                             await progress.finish(this.mapResolvePublisherReason(publisherResolution), cancelFlowKeyboard);
                             return;
                         }
 
                         const publisher = publisherResolution.publisher;
                         if (!publisher) {
-                            await progress.finish(
-                                '❌ Publisher not found. Send a valid @username or a public channel/group link.',
-                                cancelFlowKeyboard,
-                            );
+                            const presentation = mapBackendErrorToTelegramResponse({ code: 'PUBLISHER_NOT_FOUND' }, locale);
+                            await progress.finish(presentation.message, presentation.keyboard);
                             return;
                         }
                         if (publisher.id === context.user.id) {
@@ -373,19 +393,22 @@ export class AdvertiserHandler {
                         );
                         return;
                     } catch (err) {
-                        const message = mapBackendErrorToTelegramMessage(err, locale);
+                        const presentation = mapBackendErrorToTelegramResponse(err, locale);
                         const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
+                        if (code === 'PAYMENTS_DISABLED') {
+                            await this.fsm.clearFlow(userId);
+                        }
                         this.logger.error({
                             event: 'telegram_deposit_failed',
                             userId,
                             role: fsm.role,
                             flow: fsm.flow,
                             step: fsm.step,
-                            error: message,
+                            error: presentation.message,
                             code,
                             correlationId: errorCorrelationId,
                         });
-                        await progress.finish(message);
+                        await progress.finish(presentation.message, presentation.keyboard);
                         return;
                     }
                 }
@@ -458,19 +481,22 @@ export class AdvertiserHandler {
                         );
                         return;
                     } catch (err) {
-                        const message = mapBackendErrorToTelegramMessage(err, locale);
+                        const presentation = mapBackendErrorToTelegramResponse(err, locale);
                         const { code, correlationId: errorCorrelationId } = extractTelegramErrorMeta(err);
+                        if (code === 'INSUFFICIENT_WALLET_BALANCE') {
+                            await this.fsm.clearFlow(userId);
+                        }
                         this.logger.error({
                             event: 'telegram_addeal_create_failed',
                             userId,
                             role: fsm.role,
                             flow: fsm.flow,
                             step: fsm.step,
-                            error: message,
+                            error: presentation.message,
                             code,
                             correlationId: errorCorrelationId,
                         });
-                        await progress.finish(message);
+                        await progress.finish(presentation.message, presentation.keyboard);
                         return;
                     }
                 }
@@ -479,13 +505,8 @@ export class AdvertiserHandler {
                     await this.fsm.clearFlow(userId);
                     await progress.finish(
                         '🛠 Campaign creation is not available yet. Please contact support.',
-                        cancelFlowKeyboard,
+                        advertiserHome,
                     );
-                    return;
-                }
-
-                if (fsm.flow === TelegramFlow.NONE) {
-                    await progress.finish('ℹ️ Session expired. Use /start to choose your role.');
                     return;
                 }
 
@@ -495,15 +516,14 @@ export class AdvertiserHandler {
     }
 
     private async resolvePublisherInput(value: string) {
-        const trimmed = value.trim();
-        if (!trimmed) {
-            return null;
+        const normalized = normalizeTelegramIdentifierInput(value);
+        if (!normalized.canonical) {
+            const error = new Error('Invalid channel input');
+            (error as Error & { code?: string; userMessage?: string }).code = 'INVALID_CHANNEL_INPUT';
+            (error as Error & { code?: string; userMessage?: string }).userMessage = '❌ @username yoki t.me link noto‘g‘ri.';
+            throw error;
         }
-
-        const parsed = parseTelegramIdentifier(trimmed);
-        const identifier = parsed.normalized ?? trimmed;
-
-        return this.backendClient.resolvePublisher({ identifier });
+        return this.backendClient.resolvePublisher({ identifier: normalized.canonical });
     }
 
     private mapResolvePublisherReason(result: { reason?: TelegramResolvePublisherFailureReason }) {
@@ -520,6 +540,17 @@ export class AdvertiserHandler {
                 return '❌ @username yoki t.me link noto‘g‘ri.';
             default:
                 return '❌ Iltimos, to‘g‘ri @username yoki t.me link yuboring.';
+        }
+    }
+
+    private mapResolvePublisherErrorCode(reason?: TelegramResolvePublisherFailureReason) {
+        switch (reason) {
+            case 'IDENTIFIER_INVALID':
+                return 'INVALID_CHANNEL_INPUT';
+            case 'CHANNEL_NOT_FOUND':
+                return 'PUBLISHER_NOT_FOUND';
+            default:
+                return null;
         }
     }
 
@@ -552,6 +583,9 @@ export class AdvertiserHandler {
         }
         const acquired = await this.lockService.tryAcquire(userId);
         if (!acquired) {
+            if (ctx.callbackQuery) {
+                await ackNow(ctx);
+            }
             await replySafe(ctx, '⏳ Iltimos kuting…');
             return;
         }

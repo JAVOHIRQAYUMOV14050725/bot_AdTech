@@ -293,7 +293,8 @@ export class AdvertiserHandler {
                 }
 
                 if (fsm.flow === TelegramFlow.CREATE_AD_DEAL && fsm.step === TelegramFlowStep.ADV_ADDEAL_PUBLISHER) {
-                    let publisherResolution: TelegramResolvePublisherResult | null = null;
+                    let publisherResolution
+                        : TelegramResolvePublisherResult | null = null;
                     try {
                         publisherResolution = await this.resolvePublisherInput(text);
                     } catch (err) {

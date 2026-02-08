@@ -33,6 +33,7 @@ export const envSchema = z.object({
     ENABLE_TELEGRAM_SMOKE_TEST: booleanString.default('false'),
     TELEGRAM_TEST_CHANNEL: z.string().optional(),
     TELEGRAM_INTERNAL_TOKEN: z.string().min(1),
+    CLICK_MERCHANT_USER_ID: z.string().optional(),
     WORKER_MODE: booleanString.default('false'),
     WORKER_AUTOSTART: booleanString.default('false'),
     ENABLE_DEBUG: booleanString.default('false'),
@@ -64,6 +65,8 @@ export const envSchema = z.object({
     CLICK_MERCHANT_ID: z.string().optional(),
     CLICK_SECRET_KEY: z.string().optional(),
     CLICK_SIGN_TIME_WINDOW_MINUTES: z.coerce.number().int().positive().default(10),
+    CLICK_CREATE_INVOICE_PATH:z.string().optional()
 });
 
 export type EnvVars = z.infer<typeof envSchema>;    
+

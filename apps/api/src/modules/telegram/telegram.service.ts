@@ -54,7 +54,7 @@ function isTelegramFailure(
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy, TelegramIdentityAdapter {
     private readonly bot: Telegraf<Context>;
-    private started = true;
+    private started = false;
     private botId?: number;
     private readonly breaker: CircuitBreaker;
 

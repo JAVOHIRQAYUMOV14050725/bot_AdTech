@@ -25,6 +25,21 @@ import {
     TransitionActor,
 } from '@/modules/domain/contracts';
 import { ClickPaymentService } from '@/modules/infrastructure/payments/click-payment.service';
+import { loadEnv } from '@/config/env';
+
+const env = loadEnv()
+
+
+   
+    const ENABLE_CLICK = env.ENABLE_CLICK
+    const ENABLE_CLICK_PAYMENTS = env.ENABLE_CLICK_PAYMENTS
+   const  CLICK_API_BASE_URL = env.CLICK_API_BASE_URL
+  const  CLICK_MERCHANT_ID = env.CLICK_MERCHANT_ID
+const CLICK_SECRET_KEY = env.CLICK_SECRET_KEY
+const CLICK_SERVICE_ID = env.CLICK_SERVICE_ID
+
+
+
 
 
 @Injectable()
@@ -44,6 +59,8 @@ export class PaymentsService {
     private normalizeDecimal(value: Prisma.Decimal) {
         return new Prisma.Decimal(value);
     }
+
+    
 
     private assertEscrowAmountSafe(amount: Prisma.Decimal, campaignTargetId: string) {
         const normalized = this.normalizeDecimal(amount);
@@ -66,6 +83,8 @@ export class PaymentsService {
             throw new ConflictException('Escrow amount precision invalid');
         }
     }
+
+    
 
     verifyClickSignature(payload: Record<string, string | number | null>) {
         return this.clickPaymentService.verifyWebhookSignature(payload);
@@ -159,7 +178,12 @@ export class PaymentsService {
                 `Ledger invariant violated for wallet=${walletId}`,
             );
         }
+
+
+
     }
+
+    
 
     async recordWalletMovement(params: {
         tx: Prisma.TransactionClient;
@@ -375,12 +399,31 @@ export class PaymentsService {
             });
         });
 
+        const baseUrl = this.configService.get<string>('CLICK_API_BASE_URL', 'https://api.click.uz');
+        const path = this.configService.get<string>('CLICK_CREATE_INVOICE_PATH', '/v2/merchant/invoice/create');
+        const url = `${baseUrl}${path}`;
+
+        this.logger.log(
+            {
+                event: 'click_http_request',
+                method: 'POST',
+                baseUrl,
+                path,
+                url,
+                envPath: process.env.CLICK_CREATE_INVOICE_PATH, // qo‘shimcha tekshiruv
+            },
+            'ClickPaymentService',
+        );
+
+
         const invoice = await this.clickPaymentService.createInvoice({
             amount: normalizedAmount.toFixed(2),
             merchantTransId: intent.id,
             description: `Wallet deposit ${intent.id}`,
             returnUrl,
         });
+
+
 
         const updated = await this.prisma.paymentIntent.update({
             where: { id: intent.id },

@@ -128,7 +128,8 @@ export class PublisherHandler {
             return;
         }
         const locale = resolveTelegramLocale(ctx.from?.language_code);
-        const adDealId = typeof ctx.match?.[1] === 'string' ? ctx.match[1] : '';
+        const match = (ctx as Context & { match?: RegExpExecArray }).match;
+        const adDealId = typeof match?.[1] === 'string' ? match[1] : '';
         if (!adDealId) {
             await replySafe(ctx, '❌ AdDeal not found.');
             return;
@@ -157,7 +158,8 @@ export class PublisherHandler {
             return;
         }
         const locale = resolveTelegramLocale(ctx.from?.language_code);
-        const adDealId = typeof ctx.match?.[1] === 'string' ? ctx.match[1] : '';
+        const match = (ctx as Context & { match?: RegExpExecArray }).match;
+        const adDealId = typeof match?.[1] === 'string' ? match[1] : '';
         if (!adDealId) {
             await replySafe(ctx, '❌ AdDeal not found.');
             return;

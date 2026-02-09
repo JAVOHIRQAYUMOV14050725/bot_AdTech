@@ -9,6 +9,7 @@ import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.us
 import { SettleAdDealUseCase } from '@/modules/application/addeal/settle-addeal.usecase';
 import { OpenDisputeUseCase } from '@/modules/application/addeal/open-dispute.usecase';
 import { ResolveDisputeUseCase } from '@/modules/application/addeal/resolve-dispute.usecase';
+import { DisputeResolution } from '@/modules/domain/dispute/dispute.types';
 import { TransitionActor } from '@/modules/domain/contracts';
 
 @Injectable()
@@ -93,7 +94,6 @@ export class DealsService {
         return this.declineDealUseCase.execute({
             adDealId: params.dealId,
             actor: TransitionActor.publisher,
-            reason: params.reason,
         });
     }
 
@@ -112,23 +112,24 @@ export class DealsService {
         });
     }
 
-    openDispute(params: { dealId: string; actor: TransitionActor; reason: string }) {
+    openDispute(params: { dealId: string; openedBy: string; actor: TransitionActor; reason: string }) {
         return this.openDisputeUseCase.execute({
             adDealId: params.dealId,
+            openedBy: params.openedBy,
             reason: params.reason,
             actor: params.actor,
         });
     }
 
     adminResolveDispute(params: {
-        dealId: string;
-        decision: 'refund' | 'release';
+        disputeId: string;
+        resolution: DisputeResolution;
         adminId: string;
-        reason?: string;
+        reason: string;
     }) {
         return this.resolveDisputeUseCase.execute({
-            adDealId: params.dealId,
-            decision: params.decision,
+            disputeId: params.disputeId,
+            resolution: params.resolution,
             adminId: params.adminId,
             reason: params.reason,
         });

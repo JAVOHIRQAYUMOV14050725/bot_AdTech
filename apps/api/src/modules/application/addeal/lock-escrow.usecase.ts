@@ -92,6 +92,7 @@ export class LockEscrowUseCase {
                 });
             }
 
+            let escrowId: string | null = adDeal.escrowId ?? null;
             if (adDeal.status === DealState.funded) {
                 await this.paymentsService.recordWalletMovement({
                     tx,
@@ -105,7 +106,7 @@ export class LockEscrowUseCase {
                     referenceId: adDeal.id,
                 });
 
-                await tx.adDealEscrow.upsert({
+                const escrow = await tx.adDealEscrow.upsert({
                     where: { adDealId: adDeal.id },
                     update: {},
                     create: {
@@ -115,6 +116,7 @@ export class LockEscrowUseCase {
                         amount: adDeal.amount,
                     },
                 });
+                escrowId = escrow.id;
             }
 
             const domain = AdDeal.rehydrate(toAdDealSnapshot(adDeal));
@@ -128,6 +130,7 @@ export class LockEscrowUseCase {
                     status: requested.status,
                     lockedAt: requested.lockedAt,
                     publisherRequestedAt: requested.publisherRequestedAt,
+                    escrowId,
                 },
             });
 

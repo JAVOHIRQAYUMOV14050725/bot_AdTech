@@ -26,6 +26,7 @@ import {
 } from '@/modules/domain/contracts';
 import { ClickPaymentService } from '@/modules/infrastructure/payments/click-payment.service';
 import { loadEnv } from '@/config/env';
+import { RequestContext } from '@/common/context/request-context';
 
 const env = loadEnv()
 
@@ -423,15 +424,40 @@ export class PaymentsService {
             returnUrl,
         });
 
+        const paymentUrl = invoice.payment_url?.trim();
+        const safePaymentUrl =
+            paymentUrl && paymentUrl.toLowerCase() !== 'pending' ? paymentUrl : null;
 
+        if (!safePaymentUrl) {
+            const correlationId = RequestContext.getCorrelationId() ?? intent.id;
+            this.logger.error(
+                {
+                    event: 'click_invoice_missing_payment_url',
+                    intentId: intent.id,
+                    providerInvoiceId: invoice.invoice_id || null,
+                    correlationId,
+                },
+                'PaymentsService',
+            );
+        }
 
         const updated = await this.prisma.paymentIntent.update({
             where: { id: intent.id },
             data: {
-                providerInvoiceId: invoice.invoice_id,
-                paymentUrl: invoice.payment_url,
+                providerInvoiceId: invoice.invoice_id || null,
+                paymentUrl: safePaymentUrl,
             },
         });
+
+        if (!safePaymentUrl) {
+            const correlationId = RequestContext.getCorrelationId() ?? intent.id;
+            throw new ServiceUnavailableException({
+                message: 'Click invoice missing payment URL',
+                code: 'CLICK_INVOICE_FAILED',
+                correlationId,
+                userMessage: `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`,
+            });
+        }
 
         this.logger.log(
             {

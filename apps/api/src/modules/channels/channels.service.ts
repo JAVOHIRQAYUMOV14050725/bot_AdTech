@@ -283,6 +283,24 @@ export class ChannelsService {
         return channels.map((c) => this.mapChannel(c));
     }
 
+    async listMarketplaceChannels(params?: { page?: number; pageSize?: number }) {
+        const page = params?.page ?? 1;
+        const pageSize = Math.min(params?.pageSize ?? 5, 25);
+        const skip = (page - 1) * pageSize;
+
+        const channels = await this.prisma.channel.findMany({
+            where: {
+                status: ChannelStatus.approved,
+                deletedAt: null,
+            },
+            orderBy: [{ subscriberCount: 'desc' }, { createdAt: 'desc' }],
+            skip,
+            take: pageSize,
+        });
+
+        return channels.map((channel) => this.mapChannel(channel));
+    }
+
 
     async requestVerification(channelId: string, userId: string) {
         const channel = await this.getChannelOr404(channelId);

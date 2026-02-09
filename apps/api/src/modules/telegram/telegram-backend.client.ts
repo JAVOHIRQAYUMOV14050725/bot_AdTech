@@ -421,6 +421,76 @@ export class TelegramBackendClient {
         );
     }
 
+    getAdvertiserBalance(params: { userId: string }) {
+        return this.request<{ balance: string; currency: string }>(
+            '/internal/telegram/advertiser/balance',
+            { method: 'POST', body: params },
+        );
+    }
+
+    listMarketplaceChannels(params: { page?: number; pageSize?: number }) {
+        return this.request<{
+            channels: Array<{
+                id: string;
+                title: string;
+                username: string | null;
+                subscriberCount: number;
+                avgViews: number;
+                cpm: string;
+                status: string;
+                ownerId: string;
+            }>;
+        }>('/internal/telegram/advertiser/marketplace-channels', {
+            method: 'POST',
+            body: params,
+        });
+    }
+
+    listAdvertiserDeals(params: { userId: string; page?: number; pageSize?: number }) {
+        return this.request<{
+            deals: Array<{
+                id: string;
+                amount: string;
+                status: string;
+                createdAt: string;
+                channel: { title: string; username: string | null } | null;
+                publisher: string | null;
+            }>;
+        }>('/internal/telegram/advertiser/deals', { method: 'POST', body: params });
+    }
+
+    listAdvertiserDisputes(params: { userId: string; page?: number; pageSize?: number }) {
+        return this.request<{
+            disputes: Array<{
+                id: string;
+                adDealId: string;
+                reason: string;
+                status: string;
+                createdAt: string;
+            }>;
+        }>('/internal/telegram/advertiser/disputes', { method: 'POST', body: params });
+    }
+
+    listIncomingDeals(params: { userId: string; page?: number; pageSize?: number }) {
+        return this.request<{
+            deals: Array<{
+                id: string;
+                amount: string;
+                status: string;
+                createdAt: string;
+                channel: { title: string; username: string | null } | null;
+                advertiser: string | null;
+            }>;
+        }>('/internal/telegram/publisher/incoming-deals', { method: 'POST', body: params });
+    }
+
+    getPublisherEarnings(params: { userId: string }) {
+        return this.request<{ totalEarnings: string; currency: string }>(
+            '/internal/telegram/publisher/earnings',
+            { method: 'POST', body: params },
+        );
+    }
+
     startTelegramSession(params: {
         telegramId: string;
         username?: string | null;
@@ -586,7 +656,14 @@ export class TelegramBackendClient {
         );
     }
 
-    createAdDeal(params: { advertiserId: string; publisherId: string; amount: string }) {
+    createAdDeal(params: {
+        advertiserId: string;
+        publisherId: string;
+        channelId?: string | null;
+        amount: string;
+        idempotencyKey: string;
+        correlationId: string;
+    }) {
         return this.request<{ id: string; amount: string }>(
             '/internal/addeals',
             { method: 'POST', body: params },

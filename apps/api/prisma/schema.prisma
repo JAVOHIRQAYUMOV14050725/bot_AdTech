@@ -420,11 +420,16 @@ model AdDeal {
   id           String @id @default(uuid())
   advertiserId String
   publisherId  String
+  channelId    String?
   amount       Decimal @db.Decimal(14, 2)
   currency     String  @default("USD")
   status       AdDealStatus @default(created)
   commissionPercentage Decimal? @db.Decimal(5, 2)
   commissionAmount     Decimal? @db.Decimal(14, 2)
+  payoutAmount         Decimal? @db.Decimal(14, 2)
+  escrowId    String?
+  idempotencyKey String? @unique
+  correlationId String?
 
   createdAt        DateTime @default(now())
   fundedAt         DateTime?
@@ -441,12 +446,14 @@ model AdDeal {
 
   advertiser User @relation("AdDealAdvertiser", fields: [advertiserId], references: [id])
   publisher  User @relation("AdDealPublisher", fields: [publisherId], references: [id])
+  channel   Channel? @relation(fields: [channelId], references: [id])
   escrow     AdDealEscrow?
   fundingEvents AdDealFundingEvent[]
   dispute    Dispute?
 
   @@index([advertiserId])
   @@index([publisherId])
+  @@index([channelId])
   @@map("ad_deals")
 }
 

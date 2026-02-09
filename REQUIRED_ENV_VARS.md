@@ -1,0 +1,20 @@
+# Required Environment Variables
+
+## Core API
+- `DATABASE_URL`
+- `NODE_ENV`
+- `INTERNAL_API_TOKEN`
+
+## Telegram Bot
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_BOT_USERNAME`
+
+## Click Payments
+- `ENABLE_CLICK` or `ENABLE_CLICK_PAYMENTS`
+- `CLICK_API_BASE_URL`
+- `CLICK_SERVICE_ID`
+- `CLICK_MERCHANT_ID`
+- `CLICK_SECRET_KEY`
+
+## Optional
+- `CLICK_CREATE_INVOICE_PATH`

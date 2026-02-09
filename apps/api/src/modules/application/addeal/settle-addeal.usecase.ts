@@ -158,6 +158,7 @@ export class SettleAdDealUseCase {
                     status: settled.status,
                     settledAt: settled.settledAt,
                     commissionAmount: commissionAmount,
+                    payoutAmount: payoutAmount,
                 },
             });
 

@@ -50,7 +50,7 @@ export function mapBackendErrorToTelegramResponse(
     const suffix = shortCorrelationId(correlationId);
     const hasKnownMapping = Boolean(code && ERROR_USER_MESSAGES[code]);
 
-    if ((!hasKnownMapping || code === 'REQUEST_TIMEOUT') && suffix) {
+    if ((!hasKnownMapping || code === 'REQUEST_TIMEOUT' || code === 'REQUEST_FAILED') && suffix) {
         message = `${message}\n🆔 ${suffix}`;
     }
 

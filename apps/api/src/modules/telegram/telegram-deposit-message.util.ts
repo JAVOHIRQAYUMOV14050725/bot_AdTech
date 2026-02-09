@@ -9,7 +9,7 @@ export function formatDepositIntentMessage(params: {
 
     if (hasPaymentUrl) {
         return {
-            message: `✅ Deposit intent created\nAmount: $${params.amount}\nPay here: ${trimmedUrl}`,
+            message: `✅ Deposit intent created\nAmount: $${params.amount}\n👉 Pay here: ${trimmedUrl}`,
             hasPaymentUrl: true,
         };
     }

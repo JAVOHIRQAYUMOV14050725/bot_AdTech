@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { RequestContext } from '@/common/context/request-context';
@@ -62,16 +62,30 @@ export class ClickPaymentService {
     }): Promise<ClickInvoiceResponse> {
         const correlationId = RequestContext.getCorrelationId();
         const url = this.buildUrl(this.createInvoicePath);
+        const safeUrlParts = this.parseUrlSafe(url);
 
         this.logger.log(
             {
                 event: 'click_http_request',
-                method: 'POST',
-                url,
+                baseUrl: this.baseUrl,
+                createInvoicePath: this.createInvoicePath,
+                finalUrlHost: safeUrlParts?.host ?? null,
+                finalUrlPath: safeUrlParts?.pathname ?? null,
                 correlationId,
             },
             'ClickPaymentService',
         );
+
+        if (!this.isExpectedCreateInvoicePath(this.createInvoicePath)) {
+            this.logger.warn(
+                {
+                    event: 'click_path_suspicious',
+                    correlationId,
+                    createInvoicePath: this.createInvoicePath,
+                },
+                'ClickPaymentService',
+            );
+        }
 
         const response = await fetch(url, {
             method: 'POST',
@@ -90,23 +104,30 @@ export class ClickPaymentService {
         });
 
         const rawBody = await response.text();
-        const parsedBody = this.parseJsonSafe(rawBody);
+        const contentType = response.headers.get('content-type');
+        const isJson = Boolean(contentType && contentType.includes('application/json'));
+        const parsedBody = isJson ? this.parseJsonSafe(rawBody) : rawBody;
         const extracted = this.extractInvoiceFields(parsedBody);
         this.logger.log(
             {
                 event: 'click_invoice_response_raw',
                 statusCode: response.status,
-                ok: response.ok,
+                contentType,
+                isJson,
                 correlationId,
                 topLevelKeys: this.extractTopLevelKeys(parsedBody),
                 invoiceId: extracted.invoiceId ?? null,
                 paymentUrlLength: extracted.paymentUrl ? extracted.paymentUrl.length : 0,
-                paymentUrlPreview: extracted.paymentUrl
-                    ? this.redactUrlPreview(extracted.paymentUrl)
-                    : null,
             },
             'ClickPaymentService',
         );
+
+        if (this.isHtml(rawBody)) {
+            const snippet = this.safeText(this.extractRawSnippet(rawBody));
+            throw new ServiceUnavailableException(
+                `Click invoice failed: HTML response ${response.status} ${snippet}`,
+            );
+        }
 
         if (!response.ok) {
             throw new Error(
@@ -318,6 +339,18 @@ export class ClickPaymentService {
         return `${base}${normalizedPath}`;
     }
 
+    private parseUrlSafe(value: string): URL | null {
+        try {
+            return new URL(value);
+        } catch {
+            return null;
+        }
+    }
+
+    private isExpectedCreateInvoicePath(path: string): boolean {
+        return path.includes('/v2/merchant/invoice/create');
+    }
+
     private extractRawSnippet(rawBody: string): string {
         if (!rawBody) {
             return '';
@@ -330,15 +363,6 @@ export class ClickPaymentService {
 
     private isHtml(rawBody: string): boolean {
         return /<!doctype html|<html/i.test(rawBody);
-    }
-
-    private redactUrlPreview(value: string): string {
-        const trimmed = value.trim();
-        if (!trimmed) {
-            return '';
-        }
-        const preview = trimmed.slice(0, 12);
-        return preview.length < trimmed.length ? `${preview}…` : preview;
     }
 
     private sanitizeClickPayload(payload: unknown): unknown {

@@ -12,6 +12,7 @@ import {
 import {
     BadRequestException,
     ConflictException,
+    HttpException,
     Inject,
     Injectable,
     LoggerService,
@@ -59,6 +60,43 @@ export class PaymentsService {
 
     private normalizeDecimal(value: Prisma.Decimal) {
         return new Prisma.Decimal(value);
+    }
+
+    private extractHttpExceptionDetails(error: unknown): {
+        status: number | null;
+        code: string | null;
+        correlationId: string | null;
+        details: Record<string, unknown> | null;
+    } {
+        if (!(error instanceof HttpException)) {
+            return { status: null, code: null, correlationId: null, details: null };
+        }
+
+        const response = error.getResponse();
+        const status = error.getStatus();
+        if (!response || typeof response !== 'object') {
+            return { status, code: null, correlationId: null, details: null };
+        }
+
+        const record = response as Record<string, unknown>;
+        const details =
+            record.details && typeof record.details === 'object'
+                ? (record.details as Record<string, unknown>)
+                : null;
+        const code =
+            typeof record.code === 'string'
+                ? record.code
+                : typeof details?.code === 'string'
+                    ? (details.code as string)
+                    : null;
+        const correlationId =
+            typeof record.correlationId === 'string'
+                ? record.correlationId
+                : typeof details?.correlationId === 'string'
+                    ? (details.correlationId as string)
+                    : null;
+
+        return { status, code, correlationId, details };
     }
 
 
@@ -411,12 +449,27 @@ export class PaymentsService {
         } catch (err) {
             const correlationId = RequestContext.getCorrelationId() ?? intent.id;
             const errorMessage = err instanceof Error ? err.message : String(err);
+            const errorDetails = this.extractHttpExceptionDetails(err);
+            const detailsPayload = errorDetails.details ?? {};
+            const errorCode =
+                typeof detailsPayload.errorCode === 'string' || typeof detailsPayload.errorCode === 'number'
+                    ? detailsPayload.errorCode
+                    : errorDetails.code;
             this.logger.error(
                 {
                     event: 'click_invoice_create_failed',
-                    intentId: intent.id,
                     correlationId,
-                    error: errorMessage,
+                    data: {
+                        intentId: intent.id,
+                        message: errorMessage,
+                        url: typeof detailsPayload.url === 'string' ? detailsPayload.url : null,
+                        status: errorDetails.status,
+                        errorCode: errorCode ?? null,
+                        errorBodyPreview:
+                            typeof detailsPayload.errorBodyPreview === 'string'
+                                ? detailsPayload.errorBodyPreview
+                                : null,
+                    },
                 },
                 'PaymentsService',
             );
@@ -430,6 +483,13 @@ export class PaymentsService {
                             clickInvoiceError: {
                                 message: errorMessage,
                                 correlationId,
+                                status: errorDetails.status,
+                                errorCode: errorCode ?? null,
+                                url: typeof detailsPayload.url === 'string' ? detailsPayload.url : null,
+                                errorBodyPreview:
+                                    typeof detailsPayload.errorBodyPreview === 'string'
+                                        ? detailsPayload.errorBodyPreview
+                                        : null,
                             },
                         },
                     },

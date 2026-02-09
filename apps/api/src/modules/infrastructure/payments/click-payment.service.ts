@@ -53,6 +53,10 @@ export class ClickPaymentService {
         );
     }
 
+    private get requestTimeoutMs() {
+        return this.configService.get<number>('CLICK_TIMEOUT_MS', 15000);
+    }
+
     async createInvoice(params: {
         amount: string;
         merchantTransId: string;
@@ -61,85 +65,172 @@ export class ClickPaymentService {
         currency?: string;
     }): Promise<ClickInvoiceResponse> {
         const correlationId = RequestContext.getCorrelationId();
-        const url = this.buildUrl(this.createInvoicePath);
-        const safeUrlParts = this.parseUrlSafe(url);
+        const { baseUrl, path, url, timeoutMs } = this.ensureValidConfig(
+            this.createInvoicePath,
+            'create_invoice',
+        );
 
         this.logger.log(
             {
                 event: 'click_http_request',
-                baseUrl: this.baseUrl,
-                createInvoicePath: this.createInvoicePath,
-                finalUrlHost: safeUrlParts?.host ?? null,
-                finalUrlPath: safeUrlParts?.pathname ?? null,
                 correlationId,
+                data: {
+                    method: 'POST',
+                    url,
+                    baseUrl,
+                    path,
+                    timeoutMs,
+                },
             },
             'ClickPaymentService',
         );
 
-        if (!this.isExpectedCreateInvoicePath(this.createInvoicePath)) {
-            this.logger.warn(
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    service_id: this.serviceId,
+                    merchant_id: this.merchantId,
+                    amount: params.amount,
+                    merchant_trans_id: params.merchantTransId,
+                    description: params.description,
+                    return_url: params.returnUrl,
+                    currency: params.currency ?? 'USD',
+                }),
+                signal: controller.signal,
+            });
+
+            const rawBody = await response.text();
+            const contentType = response.headers.get('content-type');
+            const isJson = Boolean(contentType && contentType.includes('application/json'));
+            const parsedBody = isJson ? this.parseJsonSafe(rawBody) : rawBody;
+            const safeHeaders = this.sanitizeClickPayload(
+                Object.fromEntries(response.headers.entries()),
+            );
+            const bodyPreview = this.safeText(this.extractRawSnippet(rawBody));
+            const sanitizedBody = isJson
+                ? this.sanitizeClickPayload(parsedBody)
+                : this.safeText(rawBody);
+
+            this.logger.log(
                 {
-                    event: 'click_path_suspicious',
+                    event: 'click_invoice_response_raw',
                     correlationId,
-                    createInvoicePath: this.createInvoicePath,
+                    data: {
+                        status: response.status,
+                        headers: safeHeaders,
+                        bodyPreview,
+                        body: sanitizedBody,
+                    },
                 },
                 'ClickPaymentService',
             );
-        }
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                service_id: this.serviceId,
-                merchant_id: this.merchantId,
-                amount: params.amount,
-                merchant_trans_id: params.merchantTransId,
-                description: params.description,
-                return_url: params.returnUrl,
-                currency: params.currency ?? 'USD',
-            }),
-        });
+            if (this.isHtml(rawBody)) {
+                this.logInvoiceFailure({
+                    correlationId,
+                    url,
+                    status: response.status,
+                    errorCode: this.extractErrorCode(parsedBody),
+                    errorBodyPreview: bodyPreview,
+                });
+                throw new ServiceUnavailableException({
+                    message: 'Click invoice failed: HTML response',
+                    code: 'CLICK_INVOICE_FAILED',
+                    correlationId,
+                    details: {
+                        url,
+                        status: response.status,
+                        errorCode: this.extractErrorCode(parsedBody),
+                        errorBodyPreview: bodyPreview,
+                    },
+                });
+            }
 
-        const rawBody = await response.text();
-        const contentType = response.headers.get('content-type');
-        const isJson = Boolean(contentType && contentType.includes('application/json'));
-        const parsedBody = isJson ? this.parseJsonSafe(rawBody) : rawBody;
-        const extracted = this.extractInvoiceFields(parsedBody);
-        this.logger.log(
-            {
-                event: 'click_invoice_response_raw',
-                statusCode: response.status,
-                contentType,
-                isJson,
+            if (!response.ok) {
+                this.logInvoiceFailure({
+                    correlationId,
+                    url,
+                    status: response.status,
+                    errorCode: this.extractErrorCode(parsedBody),
+                    errorBodyPreview: bodyPreview,
+                });
+                throw new ServiceUnavailableException({
+                    message: 'Click invoice failed',
+                    code: 'CLICK_INVOICE_FAILED',
+                    correlationId,
+                    details: {
+                        url,
+                        status: response.status,
+                        errorCode: this.extractErrorCode(parsedBody),
+                        errorBodyPreview: bodyPreview,
+                    },
+                });
+            }
+
+            return this.extractInvoiceResponse(parsedBody, rawBody);
+        } catch (err) {
+            if ((err as { name?: string }).name === 'AbortError') {
+                this.logInvoiceFailure({
+                    correlationId,
+                    url,
+                    status: null,
+                    errorCode: 'REQUEST_TIMEOUT',
+                    errorBodyPreview: `Timed out after ${timeoutMs}ms`,
+                });
+                throw new ServiceUnavailableException({
+                    message: `Click invoice request timed out after ${timeoutMs}ms`,
+                    code: 'CLICK_INVOICE_FAILED',
+                    correlationId,
+                    details: {
+                        url,
+                        status: null,
+                        errorCode: 'REQUEST_TIMEOUT',
+                        errorBodyPreview: `Timed out after ${timeoutMs}ms`,
+                    },
+                });
+            }
+
+            if (err instanceof ServiceUnavailableException) {
+                throw err;
+            }
+
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            this.logInvoiceFailure({
                 correlationId,
-                topLevelKeys: this.extractTopLevelKeys(parsedBody),
-                invoiceId: extracted.invoiceId ?? null,
-                paymentUrlLength: extracted.paymentUrl ? extracted.paymentUrl.length : 0,
-            },
-            'ClickPaymentService',
-        );
-
-        if (this.isHtml(rawBody)) {
-            const snippet = this.safeText(this.extractRawSnippet(rawBody));
-            throw new ServiceUnavailableException(
-                `Click invoice failed: HTML response ${response.status} ${snippet}`,
-            );
+                url,
+                status: null,
+                errorCode: 'REQUEST_FAILED',
+                errorBodyPreview: this.safeText(errorMessage),
+            });
+            throw new ServiceUnavailableException({
+                message: 'Click invoice request failed',
+                code: 'CLICK_INVOICE_FAILED',
+                correlationId,
+                details: {
+                    url,
+                    status: null,
+                    errorCode: 'REQUEST_FAILED',
+                    errorBodyPreview: this.safeText(errorMessage),
+                },
+            });
+        } finally {
+            clearTimeout(timeoutId);
         }
-
-        if (!response.ok) {
-            throw new Error(
-                `Click invoice failed: ${response.status} ${this.safeText(this.extractRawSnippet(rawBody))}`,
-            );
-        }
-
-        return this.extractInvoiceResponse(parsedBody, rawBody);
     }
 
     async getInvoiceStatus(params: { merchantTransId: string }) {
-        const url = this.buildUrl(this.invoiceStatusPath);
+        const { url, timeoutMs } = this.ensureValidConfig(
+            this.invoiceStatusPath,
+            'invoice_status',
+        );
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -150,7 +241,9 @@ export class ClickPaymentService {
                 merchant_id: this.merchantId,
                 merchant_trans_id: params.merchantTransId,
             }),
+            signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
             const text = await response.text();
@@ -296,13 +389,6 @@ export class ClickPaymentService {
         ];
     }
 
-    private extractTopLevelKeys(payload: unknown): string[] {
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-            return [];
-        }
-        return Object.keys(payload as Record<string, unknown>);
-    }
-
     private readFirstString(
         record: Record<string, unknown>,
         keyPaths: string[][],
@@ -347,8 +433,132 @@ export class ClickPaymentService {
         }
     }
 
-    private isExpectedCreateInvoicePath(path: string): boolean {
-        return path.includes('/v2/merchant/invoice/create');
+    private ensureValidConfig(
+        path: string,
+        mode: 'create_invoice' | 'invoice_status',
+    ): { baseUrl: string; path: string; url: string; timeoutMs: number } {
+        const correlationId = RequestContext.getCorrelationId();
+        const baseUrl = this.baseUrl;
+        const normalizedPath = path ?? '';
+        const url = this.buildUrl(normalizedPath);
+        const errors: string[] = [];
+
+        const parsedBase = this.parseUrlSafe(baseUrl);
+        if (!parsedBase) {
+            errors.push('base_url_invalid');
+        } else {
+            if (this.isLocalHost(parsedBase.hostname)) {
+                errors.push('base_url_localhost');
+            }
+            if (!this.isAllowedClickHost(parsedBase.hostname)) {
+                errors.push('base_url_unexpected_host');
+            }
+        }
+
+        if (!normalizedPath.startsWith('/')) {
+            errors.push('path_missing_leading_slash');
+        }
+        if (normalizedPath === '/payment/create') {
+            errors.push('path_disallowed_payment_create');
+        }
+
+        if (!this.parseUrlSafe(url)) {
+            errors.push('resolved_url_invalid');
+        }
+
+        if (errors.length > 0) {
+            const details = {
+                mode,
+                baseUrl,
+                path: normalizedPath,
+                url,
+                hostname: parsedBase?.hostname ?? null,
+                reason: errors,
+            };
+            this.logger.warn(
+                {
+                    event: 'click_config_invalid',
+                    correlationId,
+                    data: details,
+                },
+                'ClickPaymentService',
+            );
+            throw new ServiceUnavailableException({
+                message: 'Click config invalid',
+                code: 'CLICK_CONFIG_INVALID',
+                correlationId,
+                details,
+            });
+        }
+
+        return {
+            baseUrl,
+            path: normalizedPath,
+            url,
+            timeoutMs: this.requestTimeoutMs,
+        };
+    }
+
+    private isLocalHost(hostname: string): boolean {
+        const normalized = hostname.toLowerCase();
+        if (normalized === 'localhost' || normalized === '0.0.0.0') {
+            return true;
+        }
+        if (normalized === '[::1]') {
+            return true;
+        }
+        return normalized.startsWith('127.');
+    }
+
+    private isAllowedClickHost(hostname: string): boolean {
+        const normalized = hostname.toLowerCase();
+        if (normalized.includes('click')) {
+            return true;
+        }
+        return normalized.endsWith('.click.uz') || normalized === 'click.uz';
+    }
+
+    private logInvoiceFailure(params: {
+        correlationId: string | undefined;
+        url: string;
+        status: number | null;
+        errorCode: string | number | null;
+        errorBodyPreview: string;
+    }) {
+        this.logger.error(
+            {
+                event: 'click_invoice_create_failed',
+                correlationId: params.correlationId,
+                data: {
+                    url: params.url,
+                    status: params.status,
+                    errorCode: params.errorCode ?? null,
+                    errorBodyPreview: params.errorBodyPreview,
+                },
+            },
+            'ClickPaymentService',
+        );
+    }
+
+    private extractErrorCode(payload: unknown): string | number | null {
+        if (!payload || typeof payload !== 'object') {
+            return null;
+        }
+        const record = payload as Record<string, unknown>;
+        const data = record.data as Record<string, unknown> | undefined;
+        const candidates = [
+            record.error_code,
+            record.errorCode,
+            record.error,
+            data?.error_code,
+            data?.errorCode,
+        ];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' || typeof candidate === 'number') {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     private extractRawSnippet(rawBody: string): string {

@@ -25,5 +25,5 @@ export function shortCorrelationId(correlationId?: string | null): string | null
     if (!trimmed) {
         return null;
     }
-    return trimmed.slice(-6);
+    return trimmed.slice(-8);
 }

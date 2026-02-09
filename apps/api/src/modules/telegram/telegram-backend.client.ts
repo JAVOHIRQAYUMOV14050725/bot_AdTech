@@ -179,6 +179,12 @@ type TelegramRequestContext = {
 
 const telegramRequestContext = new AsyncLocalStorage<TelegramRequestContext>();
 
+const UUID_V4_PATTERN =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isValidUuid = (value: string | undefined): value is string =>
+    Boolean(value) && UUID_V4_PATTERN.test(value);
+
 @Injectable()
 export class TelegramBackendClient {
     constructor(
@@ -268,7 +274,10 @@ export class TelegramBackendClient {
     ): Promise<BackendResponse<T>> {
         const rawBody = options.body ? JSON.stringify(options.body) : undefined;
         const storedCorrelationId = telegramRequestContext.getStore()?.correlationId;
-        const requestCorrelationId = storedCorrelationId ?? randomUUID();
+        const requestCorrelationId = isValidUuid(storedCorrelationId)
+            ? storedCorrelationId
+            : randomUUID();
+        const telegramCorrelationId = storedCorrelationId ?? null;
         const signatureHeaders =
             options.headers?.['X-Telegram-Internal-Token']
                 ? {}
@@ -302,6 +311,9 @@ export class TelegramBackendClient {
                         status: response.status,
                         correlationId: responseCorrelationId,
                         attempt,
+                        data: {
+                            telegramCorrelationId,
+                        },
                     },
                     'TelegramBackendClient',
                 );

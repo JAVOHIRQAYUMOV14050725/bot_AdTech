@@ -157,7 +157,8 @@ export class AdvertiserHandler {
             return;
         }
         const locale = resolveTelegramLocale(ctx.from?.language_code);
-        const payload = typeof ctx.match?.[1] === 'string' ? ctx.match[1] : '';
+        const match = (ctx as Context & { match?: RegExpExecArray }).match;
+        const payload = typeof match?.[1] === 'string' ? match[1] : '';
         const [channelId, publisherId] = payload.split(':');
         if (!channelId || !publisherId) {
             await replySafe(ctx, '❌ Channel selection invalid.');

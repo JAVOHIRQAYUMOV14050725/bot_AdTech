@@ -14,6 +14,7 @@ import {
     ConflictException,
     Inject,
     Injectable,
+    HttpException,
     LoggerService,
     ServiceUnavailableException,
 } from '@nestjs/common';
@@ -410,13 +411,21 @@ export class PaymentsService {
             });
         } catch (err) {
             const correlationId = RequestContext.getCorrelationId() ?? intent.id;
+            const errorDetails = this.extractClickErrorDetails(err);
             const errorMessage = err instanceof Error ? err.message : String(err);
+            const errorCode =
+                errorDetails?.code === 'CLICK_CONFIG_INVALID'
+                    ? 'CLICK_CONFIG_INVALID'
+                    : 'CLICK_INVOICE_FAILED';
             this.logger.error(
                 {
                     event: 'click_invoice_create_failed',
-                    intentId: intent.id,
                     correlationId,
-                    error: errorMessage,
+                    data: {
+                        intentId: intent.id,
+                        error: errorMessage,
+                        details: errorDetails,
+                    },
                 },
                 'PaymentsService',
             );
@@ -430,16 +439,24 @@ export class PaymentsService {
                             clickInvoiceError: {
                                 message: errorMessage,
                                 correlationId,
+                                details: errorDetails,
                             },
                         },
                     },
                 }),
             );
             throw new ServiceUnavailableException({
-                message: 'Click invoice failed',
-                code: 'CLICK_INVOICE_FAILED',
+                message:
+                    errorCode === 'CLICK_CONFIG_INVALID'
+                        ? 'Click config invalid'
+                        : 'Click invoice failed',
+                code: errorCode,
                 correlationId,
-                userMessage: `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`,
+                details: errorDetails,
+                userMessage:
+                    errorCode === 'CLICK_CONFIG_INVALID'
+                        ? `Payment temporarily unavailable due to configuration. Error ID: ${correlationId} — please contact support.`
+                        : `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`,
             });
         }
 
@@ -514,6 +531,42 @@ export class PaymentsService {
         );
 
         return updated;
+    }
+
+    private extractClickErrorDetails(err: unknown): {
+        code?: string | null;
+        status?: number | null;
+        errorCode?: string | null;
+        errorBodyPreview?: string | null;
+        url?: string | null;
+        message?: string | null;
+        correlationId?: string | null;
+    } | null {
+        if (!(err instanceof HttpException)) {
+            return null;
+        }
+
+        const response = err.getResponse();
+        if (!response || typeof response !== 'object') {
+            return null;
+        }
+
+        const record = response as Record<string, unknown>;
+        const details =
+            record.details && typeof record.details === 'object'
+                ? (record.details as Record<string, unknown>)
+                : null;
+        return {
+            code: typeof record.code === 'string' ? record.code : null,
+            status: typeof details?.status === 'number' ? details?.status : null,
+            errorCode: typeof details?.errorCode === 'string' ? details?.errorCode : null,
+            errorBodyPreview:
+                typeof details?.errorBodyPreview === 'string' ? details?.errorBodyPreview : null,
+            url: typeof details?.url === 'string' ? details?.url : null,
+            message: typeof record.message === 'string' ? record.message : null,
+            correlationId:
+                typeof record.correlationId === 'string' ? record.correlationId : null,
+        };
     }
 
     async finalizeDepositIntent(params: {

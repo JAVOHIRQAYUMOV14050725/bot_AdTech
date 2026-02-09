@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Context } from 'telegraf';
 
 const CORRELATION_ID_KEY = '__adtechCorrelationId';
+const UPDATE_ID_KEY = '__adtechUpdateId';
 
 export function resolveTelegramCorrelationId(ctx: Context): string {
     if (!ctx.state) {
@@ -12,9 +13,13 @@ export function resolveTelegramCorrelationId(ctx: Context): string {
     if (typeof existing === 'string' && existing.trim()) {
         return existing;
     }
-    const updateId = ctx.update?.update_id ? `tg-${ctx.update.update_id}` : `tg-${randomUUID()}`;
-    state[CORRELATION_ID_KEY] = updateId;
-    return updateId;
+    const updateId = ctx.update?.update_id ? ctx.update.update_id.toString() : null;
+    if (updateId) {
+        state[UPDATE_ID_KEY] = updateId;
+    }
+    const correlationId = randomUUID();
+    state[CORRELATION_ID_KEY] = correlationId;
+    return correlationId;
 }
 
 export function shortCorrelationId(correlationId?: string | null): string | null {
@@ -25,5 +30,5 @@ export function shortCorrelationId(correlationId?: string | null): string | null
     if (!trimmed) {
         return null;
     }
-    return trimmed.slice(-6);
+    return trimmed.slice(-8);
 }

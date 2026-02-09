@@ -624,13 +624,16 @@ export class AdvertiserHandler {
                         }
                         this.logger.error({
                             event: 'telegram_deposit_failed',
-                            userId,
-                            role: fsm.role,
-                            flow: fsm.flow,
-                            step: fsm.step,
-                            error: presentation.message,
-                            code,
                             correlationId: errorCorrelationId,
+                            data: {
+                                userId,
+                                role: fsm.role,
+                                flow: fsm.flow,
+                                step: fsm.step,
+                                error: presentation.message,
+                                code,
+                                telegramUpdateId: ctx.update?.update_id ?? null,
+                            },
                         });
                         await progress.finish(presentation.message, presentation.keyboard);
                         return;

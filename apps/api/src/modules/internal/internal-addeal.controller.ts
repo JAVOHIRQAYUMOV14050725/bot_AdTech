@@ -1,7 +1,6 @@
 import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { InternalTokenGuard } from '@/common/guards/internal-token.guard';
-import { CreateAdDealUseCase } from '@/modules/application/addeal/create-addeal.usecase';
 import { FundAdDealUseCase } from '@/modules/application/addeal/fund-addeal.usecase';
 import { LockEscrowUseCase } from '@/modules/application/addeal/lock-escrow.usecase';
 import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usecase';
@@ -13,13 +12,14 @@ import { CreateAdDealDto } from './dto/create-addeal.dto';
 import { FundAdDealDto } from './dto/fund-addeal.dto';
 import { SubmitProofDto } from './dto/submit-proof.dto';
 import { TransitionActor } from '@/modules/domain/contracts';
+import { DealsService } from '@/modules/marketplace/deals.service';
 
 @ApiTags('Internal')
 @UseGuards(InternalTokenGuard)
 @Controller('internal/addeals')
 export class InternalAdDealController {
     constructor(
-        private readonly createAdDeal: CreateAdDealUseCase,
+        private readonly dealsService: DealsService,
         private readonly fundAdDeal: FundAdDealUseCase,
         private readonly lockEscrow: LockEscrowUseCase,
         private readonly acceptDeal: AcceptDealUseCase,
@@ -31,10 +31,13 @@ export class InternalAdDealController {
 
     @Post()
     create(@Body() dto: CreateAdDealDto) {
-        return this.createAdDeal.execute({
+        return this.dealsService.createDeal({
             advertiserId: dto.advertiserId,
             publisherId: dto.publisherId,
+            channelId: dto.channelId ?? null,
             amount: dto.amount,
+            idempotencyKey: dto.idempotencyKey,
+            correlationId: dto.correlationId,
         });
     }
 

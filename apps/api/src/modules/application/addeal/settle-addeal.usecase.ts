@@ -1,3 +1,4 @@
+
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
     AdDealEscrowStatus,
@@ -158,6 +159,7 @@ export class SettleAdDealUseCase {
                     status: settled.status,
                     settledAt: settled.settledAt,
                     commissionAmount: commissionAmount,
+                    payoutAmount: payoutAmount,
                 },
             });
 

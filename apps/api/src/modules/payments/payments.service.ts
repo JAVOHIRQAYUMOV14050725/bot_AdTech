@@ -26,15 +26,16 @@ import {
 } from '@/modules/domain/contracts';
 import { ClickPaymentService } from '@/modules/infrastructure/payments/click-payment.service';
 import { loadEnv } from '@/config/env';
+import { RequestContext } from '@/common/context/request-context';
 
 const env = loadEnv()
 
 
-   
-    const ENABLE_CLICK = env.ENABLE_CLICK
-    const ENABLE_CLICK_PAYMENTS = env.ENABLE_CLICK_PAYMENTS
-   const  CLICK_API_BASE_URL = env.CLICK_API_BASE_URL
-  const  CLICK_MERCHANT_ID = env.CLICK_MERCHANT_ID
+
+const ENABLE_CLICK = env.ENABLE_CLICK
+const ENABLE_CLICK_PAYMENTS = env.ENABLE_CLICK_PAYMENTS
+const CLICK_API_BASE_URL = env.CLICK_API_BASE_URL
+const CLICK_MERCHANT_ID = env.CLICK_MERCHANT_ID
 const CLICK_SECRET_KEY = env.CLICK_SECRET_KEY
 const CLICK_SERVICE_ID = env.CLICK_SERVICE_ID
 
@@ -60,7 +61,7 @@ export class PaymentsService {
         return new Prisma.Decimal(value);
     }
 
-    
+
 
     private assertEscrowAmountSafe(amount: Prisma.Decimal, campaignTargetId: string) {
         const normalized = this.normalizeDecimal(amount);
@@ -84,7 +85,7 @@ export class PaymentsService {
         }
     }
 
-    
+
 
     verifyClickSignature(payload: Record<string, string | number | null>) {
         return this.clickPaymentService.verifyWebhookSignature(payload);
@@ -183,7 +184,7 @@ export class PaymentsService {
 
     }
 
-    
+
 
     async recordWalletMovement(params: {
         tx: Prisma.TransactionClient;
@@ -423,15 +424,40 @@ export class PaymentsService {
             returnUrl,
         });
 
+        const paymentUrl = invoice.payment_url?.trim();
+        const safePaymentUrl =
+            paymentUrl && paymentUrl.toLowerCase() !== 'pending' ? paymentUrl : null;
 
+        if (!safePaymentUrl) {
+            const correlationId = RequestContext.getCorrelationId() ?? intent.id;
+            this.logger.error(
+                {
+                    event: 'click_invoice_missing_payment_url',
+                    intentId: intent.id,
+                    providerInvoiceId: invoice.invoice_id || null,
+                    correlationId,
+                },
+                'PaymentsService',
+            );
+        }
 
         const updated = await this.prisma.paymentIntent.update({
             where: { id: intent.id },
             data: {
-                providerInvoiceId: invoice.invoice_id,
-                paymentUrl: invoice.payment_url,
+                providerInvoiceId: invoice.invoice_id || null,
+                paymentUrl: safePaymentUrl,
             },
         });
+
+        if (!safePaymentUrl) {
+            const correlationId = RequestContext.getCorrelationId() ?? intent.id;
+            throw new ServiceUnavailableException({
+                message: 'Click invoice missing payment URL',
+                code: 'CLICK_INVOICE_FAILED',
+                correlationId,
+                userMessage: `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`,
+            });
+        }
 
         this.logger.log(
             {

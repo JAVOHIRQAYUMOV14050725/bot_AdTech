@@ -7,9 +7,11 @@ import { InternalTelegramEnsureDto } from './dto/internal-telegram-ensure.dto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 import { InternalTelegramResolvePublisherDto } from './dto/internal-telegram-resolve-publisher.dto';
-import { CampaignStatus, ChannelStatus, PostJobStatus } from '@prisma/client';
+import { AdDealStatus, CampaignStatus, ChannelStatus, LedgerReason, PostJobStatus } from '@prisma/client';
 import { InternalTelegramAddealLookupDto } from './dto/internal-telegram-addeal-lookup.dto';
 import { InternalTelegramVerifyChannelDto } from './dto/internal-telegram-verify-channel.dto';
+import { InternalTelegramListDto } from './dto/internal-telegram-list.dto';
+import { InternalTelegramPaginationDto } from './dto/internal-telegram-pagination.dto';
 import { IdentityResolverService } from '@/modules/identity/identity-resolver.service';
 import { TelegramService } from '@/modules/telegram/telegram.service';
 import { ChannelsService } from '@/modules/channels/channels.service';
@@ -236,6 +238,151 @@ export class InternalTelegramController {
                 publisherId: adDeal.publisherId,
                 amount: adDeal.amount.toFixed(2),
             },
+        };
+    }
+
+    @Post('advertiser/balance')
+    async advertiserBalance(@Body() dto: InternalTelegramListDto) {
+        const wallet = await this.prisma.wallet.findUnique({
+            where: { userId: dto.userId },
+        });
+
+        return {
+            balance: wallet?.balance?.toFixed(2) ?? '0.00',
+            currency: wallet?.currency ?? 'USD',
+        };
+    }
+
+    @Post('advertiser/marketplace-channels')
+    async listMarketplaceChannels(@Body() dto: InternalTelegramPaginationDto) {
+        const channels = await this.channelsService.listMarketplaceChannels({
+            page: dto.page,
+            pageSize: dto.pageSize,
+        });
+        return { channels };
+    }
+
+    @Post('advertiser/deals')
+    async listAdvertiserDeals(@Body() dto: InternalTelegramListDto) {
+        const page = dto.page ?? 1;
+        const pageSize = Math.min(dto.pageSize ?? 5, 25);
+        const skip = (page - 1) * pageSize;
+
+        const deals = await this.prisma.adDeal.findMany({
+            where: { advertiserId: dto.userId },
+            orderBy: { createdAt: 'desc' },
+            skip,
+            take: pageSize,
+            select: {
+                id: true,
+                amount: true,
+                status: true,
+                createdAt: true,
+                channel: { select: { title: true, username: true } },
+                publisher: { select: { username: true } },
+            },
+        });
+
+        return {
+            deals: deals.map((deal) => ({
+                id: deal.id,
+                amount: deal.amount.toFixed(2),
+                status: deal.status,
+                createdAt: deal.createdAt,
+                channel: deal.channel
+                    ? { title: deal.channel.title, username: deal.channel.username }
+                    : null,
+                publisher: deal.publisher?.username ?? null,
+            })),
+        };
+    }
+
+    @Post('advertiser/disputes')
+    async listAdvertiserDisputes(@Body() dto: InternalTelegramListDto) {
+        const page = dto.page ?? 1;
+        const pageSize = Math.min(dto.pageSize ?? 5, 25);
+        const skip = (page - 1) * pageSize;
+
+        const disputes = await this.prisma.dispute.findMany({
+            where: { adDeal: { advertiserId: dto.userId } },
+            orderBy: { createdAt: 'desc' },
+            skip,
+            take: pageSize,
+            select: {
+                id: true,
+                reason: true,
+                status: true,
+                createdAt: true,
+                adDealId: true,
+            },
+        });
+
+        return {
+            disputes,
+        };
+    }
+
+    @Post('publisher/incoming-deals')
+    async listIncomingDeals(@Body() dto: InternalTelegramListDto) {
+        const page = dto.page ?? 1;
+        const pageSize = Math.min(dto.pageSize ?? 5, 25);
+        const skip = (page - 1) * pageSize;
+
+        const deals = await this.prisma.adDeal.findMany({
+            where: {
+                publisherId: dto.userId,
+                status: AdDealStatus.publisher_requested,
+            },
+            orderBy: { createdAt: 'desc' },
+            skip,
+            take: pageSize,
+            select: {
+                id: true,
+                amount: true,
+                status: true,
+                createdAt: true,
+                channel: { select: { title: true, username: true } },
+                advertiser: { select: { username: true } },
+            },
+        });
+
+        return {
+            deals: deals.map((deal) => ({
+                id: deal.id,
+                amount: deal.amount.toFixed(2),
+                status: deal.status,
+                createdAt: deal.createdAt,
+                channel: deal.channel
+                    ? { title: deal.channel.title, username: deal.channel.username }
+                    : null,
+                advertiser: deal.advertiser?.username ?? null,
+            })),
+        };
+    }
+
+    @Post('publisher/earnings')
+    async publisherEarnings(@Body() dto: InternalTelegramListDto) {
+        const wallet = await this.prisma.wallet.findUnique({
+            where: { userId: dto.userId },
+        });
+        if (!wallet) {
+            return {
+                totalEarnings: '0.00',
+                currency: 'USD',
+            };
+        }
+
+        const aggregate = await this.prisma.ledgerEntry.aggregate({
+            where: {
+                walletId: wallet.id,
+                reason: LedgerReason.payout,
+            },
+            _sum: { amount: true },
+        });
+
+        return {
+            totalEarnings: aggregate._sum.amount?.toFixed(2) ?? '0.00',
+            currency: wallet.currency ?? 'USD',
         };
     }
 

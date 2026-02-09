@@ -1,6 +1,6 @@
 // handlers/publisher.handler.ts
 import { Update, Action, On, Ctx } from 'nestjs-telegraf';
-import { Context } from 'telegraf';
+import { Context, Markup } from 'telegraf';
 import { TelegramFSMService } from '../../application/telegram/telegram-fsm.service';
 import { TelegramFlow, TelegramFlowStep } from '../../application/telegram/telegram-fsm.types';
 import { addChannelOptions, cancelFlowKeyboard, publisherHome, verifyPrivateChannelKeyboard } from '../keyboards';
@@ -51,6 +51,173 @@ export class PublisherHandler {
                     );
                     await progress.finish(
                         `📢 Publisher Panel\n\n📈 Earnings: $0\n📣 Channels: 0`,
+                        publisherHome,
+                    );
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action('PUB_INCOMING_DEALS')
+    async incomingDeals(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensurePublisher(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    const response = await this.backendClient.listIncomingDeals({
+                        userId: context.user.id,
+                        page: 1,
+                        pageSize: 5,
+                    });
+                    if (response.deals.length === 0) {
+                        await progress.finish('📭 No incoming deals yet.', publisherHome);
+                        return;
+                    }
+                    const dealLines = response.deals.map((deal) => {
+                        const channelLabel = deal.channel?.title ?? 'Direct';
+                        const advertiserLabel = deal.advertiser ? `@${deal.advertiser}` : 'advertiser';
+                        return `• ${deal.id}\n  ${channelLabel} ← ${advertiserLabel}\n  $${deal.amount}`;
+                    });
+
+                    const keyboard = Markup.inlineKeyboard(
+                        response.deals.flatMap((deal) => [
+                            [
+                                Markup.button.callback(
+                                    `✅ Accept ${deal.id.slice(0, 6)}`,
+                                    `PUB_ACCEPT_DEAL:${deal.id}`,
+                                ),
+                                Markup.button.callback(
+                                    `❌ Reject ${deal.id.slice(0, 6)}`,
+                                    `PUB_DECLINE_DEAL:${deal.id}`,
+                                ),
+                            ],
+                        ]),
+                    );
+
+                    await progress.finish(`📩 Incoming deals:\n${dealLines.join('\n')}`, keyboard);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action(/PUB_ACCEPT_DEAL:(.+)/)
+    async acceptIncomingDeal(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const adDealId = typeof ctx.match?.[1] === 'string' ? ctx.match[1] : '';
+        if (!adDealId) {
+            await replySafe(ctx, '❌ AdDeal not found.');
+            return;
+        }
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    await this.backendClient.acceptAdDeal(adDealId);
+                    await progress.finish(`✅ Deal accepted\nID: ${adDealId}`, publisherHome);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action(/PUB_DECLINE_DEAL:(.+)/)
+    async declineIncomingDeal(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const adDealId = typeof ctx.match?.[1] === 'string' ? ctx.match[1] : '';
+        if (!adDealId) {
+            await replySafe(ctx, '❌ AdDeal not found.');
+            return;
+        }
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    await this.backendClient.declineAdDeal(adDealId);
+                    await progress.finish(`🚫 Deal declined\nID: ${adDealId}`, publisherHome);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action('PUB_MARK_POSTED')
+    async markPosted(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        await this.withUserLock(ctx, async () => {
+            const progress = await startTelegramProgress(ctx);
+            await progress.finish(
+                '📤 To mark a deal as posted, use:\n/submit_proof <deal_id> <proof>',
+                publisherHome,
+            );
+        });
+    }
+
+    @Action('PUB_EARNINGS')
+    async earningsSummary(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensurePublisher(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    const summary = await this.backendClient.getPublisherEarnings({
+                        userId: context.user.id,
+                    });
+                    await progress.finish(
+                        `💸 Earnings summary\nTotal: ${summary.currency} ${summary.totalEarnings}`,
                         publisherHome,
                     );
                 } catch (err) {

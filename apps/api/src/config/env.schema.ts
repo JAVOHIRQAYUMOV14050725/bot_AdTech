@@ -65,7 +65,9 @@ export const envSchema = z.object({
     CLICK_MERCHANT_ID: z.string().optional(),
     CLICK_SECRET_KEY: z.string().optional(),
     CLICK_SIGN_TIME_WINDOW_MINUTES: z.coerce.number().int().positive().default(10),
-    CLICK_CREATE_INVOICE_PATH:z.string().optional()
+    CLICK_CREATE_INVOICE_PATH: z.string().optional(),
+    CLICK_GET_INVOICE_STATUS_PATH: z.string().optional(),
+
 });
 
 export type EnvVars = z.infer<typeof envSchema>;    

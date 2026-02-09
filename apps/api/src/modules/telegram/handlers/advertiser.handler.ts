@@ -1,9 +1,9 @@
 import { Action, On, Ctx, Update } from 'nestjs-telegraf';
 import { Logger } from '@nestjs/common';
-import { Context } from 'telegraf';
+import { Context, Markup } from 'telegraf';
 import { TelegramFSMService } from '../../application/telegram/telegram-fsm.service';
 import { TelegramFlow, TelegramFlowStep } from '../../application/telegram/telegram-fsm.types';
-import { advertiserHome, cancelFlowKeyboard } from '../keyboards';
+import { advertiserHome, backToAdvertiserMenuKeyboard, cancelFlowKeyboard } from '../keyboards';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
 import { extractTelegramErrorMeta, mapBackendErrorToTelegramResponse } from '@/modules/telegram/telegram-error.util';
@@ -53,6 +53,215 @@ export class AdvertiserHandler {
                         `🧑‍💼 Advertiser Panel\n\n💰 Balance: $0\n📊 Active campaigns: 0`,
                         advertiserHome,
                     );
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action('ADV_BALANCE')
+    async showBalance(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensureAdvertiser(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    const balance = await this.backendClient.getAdvertiserBalance({
+                        userId: context.user.id,
+                    });
+                    await progress.finish(
+                        `💰 Balance: ${balance.currency} ${balance.balance}`,
+                        backToAdvertiserMenuKeyboard,
+                    );
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action('ADV_BROWSE_CHANNELS')
+    async browseChannels(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensureAdvertiser(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+
+                    const response = await this.backendClient.listMarketplaceChannels({
+                        page: 1,
+                        pageSize: 5,
+                    });
+
+                    if (response.channels.length === 0) {
+                        await progress.finish('📭 No approved channels available yet.', backToAdvertiserMenuKeyboard);
+                        return;
+                    }
+
+                    const lines = response.channels.map((channel, index) => {
+                        const handle = channel.username ? `@${channel.username}` : channel.title;
+                        return `${index + 1}. ${channel.title} (${handle}) — subs ${channel.subscriberCount}`;
+                    });
+
+                    const keyboard = Markup.inlineKeyboard(
+                        response.channels.map((channel) => [
+                            Markup.button.callback(
+                                `Select: ${channel.title}`,
+                                `ADV_SELECT_CHANNEL:${channel.id}:${channel.ownerId}`,
+                            ),
+                        ]),
+                    );
+
+                    await progress.finish(`📢 Approved channels:\n${lines.join('\n')}`, keyboard);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action(/ADV_SELECT_CHANNEL:(.+)/)
+    async selectChannel(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        const payload = typeof ctx.match?.[1] === 'string' ? ctx.match[1] : '';
+        const [channelId, publisherId] = payload.split(':');
+        if (!channelId || !publisherId) {
+            await replySafe(ctx, '❌ Channel selection invalid.');
+            return;
+        }
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensureAdvertiser(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    await this.fsm.startFlow(
+                        userId,
+                        TelegramFlow.CREATE_AD_DEAL,
+                        TelegramFlowStep.ADV_ADDEAL_AMOUNT,
+                        { publisherId, channelId },
+                    );
+                    await progress.finish('💵 Enter deal amount (USD):', cancelFlowKeyboard);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action('ADV_MY_DEALS')
+    async listDeals(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensureAdvertiser(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    const response = await this.backendClient.listAdvertiserDeals({
+                        userId: context.user.id,
+                        page: 1,
+                        pageSize: 5,
+                    });
+                    if (response.deals.length === 0) {
+                        await progress.finish('📭 No deals found yet.', backToAdvertiserMenuKeyboard);
+                        return;
+                    }
+                    const lines = response.deals.map((deal) => {
+                        const channelLabel = deal.channel?.title ?? 'Direct';
+                        const publisherLabel = deal.publisher ? `@${deal.publisher}` : 'publisher';
+                        return `• ${deal.id}\n  ${channelLabel} → ${publisherLabel}\n  $${deal.amount} • ${deal.status}`;
+                    });
+                    await progress.finish(lines.join('\n'), backToAdvertiserMenuKeyboard);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
+        });
+    }
+
+    @Action('ADV_DISPUTES')
+    async listDisputes(@Ctx() ctx: Context) {
+        await ackNow(ctx);
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensureAdvertiser(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    const response = await this.backendClient.listAdvertiserDisputes({
+                        userId: context.user.id,
+                        page: 1,
+                        pageSize: 5,
+                    });
+                    if (response.disputes.length === 0) {
+                        await progress.finish('📭 No disputes on your deals yet.', backToAdvertiserMenuKeyboard);
+                        return;
+                    }
+                    const lines = response.disputes.map((dispute) => {
+                        return `• ${dispute.adDealId}\n  ${dispute.reason}\n  Status: ${dispute.status}`;
+                    });
+                    await progress.finish(lines.join('\n'), backToAdvertiserMenuKeyboard);
                 } catch (err) {
                     const presentation = mapBackendErrorToTelegramResponse(err, locale);
                     await progress.finish(presentation.message, presentation.keyboard);
@@ -342,17 +551,22 @@ export class AdvertiserHandler {
                             channelId: publisherResolution.channel?.id ?? null,
                         });
 
-                        await this.fsm.startFlow(
-                            userId,
-                            TelegramFlow.CREATE_AD_DEAL,
-                            TelegramFlowStep.ADV_ADDEAL_AMOUNT,
-                            { publisherId: publisher.id },
-                        );
-
                         const publisherLabel =
                             publisher.username
                                 ? `@${publisher.username}`
                                 : publisherResolution.channel?.title ?? 'publisher';
+
+                        await this.fsm.startFlow(
+                            userId,
+                            TelegramFlow.CREATE_AD_DEAL,
+                            TelegramFlowStep.ADV_ADDEAL_AMOUNT,
+                            {
+                                publisherId: publisher.id,
+                                publisherTelegramId: publisher.telegramId ?? null,
+                                publisherLabel,
+                                channelId: publisherResolution.channel?.id ?? null,
+                            },
+                        );
 
                         await progress.finish(
                             `✅ Publisher selected: ${publisherLabel}\n💵 Enter deal amount (USD):`,
@@ -389,8 +603,17 @@ export class AdvertiserHandler {
 
                         await this.fsm.clearFlow(userId);
 
+                        if (intent.paymentUrl) {
+                            await progress.finish(
+                                `✅ Deposit intent created\nAmount: $${amount.toFixed(2)}\nPay here: ${intent.paymentUrl}`,
+                            );
+                            return;
+                        }
+
+                        const fallbackCorrelationId = resolveTelegramCorrelationId(ctx);
                         await progress.finish(
-                            `✅ Deposit intent created\nAmount: $${amount.toFixed(2)}\nPay here: ${intent.paymentUrl ?? 'pending'}`,
+                            `Payment temporarily unavailable. Error ID: ${fallbackCorrelationId} — please retry later.`,
+                            cancelFlowKeyboard,
                         );
                         return;
                     } catch (err) {
@@ -440,10 +663,15 @@ export class AdvertiserHandler {
                     }
 
                     try {
+                        const correlationId = resolveTelegramCorrelationId(ctx);
+                        const idempotencyKey = `telegram:addeal:${userId}:${randomUUID()}`;
                         const adDeal = await this.backendClient.createAdDeal({
                             advertiserId: context.user.id,
                             publisherId: fsm.payload.publisherId,
+                            channelId: fsm.payload.channelId ?? null,
                             amount: amountText,
+                            idempotencyKey,
+                            correlationId,
                         });
 
                         this.logger.log({
@@ -454,21 +682,35 @@ export class AdvertiserHandler {
                             amount: amountText,
                         });
 
-                        await this.backendClient.fundAdDeal({
-                            adDealId: adDeal.id,
-                            provider: 'wallet_balance',
-                            providerReference: `telegram:${userId}:${adDeal.id}`,
-                            amount: amountText,
-                        });
-
-                        await this.backendClient.lockAdDeal(adDeal.id);
-
                         this.logger.log({
                             event: 'escrow_locked',
                             adDealId: adDeal.id,
                             advertiserId: context.user.id,
                             publisherId: fsm.payload.publisherId,
                         });
+
+                        const publisherTelegramId = fsm.payload.publisherTelegramId
+                            ? Number(fsm.payload.publisherTelegramId)
+                            : null;
+                        if (publisherTelegramId) {
+                            try {
+                                await ctx.telegram.sendMessage(
+                                    publisherTelegramId,
+                                    `📩 New ad deal offer!\nDeal ID: ${adDeal.id}\nAmount: $${amountText}\n` +
+                                    `Reply with:\n• /accept_addeal ${adDeal.id}\n• /decline_addeal ${adDeal.id}`,
+                                );
+                            } catch (notifyError) {
+                                this.logger.warn({
+                                    event: 'publisher_notify_failed',
+                                    adDealId: adDeal.id,
+                                    publisherTelegramId,
+                                    error:
+                                        notifyError instanceof Error
+                                            ? notifyError.message
+                                            : String(notifyError),
+                                });
+                            }
+                        }
 
                         await this.fsm.clearFlow(userId);
 

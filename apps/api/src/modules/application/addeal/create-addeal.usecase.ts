@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { ChannelStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 import { PrismaService } from '@/prisma/prisma.service';
@@ -12,9 +12,12 @@ export class CreateAdDealUseCase {
     async execute(params: {
         advertiserId: string;
         publisherId: string;
+        channelId?: string | null;
         amount: Prisma.Decimal | string;
         currency?: string;
         commissionPercentage?: Prisma.Decimal | string | number;
+        idempotencyKey: string;
+        correlationId: string;
     }) {
         const commissionPercentage =
             params.commissionPercentage === undefined
@@ -36,29 +39,57 @@ export class CreateAdDealUseCase {
             );
         }
 
-        const id = randomUUID();
-        const currency = params.currency ?? 'USD';
-        const deal = AdDeal.create({
-            id,
-            advertiserId: params.advertiserId,
-            publisherId: params.publisherId,
-            amount: new Prisma.Decimal(params.amount),
-            currency,
-        });
-
-        const snapshot = deal.toSnapshot();
-
         return this.prisma.$transaction(async (tx) => {
+            const existing = await tx.adDeal.findUnique({
+                where: { idempotencyKey: params.idempotencyKey },
+            });
+            if (existing) {
+                return existing;
+            }
+
+            let resolvedPublisherId = params.publisherId;
+            let resolvedChannelId = params.channelId ?? null;
+            if (resolvedChannelId) {
+                const channel = await tx.channel.findUnique({
+                    where: { id: resolvedChannelId },
+                    include: { owner: true },
+                });
+                if (!channel) {
+                    throw new BadRequestException('Channel not found');
+                }
+                if (channel.status !== ChannelStatus.approved) {
+                    throw new BadRequestException('Channel must be approved');
+                }
+                resolvedPublisherId = channel.ownerId;
+                if (params.publisherId && params.publisherId !== resolvedPublisherId) {
+                    throw new BadRequestException('Publisher does not own channel');
+                }
+            }
+
+            const id = randomUUID();
+            const currency = params.currency ?? 'USD';
+            const deal = AdDeal.create({
+                id,
+                advertiserId: params.advertiserId,
+                publisherId: resolvedPublisherId,
+                amount: new Prisma.Decimal(params.amount),
+                currency,
+            });
+            const snapshot = deal.toSnapshot();
+
             const adDeal = await tx.adDeal.create({
                 data: {
                     id: snapshot.id,
                     advertiserId: snapshot.advertiserId,
-                    publisherId: snapshot.publisherId,
+                    publisherId: resolvedPublisherId,
+                    channelId: resolvedChannelId,
                     amount: new Prisma.Decimal(snapshot.amount),
                     currency: snapshot.currency,
                     status: snapshot.status,
                     createdAt: snapshot.createdAt,
                     commissionPercentage,
+                    idempotencyKey: params.idempotencyKey,
+                    correlationId: params.correlationId,
                 },
             });
 
@@ -69,9 +100,11 @@ export class CreateAdDealUseCase {
                     metadata: {
                         adDealId: adDeal.id,
                         publisherId: adDeal.publisherId,
+                        channelId: resolvedChannelId,
                         amount: adDeal.amount.toFixed(2),
                         currency: adDeal.currency,
                         commissionPercentage: commissionPercentage?.toFixed(2) ?? null,
+                        correlationId: params.correlationId,
                     },
                 },
             });

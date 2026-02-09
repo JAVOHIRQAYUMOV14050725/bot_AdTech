@@ -9,10 +9,12 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { IdentityModule } from '@/modules/identity/identity.module';
 import { TelegramModule } from '@/modules/telegram/telegram.module';
 import { ChannelsModule } from '@/modules/channels/channels.module';
+import { MarketplaceModule } from '@/modules/marketplace/marketplace.module';
 
 @Module({
     imports: [
         AdDealModule,
+        MarketplaceModule,
         PaymentsModule,
         AuthModule,
         PrismaModule,

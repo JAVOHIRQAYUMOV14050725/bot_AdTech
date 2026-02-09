@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
+import { RequestContext } from '@/common/context/request-context';
 
 type ClickInvoiceResponse = {
     invoice_id: string;
@@ -38,6 +39,20 @@ export class ClickPaymentService {
         return this.configService.get<string>('CLICK_SECRET_KEY', '');
     }
 
+    private get createInvoicePath() {
+        return this.configService.get<string>(
+            'CLICK_CREATE_INVOICE_PATH',
+            '/v2/merchant/invoice/create',
+        );
+    }
+
+    private get invoiceStatusPath() {
+        return this.configService.get<string>(
+            'CLICK_GET_INVOICE_STATUS_PATH',
+            '/payment/status',
+        );
+    }
+
     async createInvoice(params: {
         amount: string;
         merchantTransId: string;
@@ -45,7 +60,20 @@ export class ClickPaymentService {
         returnUrl?: string;
         currency?: string;
     }): Promise<ClickInvoiceResponse> {
-        const response = await fetch(`${this.baseUrl}/payment/create`, {
+        const correlationId = RequestContext.getCorrelationId();
+        const url = this.buildUrl(this.createInvoicePath);
+
+        this.logger.log(
+            {
+                event: 'click_http_request',
+                method: 'POST',
+                url,
+                correlationId,
+            },
+            'ClickPaymentService',
+        );
+
+        const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -63,25 +91,35 @@ export class ClickPaymentService {
 
         const rawBody = await response.text();
         const parsedBody = this.parseJsonSafe(rawBody);
+        const extracted = this.extractInvoiceFields(parsedBody);
         this.logger.log(
             {
-                event: 'click_invoice_response',
-                status: response.status,
+                event: 'click_invoice_response_raw',
+                statusCode: response.status,
                 ok: response.ok,
-                payload: this.sanitizeClickPayload(parsedBody),
+                correlationId,
+                topLevelKeys: this.extractTopLevelKeys(parsedBody),
+                invoiceId: extracted.invoiceId ?? null,
+                paymentUrlLength: extracted.paymentUrl ? extracted.paymentUrl.length : 0,
+                paymentUrlPreview: extracted.paymentUrl
+                    ? this.redactUrlPreview(extracted.paymentUrl)
+                    : null,
             },
             'ClickPaymentService',
         );
 
         if (!response.ok) {
-            throw new Error(`Click invoice failed: ${response.status} ${this.safeText(rawBody)}`);
+            throw new Error(
+                `Click invoice failed: ${response.status} ${this.safeText(this.extractRawSnippet(rawBody))}`,
+            );
         }
 
-        return this.normalizeInvoiceResponse(parsedBody);
+        return this.extractInvoiceResponse(parsedBody, rawBody);
     }
 
     async getInvoiceStatus(params: { merchantTransId: string }) {
-        const response = await fetch(`${this.baseUrl}/payment/status`, {
+        const url = this.buildUrl(this.invoiceStatusPath);
+        const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -149,7 +187,7 @@ export class ClickPaymentService {
         }
     }
 
-    private normalizeInvoiceResponse(payload: unknown): ClickInvoiceResponse {
+    private extractInvoiceResponse(payload: unknown, rawBody: string): ClickInvoiceResponse {
         const candidates = this.flattenCandidates(payload);
 
         for (const candidate of candidates) {
@@ -157,12 +195,19 @@ export class ClickPaymentService {
                 continue;
             }
             const record = candidate as Record<string, unknown>;
-            const invoiceId =
-                this.readString(record, ['invoice_id', 'invoiceId', 'id']) ??
-                this.readString(record, ['invoice', 'invoiceId']);
-            const paymentUrl =
-                this.readString(record, ['payment_url', 'paymentUrl', 'url']) ??
-                this.readString(record, ['payment', 'payment_url', 'paymentUrl']);
+            const invoiceId = this.readFirstString(record, [
+                ['invoice_id'],
+                ['invoiceId'],
+                ['id'],
+                ['invoice', 'invoiceId'],
+            ]);
+            const paymentUrl = this.readFirstString(record, [
+                ['payment_url'],
+                ['paymentUrl'],
+                ['url'],
+                ['payment', 'payment_url'],
+                ['payment', 'paymentUrl'],
+            ]);
 
             if (invoiceId || paymentUrl) {
                 return {
@@ -172,10 +217,43 @@ export class ClickPaymentService {
             }
         }
 
-        return {
-            invoice_id: '',
-            payment_url: '',
-        };
+        const snippet = this.safeText(this.extractRawSnippet(rawBody));
+        throw new Error(
+            `Click invoice response missing invoice_id/payment_url. Raw snippet: ${snippet}`,
+        );
+    }
+
+    private extractInvoiceFields(payload: unknown): {
+        invoiceId?: string;
+        paymentUrl?: string;
+    } {
+        const candidates = this.flattenCandidates(payload);
+
+        for (const candidate of candidates) {
+            if (!candidate || typeof candidate !== 'object') {
+                continue;
+            }
+            const record = candidate as Record<string, unknown>;
+            const invoiceId = this.readFirstString(record, [
+                ['invoice_id'],
+                ['invoiceId'],
+                ['id'],
+                ['invoice', 'invoiceId'],
+            ]);
+            const paymentUrl = this.readFirstString(record, [
+                ['payment_url'],
+                ['paymentUrl'],
+                ['url'],
+                ['payment', 'payment_url'],
+                ['payment', 'paymentUrl'],
+            ]);
+
+            if (invoiceId || paymentUrl) {
+                return { invoiceId: invoiceId ?? undefined, paymentUrl: paymentUrl ?? undefined };
+            }
+        }
+
+        return {};
     }
 
     private flattenCandidates(payload: unknown): Array<Record<string, unknown> | unknown> {
@@ -197,6 +275,26 @@ export class ClickPaymentService {
         ];
     }
 
+    private extractTopLevelKeys(payload: unknown): string[] {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            return [];
+        }
+        return Object.keys(payload as Record<string, unknown>);
+    }
+
+    private readFirstString(
+        record: Record<string, unknown>,
+        keyPaths: string[][],
+    ): string | null {
+        for (const path of keyPaths) {
+            const value = this.readString(record, path);
+            if (value !== null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private readString(record: Record<string, unknown>, keys: string[]): string | null {
         let current: unknown = record;
         for (const key of keys) {
@@ -212,6 +310,35 @@ export class ClickPaymentService {
             return String(current);
         }
         return null;
+    }
+
+    private buildUrl(path: string) {
+        const base = this.baseUrl.replace(/\/+$/, '');
+        const normalizedPath = path ? `/${path.replace(/^\/+/, '')}` : '';
+        return `${base}${normalizedPath}`;
+    }
+
+    private extractRawSnippet(rawBody: string): string {
+        if (!rawBody) {
+            return '';
+        }
+        if (this.isHtml(rawBody)) {
+            return rawBody.replace(/\s+/g, ' ').slice(0, 200);
+        }
+        return rawBody;
+    }
+
+    private isHtml(rawBody: string): boolean {
+        return /<!doctype html|<html/i.test(rawBody);
+    }
+
+    private redactUrlPreview(value: string): string {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            return '';
+        }
+        const preview = trimmed.slice(0, 12);
+        return preview.length < trimmed.length ? `${preview}…` : preview;
     }
 
     private sanitizeClickPayload(payload: unknown): unknown {

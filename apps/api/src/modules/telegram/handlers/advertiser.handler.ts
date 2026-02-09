@@ -13,6 +13,7 @@ import { TelegramBackendClient } from '@/modules/telegram/telegram-backend.clien
 import { ackNow, replySafe, resolveTelegramLocale, startTelegramProgress } from '@/modules/telegram/telegram-safe-text.util';
 import { TelegramUserLockService } from '@/modules/telegram/telegram-user-lock.service';
 import { resolveTelegramCorrelationId } from '@/modules/telegram/telegram-context.util';
+import { formatDepositIntentMessage } from '@/modules/telegram/telegram-deposit-message.util';
 
 @Update()
 export class AdvertiserHandler {
@@ -604,17 +605,15 @@ export class AdvertiserHandler {
 
                         await this.fsm.clearFlow(userId);
 
-                        if (intent.paymentUrl) {
-                            await progress.finish(
-                                `✅ Deposit intent created\nAmount: $${amount.toFixed(2)}\nPay here: ${intent.paymentUrl}`,
-                            );
-                            return;
-                        }
-
                         const fallbackCorrelationId = resolveTelegramCorrelationId(ctx);
+                        const { message, hasPaymentUrl } = formatDepositIntentMessage({
+                            amount: amount.toFixed(2),
+                            paymentUrl: intent.paymentUrl,
+                            correlationId: fallbackCorrelationId,
+                        });
                         await progress.finish(
-                            `Payment temporarily unavailable. Error ID: ${fallbackCorrelationId} — please retry later.`,
-                            cancelFlowKeyboard,
+                            message,
+                            hasPaymentUrl ? undefined : cancelFlowKeyboard,
                         );
                         return;
                     } catch (err) {

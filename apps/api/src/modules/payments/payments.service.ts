@@ -417,12 +417,46 @@ export class PaymentsService {
         );
 
 
-        const invoice = await this.clickPaymentService.createInvoice({
-            amount: normalizedAmount.toFixed(2),
-            merchantTransId: intent.id,
-            description: `Wallet deposit ${intent.id}`,
-            returnUrl,
-        });
+        let invoice: { invoice_id: string; payment_url: string };
+        try {
+            invoice = await this.clickPaymentService.createInvoice({
+                amount: normalizedAmount.toFixed(2),
+                merchantTransId: intent.id,
+                description: `Wallet deposit ${intent.id}`,
+                returnUrl,
+            });
+        } catch (err) {
+            const correlationId = RequestContext.getCorrelationId() ?? intent.id;
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            this.logger.error(
+                {
+                    event: 'click_invoice_create_failed',
+                    intentId: intent.id,
+                    correlationId,
+                    error: errorMessage,
+                },
+                'PaymentsService',
+            );
+            await this.prisma.paymentIntent.update({
+                where: { id: intent.id },
+                data: {
+                    status: PaymentIntentStatus.failed,
+                    failedAt: new Date(),
+                    metadata: {
+                        clickInvoiceError: {
+                            message: errorMessage,
+                            correlationId,
+                        },
+                    },
+                },
+            });
+            throw new ServiceUnavailableException({
+                message: 'Click invoice failed',
+                code: 'CLICK_INVOICE_FAILED',
+                correlationId,
+                userMessage: `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`,
+            });
+        }
 
         const paymentUrl = invoice.payment_url?.trim();
         const safePaymentUrl =

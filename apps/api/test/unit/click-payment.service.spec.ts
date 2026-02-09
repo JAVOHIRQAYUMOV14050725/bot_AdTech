@@ -24,6 +24,13 @@ describe('ClickPaymentService invoice parsing', () => {
         expect(result).toEqual({ invoice_id: 'inv-3', payment_url: 'https://click/pay/3' });
     });
 
+    it('extracts invoice fields from result payload', () => {
+        const payload = { result: { invoice_id: 'inv-4', payment_url: 'https://click/pay/4' } };
+        const result = (service as never as { extractInvoiceResponse: (p: unknown, r: string) => unknown })
+            .extractInvoiceResponse(payload, JSON.stringify(payload)) as { invoice_id: string; payment_url: string };
+        expect(result).toEqual({ invoice_id: 'inv-4', payment_url: 'https://click/pay/4' });
+    });
+
     it('throws when invoice fields are missing', () => {
         const payload = { status: 'ok' };
         expect(() =>

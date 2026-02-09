@@ -400,23 +400,6 @@ export class PaymentsService {
             });
         });
 
-        const baseUrl = this.configService.get<string>('CLICK_API_BASE_URL', 'https://api.click.uz');
-        const path = this.configService.get<string>('CLICK_CREATE_INVOICE_PATH', '/v2/merchant/invoice/create');
-        const url = `${baseUrl}${path}`;
-
-        this.logger.log(
-            {
-                event: 'click_http_request',
-                method: 'POST',
-                baseUrl,
-                path,
-                url,
-                envPath: process.env.CLICK_CREATE_INVOICE_PATH, // qo‘shimcha tekshiruv
-            },
-            'ClickPaymentService',
-        );
-
-
         let invoice: { invoice_id: string; payment_url: string };
         try {
             invoice = await this.clickPaymentService.createInvoice({
@@ -437,19 +420,21 @@ export class PaymentsService {
                 },
                 'PaymentsService',
             );
-            await this.prisma.paymentIntent.update({
-                where: { id: intent.id },
-                data: {
-                    status: PaymentIntentStatus.failed,
-                    failedAt: new Date(),
-                    metadata: {
-                        clickInvoiceError: {
-                            message: errorMessage,
-                            correlationId,
+            await this.prisma.$transaction((tx) =>
+                tx.paymentIntent.update({
+                    where: { id: intent.id },
+                    data: {
+                        status: PaymentIntentStatus.failed,
+                        failedAt: new Date(),
+                        metadata: {
+                            clickInvoiceError: {
+                                message: errorMessage,
+                                correlationId,
+                            },
                         },
                     },
-                },
-            });
+                }),
+            );
             throw new ServiceUnavailableException({
                 message: 'Click invoice failed',
                 code: 'CLICK_INVOICE_FAILED',
@@ -475,12 +460,32 @@ export class PaymentsService {
             );
         }
 
-        const updated = await this.prisma.paymentIntent.update({
-            where: { id: intent.id },
-            data: {
-                providerInvoiceId: invoice.invoice_id || null,
-                paymentUrl: safePaymentUrl,
-            },
+        const updated = await this.prisma.$transaction(async (tx) => {
+            if (!safePaymentUrl) {
+                return tx.paymentIntent.update({
+                    where: { id: intent.id },
+                    data: {
+                        status: PaymentIntentStatus.failed,
+                        failedAt: new Date(),
+                        providerInvoiceId: invoice.invoice_id || null,
+                        paymentUrl: null,
+                        metadata: {
+                            clickInvoiceError: {
+                                message: 'Click invoice missing payment URL',
+                                correlationId: RequestContext.getCorrelationId() ?? intent.id,
+                            },
+                        },
+                    },
+                });
+            }
+
+            return tx.paymentIntent.update({
+                where: { id: intent.id },
+                data: {
+                    providerInvoiceId: invoice.invoice_id || null,
+                    paymentUrl: safePaymentUrl,
+                },
+            });
         });
 
         if (!safePaymentUrl) {

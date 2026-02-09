@@ -1,3 +1,5 @@
+import { shortCorrelationId } from '@/modules/telegram/telegram-context.util';
+
 export function formatDepositIntentMessage(params: {
     amount: string;
     paymentUrl: string | null | undefined;
@@ -6,6 +8,7 @@ export function formatDepositIntentMessage(params: {
     const trimmedUrl = params.paymentUrl?.trim();
     const hasPaymentUrl =
         Boolean(trimmedUrl) && trimmedUrl?.toLowerCase() !== 'pending';
+    const correlationSuffix = shortCorrelationId(params.correlationId) ?? params.correlationId;
 
     if (hasPaymentUrl) {
         return {
@@ -15,7 +18,7 @@ export function formatDepositIntentMessage(params: {
     }
 
     return {
-        message: `Payment temporarily unavailable. Error ID: ${params.correlationId} — please retry later.`,
+        message: `Payment temporarily unavailable. Error ID: ${correlationSuffix} — please retry later.`,
         hasPaymentUrl: false,
     };
 }

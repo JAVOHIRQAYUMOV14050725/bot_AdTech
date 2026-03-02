@@ -14,6 +14,20 @@ type ClickStatusResponse = {
     click_trans_id?: string;
 };
 
+type CreateInvoiceRequest = {
+    service_id: string;
+    merchant_id: string;
+    user_id: string;
+    amount: string;
+    merchant_trans_id: string;
+    description: string;
+    phone: string;
+    return_url: string;
+    currency: string;
+    timestamp: string;
+    sign: string;
+};
+
 @Injectable()
 export class ClickPaymentService {
     private readonly logger = new Logger(ClickPaymentService.name);
@@ -39,10 +53,7 @@ export class ClickPaymentService {
     }
 
     private get baseUrl() {
-        return this.configService.get<string>(
-            'CLICK_API_BASE_URL',
-            'https://api.click.uz',
-        );
+        return this.configService.get<string>('CLICK_API_BASE_URL', 'https://api.click.uz');
     }
 
     private get serviceId() {
@@ -67,17 +78,11 @@ export class ClickPaymentService {
     }
 
     private get createInvoicePath() {
-        return this.configService.get<string>(
-            'CLICK_CREATE_INVOICE_PATH',
-            '/v2/merchant/invoice/create',
-        );
+        return this.configService.get<string>('CLICK_CREATE_INVOICE_PATH', '/v2/merchant/invoice/create');
     }
 
     private get invoiceStatusPath() {
-        return this.configService.get<string>(
-            'CLICK_GET_INVOICE_STATUS_PATH',
-            '/payment/status',
-        );
+        return this.configService.get<string>('CLICK_GET_INVOICE_STATUS_PATH', '/payment/status');
     }
 
     private get requestTimeoutMs() {
@@ -93,10 +98,7 @@ export class ClickPaymentService {
         currency?: string;
     }): Promise<ClickInvoiceResponse> {
         const correlationId = RequestContext.getCorrelationId();
-        const { baseUrl, path, url, timeoutMs } = this.ensureValidConfig(
-            this.createInvoicePath,
-            'create_invoice',
-        );
+        const { url, timeoutMs } = this.ensureValidConfig(this.createInvoicePath, 'create_invoice');
 
         if (!params.phoneNumber) {
             throw new BadRequestException({
@@ -106,18 +108,15 @@ export class ClickPaymentService {
             });
         }
 
+        const request = this.buildCreateInvoiceRequest({ ...params, phoneNumber: params.phoneNumber! });
         this.logger.log(
             {
                 event: 'click_invoice_create_payload',
                 correlationId,
                 data: {
-                    amount: params.amount,
-                    merchant_id: this.merchantId,
-                    service_id: this.serviceId,
-                    user_id: this.userId,
-                    phone: params.phoneNumber,
-                    merchant_trans_id: params.merchantTransId,
-                    return_url: params.returnUrl,
+                    ...request,
+                    phone: this.maskPhone(request.phone),
+                    sign: '[redacted]',
                 },
             },
             'ClickPaymentService',
@@ -130,18 +129,10 @@ export class ClickPaymentService {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-CLICK-TIMESTAMP': request.timestamp,
+                    'X-CLICK-SIGN': request.sign,
                 },
-                body: JSON.stringify({
-                    service_id: this.serviceId,
-                    merchant_id: this.merchantId,
-                    user_id: this.userId,
-                    amount: params.amount,
-                    merchant_trans_id: params.merchantTransId,
-                    description: params.description,
-                    phone: params.phoneNumber,
-                    return_url: params.returnUrl,
-                    currency: params.currency ?? 'USD',
-                }),
+                body: JSON.stringify(request),
                 signal: controller.signal,
             });
 
@@ -149,13 +140,9 @@ export class ClickPaymentService {
             const contentType = response.headers.get('content-type');
             const isJson = Boolean(contentType && contentType.includes('application/json'));
             const parsedBody = isJson ? this.parseJsonSafe(rawBody) : rawBody;
-            const safeHeaders = this.sanitizeClickPayload(
-                Object.fromEntries(response.headers.entries()),
-            );
+            const safeHeaders = this.sanitizeClickPayload(Object.fromEntries(response.headers.entries()));
             const bodyPreview = this.safeText(this.extractRawSnippet(rawBody));
-            const sanitizedBody = isJson
-                ? this.sanitizeClickPayload(parsedBody)
-                : this.safeText(rawBody);
+            const sanitizedBody = isJson ? this.sanitizeClickPayload(parsedBody) : this.safeText(rawBody);
 
             this.logger.log(
                 {
@@ -172,29 +159,8 @@ export class ClickPaymentService {
             );
 
             const errorCode = this.extractErrorCode(parsedBody);
-
-            if (this.isHtml(rawBody)) {
-                this.logInvoiceFailure({
-                    correlationId,
-                    url,
-                    status: response.status,
-                    errorCode,
-                    errorBodyPreview: bodyPreview,
-                });
-                throw new ServiceUnavailableException({
-                    message: 'Click invoice failed: HTML response',
-                    code: 'CLICK_INVOICE_FAILED',
-                    correlationId,
-                    details: {
-                        url,
-                        status: response.status,
-                        errorCode,
-                        errorBodyPreview: bodyPreview,
-                    },
-                });
-            }
-
             if (errorCode !== null && errorCode !== 0 && errorCode !== '0') {
+                const mappedUserMessage = this.mapClickErrorToUserMessage(errorCode);
                 this.logInvoiceFailure({
                     correlationId,
                     url,
@@ -210,7 +176,7 @@ export class ClickPaymentService {
                         error_code: errorCode,
                         bodyPreview,
                     },
-                    userMessage: `Click invoice error: ${errorCode}. Check merchant credentials/IP/contract.`,
+                    userMessage: `${mappedUserMessage} Error ID: ${correlationId ?? 'n/a'}`,
                 });
             }
 
@@ -286,11 +252,76 @@ export class ClickPaymentService {
         }
     }
 
+    buildCreateInvoiceRequest(params: {
+        amount: string;
+        merchantTransId: string;
+        description: string;
+        returnUrl: string;
+        phoneNumber: string;
+        currency?: string;
+        timestamp?: string;
+    }): CreateInvoiceRequest {
+        const timestamp = params.timestamp ?? Math.floor(Date.now() / 1000).toString();
+        const sign = this.buildCreateInvoiceSignature({
+            service_id: this.serviceId,
+            merchant_id: this.merchantId,
+            user_id: this.userId,
+            merchant_trans_id: params.merchantTransId,
+            amount: params.amount,
+            timestamp,
+        });
+
+        return {
+            service_id: this.serviceId,
+            merchant_id: this.merchantId,
+            user_id: this.userId,
+            amount: params.amount,
+            merchant_trans_id: params.merchantTransId,
+            description: params.description,
+            phone: params.phoneNumber,
+            return_url: params.returnUrl,
+            currency: params.currency ?? 'USD',
+            timestamp,
+            sign,
+        };
+    }
+
+    buildCreateInvoiceSignature(params: {
+        service_id: string;
+        merchant_id: string;
+        user_id: string;
+        merchant_trans_id: string;
+        amount: string;
+        timestamp: string;
+    }): string {
+        const signString = [
+            params.service_id,
+            params.merchant_id,
+            params.user_id,
+            params.merchant_trans_id,
+            params.amount,
+            params.timestamp,
+            this.secretKey,
+        ]
+            .map((value) => String(value ?? ''))
+            .join('');
+
+        return createHash('md5').update(signString).digest('hex');
+    }
+
+    private mapClickErrorToUserMessage(errorCode: string | number): string {
+        const normalized = String(errorCode);
+        if (normalized === '-406') {
+            return 'Payment configuration error (merchant credentials/signature mismatch). Please contact support.';
+        }
+        if (normalized === '-5' || normalized === '-8') {
+            return 'Payment request was rejected as invalid. Please verify your phone number and try again.';
+        }
+        return `Payment provider rejected the request (code ${normalized}).`;
+    }
+
     async getInvoiceStatus(params: { merchantTransId: string }) {
-        const { url, timeoutMs } = this.ensureValidConfig(
-            this.invoiceStatusPath,
-            'invoice_status',
-        );
+        const { url, timeoutMs } = this.ensureValidConfig(this.invoiceStatusPath, 'invoice_status');
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         const response = await fetch(url, {
@@ -316,18 +347,18 @@ export class ClickPaymentService {
     }
 
     verifyWebhookSignature(payload: Record<string, string | number | null>) {
-        const signature = String(payload['sign'] ?? '');
+        const signature = String(payload.sign ?? '');
         if (!signature) {
             return false;
         }
 
         const expected = this.buildWebhookSignature({
-            click_trans_id: String(payload['click_trans_id'] ?? ''),
-            service_id: String(payload['service_id'] ?? ''),
-            merchant_trans_id: String(payload['merchant_trans_id'] ?? ''),
-            amount: String(payload['amount'] ?? ''),
-            action: String(payload['action'] ?? ''),
-            sign_time: String(payload['sign_time'] ?? ''),
+            click_trans_id: String(payload.click_trans_id ?? ''),
+            service_id: String(payload.service_id ?? ''),
+            merchant_trans_id: String(payload.merchant_trans_id ?? ''),
+            amount: String(payload.amount ?? ''),
+            action: String(payload.action ?? ''),
+            sign_time: String(payload.sign_time ?? ''),
         });
         return expected === signature;
     }
@@ -371,19 +402,8 @@ export class ClickPaymentService {
                 continue;
             }
             const record = candidate as Record<string, unknown>;
-            const invoiceId = this.readFirstString(record, [
-                ['invoice_id'],
-                ['invoiceId'],
-                ['id'],
-                ['invoice', 'invoiceId'],
-            ]);
-            const paymentUrl = this.readFirstString(record, [
-                ['payment_url'],
-                ['paymentUrl'],
-                ['url'],
-                ['payment', 'payment_url'],
-                ['payment', 'paymentUrl'],
-            ]);
+            const invoiceId = this.readFirstString(record, [['invoice_id'], ['invoiceId'], ['id'], ['invoice', 'invoiceId']]);
+            const paymentUrl = this.readFirstString(record, [['payment_url'], ['paymentUrl'], ['url'], ['payment', 'payment_url'], ['payment', 'paymentUrl']]);
 
             if (invoiceId || paymentUrl) {
                 return {
@@ -394,42 +414,7 @@ export class ClickPaymentService {
         }
 
         const snippet = this.safeText(this.extractRawSnippet(rawBody));
-        throw new Error(
-            `Click invoice response missing invoice_id/payment_url. Raw snippet: ${snippet}`,
-        );
-    }
-
-    private extractInvoiceFields(payload: unknown): {
-        invoiceId?: string;
-        paymentUrl?: string;
-    } {
-        const candidates = this.flattenCandidates(payload);
-
-        for (const candidate of candidates) {
-            if (!candidate || typeof candidate !== 'object') {
-                continue;
-            }
-            const record = candidate as Record<string, unknown>;
-            const invoiceId = this.readFirstString(record, [
-                ['invoice_id'],
-                ['invoiceId'],
-                ['id'],
-                ['invoice', 'invoiceId'],
-            ]);
-            const paymentUrl = this.readFirstString(record, [
-                ['payment_url'],
-                ['paymentUrl'],
-                ['url'],
-                ['payment', 'payment_url'],
-                ['payment', 'paymentUrl'],
-            ]);
-
-            if (invoiceId || paymentUrl) {
-                return { invoiceId: invoiceId ?? undefined, paymentUrl: paymentUrl ?? undefined };
-            }
-        }
-
-        return {};
+        throw new Error(`Click invoice response missing invoice_id/payment_url. Raw snippet: ${snippet}`);
     }
 
     private flattenCandidates(payload: unknown): Array<Record<string, unknown> | unknown> {
@@ -445,16 +430,11 @@ export class ClickPaymentService {
             record.invoice,
             record.data && typeof record.data === 'object' ? (record.data as Record<string, unknown>).invoice : null,
             record.result && typeof record.result === 'object' ? (record.result as Record<string, unknown>).invoice : null,
-            record.response && typeof record.response === 'object'
-                ? (record.response as Record<string, unknown>).invoice
-                : null,
+            record.response && typeof record.response === 'object' ? (record.response as Record<string, unknown>).invoice : null,
         ];
     }
 
-    private readFirstString(
-        record: Record<string, unknown>,
-        keyPaths: string[][],
-    ): string | null {
+    private readFirstString(record: Record<string, unknown>, keyPaths: string[][]): string | null {
         for (const path of keyPaths) {
             const value = this.readString(record, path);
             if (value !== null) {
@@ -495,10 +475,7 @@ export class ClickPaymentService {
         }
     }
 
-    private ensureValidConfig(
-        path: string,
-        mode: 'create_invoice' | 'invoice_status',
-    ): { baseUrl: string; path: string; url: string; timeoutMs: number } {
+    private ensureValidConfig(path: string, mode: 'create_invoice' | 'invoice_status'): { baseUrl: string; path: string; url: string; timeoutMs: number } {
         const correlationId = RequestContext.getCorrelationId();
         const baseUrl = this.baseUrl;
         const normalizedPath = path ?? '';
@@ -508,20 +485,10 @@ export class ClickPaymentService {
         const parsedBase = this.parseUrlSafe(baseUrl);
         if (!parsedBase) {
             errors.push('base_url_invalid');
-        } else {
-            if (this.isLocalHost(parsedBase.hostname)) {
-                errors.push('base_url_localhost');
-            }
-            if (!this.isAllowedClickHost(parsedBase.hostname)) {
-                errors.push('base_url_unexpected_host');
-            }
         }
 
         if (!normalizedPath.startsWith('/')) {
             errors.push('path_missing_leading_slash');
-        }
-        if (normalizedPath === '/payment/create') {
-            errors.push('path_disallowed_payment_create');
         }
 
         if (!this.parseUrlSafe(url)) {
@@ -537,14 +504,7 @@ export class ClickPaymentService {
                 hostname: parsedBase?.hostname ?? null,
                 reason: errors,
             };
-            this.logger.warn(
-                {
-                    event: 'click_config_invalid',
-                    correlationId,
-                    data: details,
-                },
-                'ClickPaymentService',
-            );
+            this.logger.warn({ event: 'click_config_invalid', correlationId, data: details }, 'ClickPaymentService');
             throw new ServiceUnavailableException({
                 message: 'Click config invalid',
                 code: 'CLICK_CONFIG_INVALID',
@@ -553,31 +513,7 @@ export class ClickPaymentService {
             });
         }
 
-        return {
-            baseUrl,
-            path: normalizedPath,
-            url,
-            timeoutMs: this.requestTimeoutMs,
-        };
-    }
-
-    private isLocalHost(hostname: string): boolean {
-        const normalized = hostname.toLowerCase();
-        if (normalized === 'localhost' || normalized === '0.0.0.0') {
-            return true;
-        }
-        if (normalized === '[::1]') {
-            return true;
-        }
-        return normalized.startsWith('127.');
-    }
-
-    private isAllowedClickHost(hostname: string): boolean {
-        const normalized = hostname.toLowerCase();
-        if (normalized.includes('click')) {
-            return true;
-        }
-        return normalized.endsWith('.click.uz') || normalized === 'click.uz';
+        return { baseUrl, path: normalizedPath, url, timeoutMs: this.requestTimeoutMs };
     }
 
     private logInvoiceFailure(params: {
@@ -608,13 +544,7 @@ export class ClickPaymentService {
         }
         const record = payload as Record<string, unknown>;
         const data = record.data as Record<string, unknown> | undefined;
-        const candidates = [
-            record.error_code,
-            record.errorCode,
-            record.error,
-            data?.error_code,
-            data?.errorCode,
-        ];
+        const candidates = [record.error_code, record.errorCode, record.error, data?.error_code, data?.errorCode];
         for (const candidate of candidates) {
             if (typeof candidate === 'string' || typeof candidate === 'number') {
                 return candidate;
@@ -627,14 +557,7 @@ export class ClickPaymentService {
         if (!rawBody) {
             return '';
         }
-        if (this.isHtml(rawBody)) {
-            return rawBody.replace(/\s+/g, ' ').slice(0, 200);
-        }
         return rawBody;
-    }
-
-    private isHtml(rawBody: string): boolean {
-        return /<!doctype html|<html/i.test(rawBody);
     }
 
     private sanitizeClickPayload(payload: unknown): unknown {
@@ -665,6 +588,9 @@ export class ClickPaymentService {
         if (sensitiveKeys.some((sensitive) => normalizedKey.includes(sensitive))) {
             return '[redacted]';
         }
+        if (normalizedKey.includes('phone')) {
+            return this.maskPhone(String(value));
+        }
         if (normalizedKey.includes('payment_url') || normalizedKey.includes('paymenturl')) {
             return this.stripUrlQuery(String(value));
         }
@@ -684,6 +610,14 @@ export class ClickPaymentService {
         } catch {
             return this.safeText(value);
         }
+    }
+
+    private maskPhone(value: string): string {
+        const digits = value.replace(/\D/g, '');
+        if (digits.length <= 4) {
+            return '***';
+        }
+        return `***${digits.slice(-4)}`;
     }
 
     private safeText(value: string): string {

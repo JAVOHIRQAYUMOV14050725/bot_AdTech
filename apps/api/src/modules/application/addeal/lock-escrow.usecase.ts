@@ -7,7 +7,6 @@ import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
 import {
     DealState,
     LedgerReason,
-    LedgerType,
     TransitionActor,
 } from '@/modules/domain/contracts';
 import {
@@ -94,11 +93,13 @@ export class LockEscrowUseCase {
 
             let escrowId: string | null = adDeal.escrowId ?? null;
             if (adDeal.status === DealState.funded) {
-                await this.paymentsService.recordWalletMovement({
+                const escrowPoolWallet = await this.paymentsService.ensureSystemWallet(tx);
+
+                await this.paymentsService.transfer({
                     tx,
-                    walletId: advertiserWallet.id,
+                    sourceWalletId: advertiserWallet.id,
+                    destinationWalletId: escrowPoolWallet.id,
                     amount: adDeal.amount,
-                    type: LedgerType.debit,
                     reason: LedgerReason.escrow_hold,
                     idempotencyKey: `addeal:${adDeal.id}:escrow_lock`,
                     actor: params.actor ?? TransitionActor.system,

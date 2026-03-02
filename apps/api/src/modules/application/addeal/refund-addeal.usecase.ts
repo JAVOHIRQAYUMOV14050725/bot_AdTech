@@ -7,7 +7,6 @@ import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
 import {
     DealState,
     LedgerReason,
-    LedgerType,
     TransitionActor,
 } from '@/modules/domain/contracts';
 import { toAdDealSnapshot } from './addeal.mapper';
@@ -86,15 +85,16 @@ export class RefundAdDealUseCase {
                 });
             }
 
-            await this.paymentsService.recordWalletMovement({
+            const escrowPoolWallet = await this.paymentsService.ensureSystemWallet(tx);
+
+            await this.paymentsService.transfer({
                 tx,
-                walletId: escrow.advertiserWalletId,
+                sourceWalletId: escrowPoolWallet.id,
+                destinationWalletId: escrow.advertiserWalletId,
                 amount: escrow.amount,
-                type: LedgerType.credit,
                 reason: LedgerReason.refund,
                 idempotencyKey: `addeal:${adDeal.id}:refund`,
                 referenceId: adDeal.id,
-                settlementStatus: 'settled',
                 actor: params.actor ?? TransitionActor.system,
                 correlationId: `addeal:${adDeal.id}:refund`,
             });

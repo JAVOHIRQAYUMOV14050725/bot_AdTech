@@ -607,14 +607,15 @@ model OutboxEvent {
 
 model Wallet {
   id     String @id @default(uuid())
-  userId String @unique
+  userId String? @unique
+  systemKey String? @unique
 
   balance  Decimal @default(0) @db.Decimal(14, 2)
   currency String  @default("USD")
 
   createdAt DateTime @default(now())
 
-  user   User          @relation(fields: [userId], references: [id])
+  user   User?         @relation(fields: [userId], references: [id])
   ledger LedgerEntry[]
   financialAuditEvents FinancialAuditEvent[]
   paymentIntents    PaymentIntent[]
@@ -636,6 +637,7 @@ model LedgerEntry {
   amount Decimal      @db.Decimal(14, 2)
   reason LedgerReason
   idempotencyKey String @unique
+  groupId String?
 
   referenceId String?
   createdAt   DateTime @default(now())
@@ -644,6 +646,7 @@ model LedgerEntry {
   auditEvents FinancialAuditEvent[]
 
   @@index([walletId])
+  @@index([groupId])
   @@map("ledger_entries")
 }
 

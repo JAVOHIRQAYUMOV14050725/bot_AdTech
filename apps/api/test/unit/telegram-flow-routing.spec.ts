@@ -74,14 +74,14 @@ describe('Telegram flow routing', () => {
             ensureAdvertiser: jest.fn().mockResolvedValue({
                 user: { id: 'adv-1', role: 'advertiser', roles: ['advertiser'], telegramId: '1', username: 'adv' },
             }),
-            createAdDeal: jest.fn().mockResolvedValue({ id: 'deal-1', amount: '100.00' }),
-            fundAdDeal: jest.fn().mockRejectedValue(new BackendApiError({
+            createAdDeal: jest.fn().mockRejectedValue(new BackendApiError({
                 status: 400,
                 code: 'INSUFFICIENT_WALLET_BALANCE',
                 correlationId: 'corr-1',
                 message: 'Insufficient wallet balance',
                 userMessage: "❌ Balansingiz yetarli emas. Avval 'Add balance' qiling.",
             })),
+            fundAdDeal: jest.fn(),
             lockAdDeal: jest.fn(),
             runWithCorrelationId: jest.fn((_, fn) => fn()),
         };

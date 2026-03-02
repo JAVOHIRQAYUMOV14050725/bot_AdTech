@@ -225,6 +225,26 @@ export class PaymentsService {
 
 
 
+    private static readonly ESCROW_POOL_SYSTEM_KEY = 'ESCROW_POOL';
+
+    async ensureSystemWallet(
+        tx: Prisma.TransactionClient,
+        systemKey: string = PaymentsService.ESCROW_POOL_SYSTEM_KEY,
+    ) {
+        const existing = await tx.wallet.findUnique({ where: { systemKey } });
+        if (existing) {
+            return existing;
+        }
+
+        return tx.wallet.create({
+            data: {
+                systemKey,
+                balance: new Prisma.Decimal(0),
+                currency: 'USD',
+            },
+        });
+    }
+
     async recordWalletMovement(params: {
         tx: Prisma.TransactionClient;
         walletId: string;
@@ -239,6 +259,7 @@ export class PaymentsService {
         escrowId?: string;
         actor?: TransitionActor;
         correlationId?: string;
+        groupId?: string;
     }) {
         const {
             tx,
@@ -253,6 +274,7 @@ export class PaymentsService {
             escrowId,
             actor,
             correlationId,
+            groupId,
         } = params;
 
         const normalizedAmount = this.normalizeDecimal(amount);
@@ -267,9 +289,6 @@ export class PaymentsService {
             );
         }
 
-        /* ─────────────────────────────────────────────
-           1️⃣ IDEMPOTENCY FAST-PATH
-        ───────────────────────────────────────────── */
         const existing = await tx.ledgerEntry.findUnique({
             where: { idempotencyKey },
         });
@@ -278,36 +297,38 @@ export class PaymentsService {
             return existing;
         }
 
-        /* ─────────────────────────────────────────────
-           2️⃣ WALLET ROW LOCK (SERIALIZABLE BEHAVIOR)
-        ───────────────────────────────────────────── */
-        const wallet = await tx.wallet.findUnique({
-            where: { id: walletId },
-            select: { id: true, balance: true },
-        });
+        let updatedWallet;
+        if (type === LedgerType.debit) {
+            const debitResult = await tx.wallet.updateMany({
+                where: {
+                    id: walletId,
+                    balance: { gte: normalizedAmount },
+                },
+                data: {
+                    balance: { decrement: normalizedAmount },
+                },
+            });
 
-        if (!wallet) {
+            if (debitResult.count === 0) {
+                throw new BadRequestException('Insufficient balance');
+            }
+
+            updatedWallet = await tx.wallet.findUnique({
+                where: { id: walletId },
+                select: { balance: true },
+            });
+        } else {
+            updatedWallet = await tx.wallet.update({
+                where: { id: walletId },
+                data: { balance: { increment: normalizedAmount } },
+                select: { balance: true },
+            });
+        }
+
+        if (!updatedWallet) {
             throw new BadRequestException('Wallet not found');
         }
 
-        if (type === LedgerType.debit && wallet.balance.lt(normalizedAmount)) {
-            throw new BadRequestException('Insufficient balance');
-        }
-
-        /* ─────────────────────────────────────────────
-           3️⃣ APPLY WALLET BALANCE (SOURCE OF TRUTH)
-        ───────────────────────────────────────────── */
-        const updatedWallet = await tx.wallet.update({
-            where: { id: walletId },
-            data:
-                type === LedgerType.debit
-                    ? { balance: { decrement: normalizedAmount } }
-                    : { balance: { increment: normalizedAmount } },
-        });
-
-        /* ─────────────────────────────────────────────
-           4️⃣ WRITE LEDGER ENTRY
-        ───────────────────────────────────────────── */
         const ledgerEntry = await tx.ledgerEntry.create({
             data: {
                 walletId,
@@ -319,12 +340,10 @@ export class PaymentsService {
                 reason,
                 referenceId,
                 idempotencyKey,
+                groupId: groupId ?? correlationId ?? null,
             },
         });
 
-        /* ─────────────────────────────────────────────
-           5️⃣ FINANCIAL AUDIT EVENT (STRICT IDEMPOTENT)
-        ───────────────────────────────────────────── */
         await tx.financialAuditEvent.create({
             data: {
                 walletId,
@@ -341,9 +360,6 @@ export class PaymentsService {
             },
         });
 
-        /* ─────────────────────────────────────────────
-           6️⃣ INVARIANT ASSERT (OPTIONAL / FEATURE FLAG)
-        ───────────────────────────────────────────── */
         const enableInvariant =
             this.configService.get<boolean>(
                 'ENABLE_LEDGER_INVARIANT_CHECK',
@@ -355,9 +371,6 @@ export class PaymentsService {
         }
 
 
-        /* ─────────────────────────────────────────────
-           7️⃣ STRUCTURED LOG
-        ───────────────────────────────────────────── */
         this.logger.log(
             {
                 event: 'ledger_tx_committed',
@@ -375,6 +388,7 @@ export class PaymentsService {
                     campaignTargetId: campaignTargetId ?? null,
                     escrowId: escrowId ?? null,
                     actor: actor ?? null,
+                    groupId: groupId ?? correlationId ?? null,
                 },
                 correlationId,
             },
@@ -382,6 +396,88 @@ export class PaymentsService {
         );
 
         return ledgerEntry;
+    }
+
+    async transfer(params: {
+        tx: Prisma.TransactionClient;
+        sourceWalletId: string;
+        destinationWalletId: string;
+        amount: Prisma.Decimal;
+        reason: LedgerReason;
+        idempotencyKey: string;
+        referenceId?: string;
+        campaignId?: string;
+        campaignTargetId?: string;
+        escrowId?: string;
+        actor?: TransitionActor;
+        correlationId?: string;
+        groupId?: string;
+    }) {
+        const {
+            tx,
+            sourceWalletId,
+            destinationWalletId,
+            amount,
+            reason,
+            idempotencyKey,
+            referenceId,
+            campaignId,
+            campaignTargetId,
+            escrowId,
+            actor,
+            correlationId,
+            groupId,
+        } = params;
+
+        const transferGroupId = groupId ?? correlationId ?? idempotencyKey;
+        const debitKey = `${idempotencyKey}:debit`;
+        const creditKey = `${idempotencyKey}:credit`;
+
+        const existingDebit = await tx.ledgerEntry.findUnique({
+            where: { idempotencyKey: debitKey },
+        });
+        const existingCredit = await tx.ledgerEntry.findUnique({
+            where: { idempotencyKey: creditKey },
+        });
+
+        if (existingDebit && existingCredit) {
+            return { debitEntry: existingDebit, creditEntry: existingCredit };
+        }
+
+        const debitEntry = await this.recordWalletMovement({
+            tx,
+            walletId: sourceWalletId,
+            amount,
+            type: LedgerType.debit,
+            reason,
+            referenceId,
+            idempotencyKey: debitKey,
+            campaignId,
+            campaignTargetId,
+            escrowId,
+            actor,
+            correlationId,
+            groupId: transferGroupId,
+        });
+
+        const creditEntry = await this.recordWalletMovement({
+            tx,
+            walletId: destinationWalletId,
+            amount,
+            type: LedgerType.credit,
+            reason,
+            settlementStatus: 'settled',
+            referenceId,
+            idempotencyKey: creditKey,
+            campaignId,
+            campaignTargetId,
+            escrowId,
+            actor,
+            correlationId,
+            groupId: transferGroupId,
+        });
+
+        return { debitEntry, creditEntry };
     }
 
 

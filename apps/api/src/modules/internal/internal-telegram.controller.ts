@@ -7,6 +7,7 @@ import { InternalTelegramEnsureDto } from './dto/internal-telegram-ensure.dto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { TransitionActor, UserRole } from '@/modules/domain/contracts';
 import { InternalTelegramResolvePublisherDto } from './dto/internal-telegram-resolve-publisher.dto';
+import { InternalTelegramPhoneDto } from './dto/internal-telegram-phone.dto';
 import { AdDealStatus, CampaignStatus, ChannelStatus, LedgerReason, PostJobStatus } from '@prisma/client';
 import { InternalTelegramAddealLookupDto } from './dto/internal-telegram-addeal-lookup.dto';
 import { InternalTelegramVerifyChannelDto } from './dto/internal-telegram-verify-channel.dto';
@@ -69,6 +70,7 @@ export class InternalTelegramController {
                 role: user.role,
                 telegramId: user.telegramId?.toString() ?? null,
                 username: user.username,
+                phoneNumber: user.phoneNumber,
             },
         };
     }
@@ -95,6 +97,24 @@ export class InternalTelegramController {
                 role: user.role,
                 telegramId: user.telegramId?.toString() ?? null,
                 username: user.username,
+                phoneNumber: user.phoneNumber,
+            },
+        };
+    }
+
+
+    @Post('advertiser/phone')
+    async updateAdvertiserPhone(@Body() dto: InternalTelegramPhoneDto) {
+        const user = await this.prisma.user.update({
+            where: { id: dto.userId },
+            data: { phoneNumber: dto.phoneNumber },
+            select: { id: true, phoneNumber: true },
+        });
+
+        return {
+            user: {
+                id: user.id,
+                phoneNumber: user.phoneNumber,
             },
         };
     }

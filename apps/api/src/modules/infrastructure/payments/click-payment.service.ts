@@ -1,4 +1,4 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { RequestContext } from '@/common/context/request-context';
@@ -88,7 +88,8 @@ export class ClickPaymentService {
         amount: string;
         merchantTransId: string;
         description: string;
-        returnUrl?: string;
+        returnUrl: string;
+        phoneNumber?: string;
         currency?: string;
     }): Promise<ClickInvoiceResponse> {
         const correlationId = RequestContext.getCorrelationId();
@@ -96,6 +97,14 @@ export class ClickPaymentService {
             this.createInvoicePath,
             'create_invoice',
         );
+
+        if (!params.phoneNumber) {
+            throw new BadRequestException({
+                message: 'Phone number is required to create Click invoice',
+                code: 'PHONE_REQUIRED',
+                userMessage: 'To process payment, please share your phone number.',
+            });
+        }
 
         this.logger.log(
             {
@@ -106,9 +115,9 @@ export class ClickPaymentService {
                     merchant_id: this.merchantId,
                     service_id: this.serviceId,
                     user_id: this.userId,
-                    phone: null,
+                    phone: params.phoneNumber,
                     merchant_trans_id: params.merchantTransId,
-                    return_url: params.returnUrl ?? null,
+                    return_url: params.returnUrl,
                 },
             },
             'ClickPaymentService',
@@ -129,6 +138,7 @@ export class ClickPaymentService {
                     amount: params.amount,
                     merchant_trans_id: params.merchantTransId,
                     description: params.description,
+                    phone: params.phoneNumber,
                     return_url: params.returnUrl,
                     currency: params.currency ?? 'USD',
                 }),

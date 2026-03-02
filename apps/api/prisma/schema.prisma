@@ -157,6 +157,7 @@ model User {
   id           String   @id @default(uuid())
   telegramId   BigInt?  @unique
   username     String?
+  phoneNumber  String?
   passwordHash String?
   role         UserRole
   superAdminKey String? @unique

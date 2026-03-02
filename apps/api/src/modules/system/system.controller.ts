@@ -28,6 +28,10 @@ import {
     DbConnectionsResponseDto,
 } from './dto/system-response.dto';
 import { Throttle } from '@nestjs/throttler';
+import { DevTopupDto } from './dto/dev-topup.dto';
+import { PaymentsService } from '@/modules/payments/payments.service';
+import { randomUUID } from 'crypto';
+import { Prisma } from '@prisma/client';
 
 @Controller('system')
 @UseGuards(JwtAuthGuard, RolesGuard,)
@@ -36,7 +40,25 @@ import { Throttle } from '@nestjs/throttler';
 @ApiTags('System')
 @ApiBearerAuth()
 export class SystemController {
-    constructor(private readonly systemService: SystemService) { }
+    constructor(private readonly systemService: SystemService, private readonly paymentsService: PaymentsService) { }
+
+
+    @Post('dev-topup')
+    @Roles(UserRole.admin, UserRole.super_admin)
+    @ApiOperation({ summary: 'DEV only topup', description: 'Credits a wallet for beta testing.' })
+    @ApiStandardErrorResponses()
+    async devTopup(
+        @Body() dto: DevTopupDto,
+        @Actor() actor: { id: string },
+    ) {
+        return this.paymentsService.adminDevTopup({
+            adminUserId: actor.id,
+            userId: dto.userId,
+            amountUsd: new Prisma.Decimal(dto.amountUsd),
+            note: dto.note,
+            requestId: dto.requestId ?? randomUUID(),
+        });
+    }
 
     /**
      * 🔥 FORCE ESCROW RESOLUTION

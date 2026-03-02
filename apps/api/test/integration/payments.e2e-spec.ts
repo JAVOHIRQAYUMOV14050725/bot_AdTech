@@ -41,6 +41,7 @@ describe('Payments integration (wallet / ledger / escrow)', () => {
                             click_trans_id: 'click-1',
                         }),
                         verifyWebhookSignature: jest.fn().mockReturnValue(true),
+                        isDepositEnabled: jest.fn().mockReturnValue(true),
                     },
                 },
 
@@ -48,9 +49,14 @@ describe('Payments integration (wallet / ledger / escrow)', () => {
                 {
                     provide: ConfigService,
                     useValue: {
-                        get: jest.fn((key: string) => {
+                        get: jest.fn((key: string, fallback?: unknown) => {
                             if (key === 'ENABLE_CLICK_PAYMENTS') return true;
-                            return false;
+                            if (key === 'ENABLE_CLICK') return true;
+                            if (key === 'ENABLE_WITHDRAWALS') return true;
+                            if (key === 'WITHDRAWAL_COOLDOWN_HOURS') return 24;
+                            if (key === 'NODE_ENV') return 'development';
+                            if (key === 'KILL_SWITCH_DEV_TOPUP') return false;
+                            return fallback ?? false;
                         }),
                     },
                 },

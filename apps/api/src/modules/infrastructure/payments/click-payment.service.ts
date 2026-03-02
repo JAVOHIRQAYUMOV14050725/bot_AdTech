@@ -17,8 +17,26 @@ type ClickStatusResponse = {
 @Injectable()
 export class ClickPaymentService {
     private readonly logger = new Logger(ClickPaymentService.name);
+    private readonly depositsEnabled: boolean;
 
-    constructor(private readonly configService: ConfigService) { }
+    constructor(private readonly configService: ConfigService) {
+        const missingFields = [
+            ['CLICK_MERCHANT_ID', this.merchantId],
+            ['CLICK_SERVICE_ID', this.serviceId],
+            ['CLICK_USER_ID', this.userId],
+            ['CLICK_SECRET_KEY', this.secretKey],
+        ]
+            .filter(([, value]) => !value)
+            .map(([name]) => name);
+        this.depositsEnabled = missingFields.length === 0;
+
+        if (!this.depositsEnabled) {
+            this.logger.warn({
+                event: 'click_deposits_disabled_missing_config',
+                missingFields,
+            });
+        }
+    }
 
     private get baseUrl() {
         return this.configService.get<string>(
@@ -37,6 +55,15 @@ export class ClickPaymentService {
 
     private get secretKey() {
         return this.configService.get<string>('CLICK_SECRET_KEY', '');
+    }
+
+    private get userId() {
+        return this.configService.get<string>('CLICK_USER_ID', '')
+            || this.configService.get<string>('CLICK_MERCHANT_USER_ID', '');
+    }
+
+    isDepositEnabled() {
+        return this.depositsEnabled;
     }
 
     private get createInvoicePath() {
@@ -72,14 +99,16 @@ export class ClickPaymentService {
 
         this.logger.log(
             {
-                event: 'click_http_request',
+                event: 'click_invoice_create_payload',
                 correlationId,
                 data: {
-                    method: 'POST',
-                    url,
-                    baseUrl,
-                    path,
-                    timeoutMs,
+                    amount: params.amount,
+                    merchant_id: this.merchantId,
+                    service_id: this.serviceId,
+                    user_id: this.userId,
+                    phone: null,
+                    merchant_trans_id: params.merchantTransId,
+                    return_url: params.returnUrl ?? null,
                 },
             },
             'ClickPaymentService',
@@ -96,6 +125,7 @@ export class ClickPaymentService {
                 body: JSON.stringify({
                     service_id: this.serviceId,
                     merchant_id: this.merchantId,
+                    user_id: this.userId,
                     amount: params.amount,
                     merchant_trans_id: params.merchantTransId,
                     description: params.description,
@@ -131,12 +161,14 @@ export class ClickPaymentService {
                 'ClickPaymentService',
             );
 
+            const errorCode = this.extractErrorCode(parsedBody);
+
             if (this.isHtml(rawBody)) {
                 this.logInvoiceFailure({
                     correlationId,
                     url,
                     status: response.status,
-                    errorCode: this.extractErrorCode(parsedBody),
+                    errorCode,
                     errorBodyPreview: bodyPreview,
                 });
                 throw new ServiceUnavailableException({
@@ -146,9 +178,29 @@ export class ClickPaymentService {
                     details: {
                         url,
                         status: response.status,
-                        errorCode: this.extractErrorCode(parsedBody),
+                        errorCode,
                         errorBodyPreview: bodyPreview,
                     },
+                });
+            }
+
+            if (errorCode !== null && errorCode !== 0 && errorCode !== '0') {
+                this.logInvoiceFailure({
+                    correlationId,
+                    url,
+                    status: response.status,
+                    errorCode,
+                    errorBodyPreview: bodyPreview,
+                });
+                throw new ServiceUnavailableException({
+                    message: 'Click invoice failed',
+                    code: 'CLICK_INVOICE_FAILED',
+                    correlationId,
+                    details: {
+                        error_code: errorCode,
+                        bodyPreview,
+                    },
+                    userMessage: `Click invoice error: ${errorCode}. Check merchant credentials/IP/contract.`,
                 });
             }
 

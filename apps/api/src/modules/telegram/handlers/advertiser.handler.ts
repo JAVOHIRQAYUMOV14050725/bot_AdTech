@@ -19,6 +19,12 @@ import { formatDepositIntentMessage } from '@/modules/telegram/telegram-deposit-
 export class AdvertiserHandler {
     private readonly logger = new Logger(AdvertiserHandler.name);
 
+    private readonly sharePhoneKeyboard = Markup.keyboard([
+        [Markup.button.contactRequest('📱 Share phone number')],
+        [Markup.button.callback('⬅️ Back', 'BACK_ADVERTISER')],
+    ]).resize().oneTime();
+
+
     constructor(
         private readonly fsm: TelegramFSMService,
         private readonly backendClient: TelegramBackendClient,
@@ -291,6 +297,17 @@ export class AdvertiserHandler {
                         await progress.finish('❌ Telegram user not found.');
                         return;
                     }
+                    if (!context.user.phoneNumber) {
+                        await this.fsm.startFlow(
+                            userId,
+                            TelegramFlow.ADD_BALANCE,
+                            TelegramFlowStep.ADV_ADD_BALANCE_PHONE,
+                        );
+                        await progress.finish('To process payment, please share your phone number.');
+                        await replySafe(ctx, 'To process payment, please share your phone number.', this.sharePhoneKeyboard);
+                        return;
+                    }
+
                     await this.fsm.startFlow(
                         userId,
                         TelegramFlow.ADD_BALANCE,
@@ -385,6 +402,57 @@ export class AdvertiserHandler {
         await this.withUserLock(ctx, async () => {
             await this.fsm.clearFlow(userId);
             await replySafe(ctx, '✅ Bekor qilindi.');
+        });
+    }
+
+
+    @On('contact')
+    async onContact(@Ctx() ctx: Context) {
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await replySafe(ctx, '❌ Telegram user not found.');
+            return;
+        }
+        const locale = resolveTelegramLocale(ctx.from?.language_code);
+        await this.withUserLock(ctx, async () => {
+            const correlationId = resolveTelegramCorrelationId(ctx);
+            await this.backendClient.runWithCorrelationId(correlationId, async () => {
+                const progress = await startTelegramProgress(ctx);
+                try {
+                    const context = await this.ensureAdvertiser(ctx);
+                    if (!context) {
+                        await progress.finish('❌ Telegram user not found.');
+                        return;
+                    }
+                    const fsm = await this.fsm.get(userId);
+                    const contact = (ctx.message as { contact?: { phone_number?: string; user_id?: number } } | undefined)?.contact;
+                    if (!fsm || fsm.flow !== TelegramFlow.ADD_BALANCE || fsm.step !== TelegramFlowStep.ADV_ADD_BALANCE_PHONE) {
+                        await progress.finish('✅ Phone received.', advertiserHome);
+                        return;
+                    }
+                    if (!contact?.phone_number) {
+                        await progress.finish('❌ Phone number not found in contact.');
+                        await replySafe(ctx, 'To process payment, please share your phone number.', this.sharePhoneKeyboard);
+                        return;
+                    }
+
+                    const normalizedPhone = this.normalizePhone(contact.phone_number);
+                    await this.backendClient.updateAdvertiserPhone({
+                        userId: context.user.id,
+                        phoneNumber: normalizedPhone,
+                    });
+
+                    await this.fsm.startFlow(
+                        userId,
+                        TelegramFlow.ADD_BALANCE,
+                        TelegramFlowStep.ADV_ADD_BALANCE_AMOUNT,
+                    );
+                    await progress.finish('✅ Phone saved. 💰 Enter amount (USD):', cancelFlowKeyboard);
+                } catch (err) {
+                    const presentation = mapBackendErrorToTelegramResponse(err, locale);
+                    await progress.finish(presentation.message, presentation.keyboard);
+                }
+            });
         });
     }
 
@@ -580,6 +648,12 @@ export class AdvertiserHandler {
                         '❌ Please send a publisher @username or a public channel/group link (t.me/...).',
                         cancelFlowKeyboard,
                     );
+                    return;
+                }
+
+                if (fsm.flow === TelegramFlow.ADD_BALANCE && fsm.step === TelegramFlowStep.ADV_ADD_BALANCE_PHONE) {
+                    await progress.finish('To process payment, please share your phone number.');
+                    await replySafe(ctx, 'To process payment, please share your phone number.', this.sharePhoneKeyboard);
                     return;
                 }
 
@@ -816,6 +890,11 @@ export class AdvertiserHandler {
                 : fsm;
 
         return { user, fsm: syncedFsm };
+    }
+
+
+    private normalizePhone(phone: string) {
+        return phone.replace(/\D/g, '');
     }
 
     private async withUserLock(ctx: Context, fn: () => Promise<void>) {

@@ -494,6 +494,10 @@ export class PaymentsService {
             throw new BadRequestException('Deposit amount must be positive');
         }
 
+        const publicBaseUrl = (this.configService.get<string>('PUBLIC_BASE_URL', 'http://localhost:4002') || 'http://localhost:4002')
+            .replace(/\/+$/, '');
+        const resolvedReturnUrl = returnUrl ?? `${publicBaseUrl}/api/payments/click/return`;
+
         const enableClick =
             this.configService.get<boolean>('ENABLE_CLICK', false)
             || this.configService.get<boolean>('ENABLE_CLICK_PAYMENTS', false);
@@ -536,13 +540,19 @@ export class PaymentsService {
             });
         });
 
+        const user = await this.prisma.user.findUnique({
+            where: { id: userId },
+            select: { phoneNumber: true },
+        });
+
         let invoice: { invoice_id: string; payment_url: string };
         try {
             invoice = await this.clickPaymentService.createInvoice({
                 amount: normalizedAmount.toFixed(2),
                 merchantTransId: intent.id,
                 description: `Wallet deposit ${intent.id}`,
-                returnUrl,
+                returnUrl: resolvedReturnUrl,
+                phoneNumber: user?.phoneNumber ?? undefined,
             });
         } catch (err) {
             const correlationId = RequestContext.getCorrelationId() ?? intent.id;

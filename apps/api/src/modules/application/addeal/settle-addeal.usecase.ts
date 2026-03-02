@@ -11,9 +11,7 @@ import { AdDeal } from '@/modules/domain/addeal/addeal.aggregate';
 import {
     DealState,
     LedgerReason,
-    LedgerType,
     TransitionActor,
-    UserRole,
 } from '@/modules/domain/contracts';
 import {
     assertAdDealMoneyMovement,
@@ -104,22 +102,23 @@ export class SettleAdDealUseCase {
                 });
             }
 
-            await this.paymentsService.recordWalletMovement({
+            const escrowPoolWallet = await this.paymentsService.ensureSystemWallet(tx);
+
+            await this.paymentsService.transfer({
                 tx,
-                walletId: escrow.publisherWalletId,
+                sourceWalletId: escrowPoolWallet.id,
+                destinationWalletId: escrow.publisherWalletId,
                 amount: payoutAmount,
-                type: LedgerType.credit,
                 reason: LedgerReason.payout,
                 idempotencyKey: `addeal:${adDeal.id}:payout`,
                 referenceId: adDeal.id,
-                settlementStatus: 'settled',
                 actor: params.actor ?? TransitionActor.system,
                 correlationId: `addeal:${adDeal.id}:settle`,
             });
 
             if (commissionAmount.gt(0)) {
                 const platformWallet = await tx.wallet.findFirst({
-                    where: { user: { role: UserRole.super_admin } },
+                    where: { user: { role: 'super_admin' } },
                 });
 
                 if (!platformWallet) {
@@ -128,15 +127,14 @@ export class SettleAdDealUseCase {
                     );
                 }
 
-                await this.paymentsService.recordWalletMovement({
+                await this.paymentsService.transfer({
                     tx,
-                    walletId: platformWallet.id,
+                    sourceWalletId: escrowPoolWallet.id,
+                    destinationWalletId: platformWallet.id,
                     amount: commissionAmount,
-                    type: LedgerType.credit,
                     reason: LedgerReason.commission,
                     idempotencyKey: `addeal:${adDeal.id}:commission`,
                     referenceId: adDeal.id,
-                    settlementStatus: 'settled',
                     actor: params.actor ?? TransitionActor.system,
                     correlationId: `addeal:${adDeal.id}:settle`,
                 });

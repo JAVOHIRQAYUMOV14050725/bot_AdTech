@@ -18,6 +18,7 @@ type ParsedBackendErrorShape = {
     correlationId?: unknown;
     userMessage?: unknown;
     statusCode?: unknown;
+    details?: { code?: unknown; userMessage?: unknown; message?: unknown };
     error?: { message?: unknown; details?: { code?: unknown; userMessage?: unknown; message?: unknown } };
 };
 
@@ -132,9 +133,11 @@ export const parseBackendErrorResponse = (
                     : typeof parsed.error?.message !== 'undefined'
                         ? toErrorMessage(parsed.error.message, '')
                         : '';
-            const details = isRecord(parsed.error?.details)
-                ? (parsed.error?.details as Record<string, unknown>)
-                : null;
+            const details = isRecord(parsed.details)
+                ? (parsed.details as Record<string, unknown>)
+                : isRecord(parsed.error?.details)
+                    ? (parsed.error?.details as Record<string, unknown>)
+                    : null;
             message = parsedMessage || toErrorMessage(parsed, fallbackMessage);
             code =
                 typeof parsed.code === 'string'
@@ -369,6 +372,9 @@ export class TelegramBackendClient {
                         userMessage: null,
                         raw: null,
                     });
+                }
+                if (err instanceof BackendApiError) {
+                    throw err;
                 }
                 if (options.idempotent && attempt + 1 < maxAttempts) {
                     this.logger.error(

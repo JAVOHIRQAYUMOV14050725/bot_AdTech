@@ -13,6 +13,7 @@ import {
 import {
     BadRequestException,
     ConflictException,
+    UnauthorizedException,
     HttpException,
     Inject,
     Injectable,
@@ -137,7 +138,7 @@ export class PaymentsService {
         const { payload, expectedAmount } = params;
         const verified = this.clickPaymentService.verifyWebhookSignature(payload);
         if (!verified) {
-            throw new BadRequestException('Click webhook signature invalid');
+            throw new UnauthorizedException('Click webhook signature invalid');
         }
 
         const serviceId = this.configService.get<string>('CLICK_SERVICE_ID', '');
@@ -592,11 +593,15 @@ export class PaymentsService {
                     },
                 }),
             );
+            const propagatedUserMessage =
+                typeof (detailsPayload as { userMessage?: unknown }).userMessage === 'string'
+                    ? ((detailsPayload as { userMessage?: string }).userMessage as string)
+                    : `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`;
             throw new ServiceUnavailableException({
                 message: 'Click invoice failed',
                 code: 'CLICK_INVOICE_FAILED',
                 correlationId,
-                userMessage: `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`,
+                userMessage: propagatedUserMessage,
             });
         }
 
@@ -709,6 +714,13 @@ export class PaymentsService {
         }
 
         const providerTxnId = String(payload['click_trans_id'] ?? '');
+        const providerInvoiceId = String(
+            payload['provider_invoice_id']
+            ?? payload['invoice_id']
+            ?? payload['merchant_prepare_id']
+            ?? intent.providerInvoiceId
+            ?? '',
+        );
         if (providerTxnId) {
             const existingTxn = await this.prisma.paymentIntent.findFirst({
                 where: {
@@ -723,6 +735,24 @@ export class PaymentsService {
 
             if (existingTxn) {
                 throw new ConflictException('Duplicate provider transaction');
+            }
+        }
+
+
+        if (providerInvoiceId) {
+            const existingInvoice = await this.prisma.paymentIntent.findFirst({
+                where: {
+                    providerInvoiceId,
+                    NOT: { id: intent.id },
+                },
+            });
+
+            if (existingInvoice?.status === PaymentIntentStatus.succeeded) {
+                return { ok: true, idempotent: true };
+            }
+
+            if (existingInvoice) {
+                throw new ConflictException('Duplicate provider invoice');
             }
         }
 
@@ -784,7 +814,11 @@ export class PaymentsService {
                 type: LedgerType.credit,
                 reason: LedgerReason.deposit,
                 settlementStatus: 'non_settlement',
-                idempotencyKey: `deposit_intent:${intent.id}`,
+                idempotencyKey: providerTxnId
+                    ? `deposit_provider_txn:${providerTxnId}`
+                    : providerInvoiceId
+                        ? `deposit_provider_invoice:${providerInvoiceId}`
+                        : `deposit_intent:${intent.id}`,
                 actor: TransitionActor.payment_provider,
                 correlationId: `deposit_intent:${intent.id}`,
             });
@@ -795,6 +829,7 @@ export class PaymentsService {
                     status: PaymentIntentStatus.succeeded,
                     succeededAt: new Date(),
                     providerTxnId,
+                    providerInvoiceId: providerInvoiceId || intent.providerInvoiceId || null,
                     metadata: payload as Prisma.JsonObject,
                 },
             });
@@ -901,6 +936,107 @@ export class PaymentsService {
         return { ok: true, processed: intents.length };
     }
 
+    private getWithdrawalCooldownHours() {
+        return this.configService.get<number>('WITHDRAWAL_COOLDOWN_HOURS', 24);
+    }
+
+    private async enforceWithdrawalCooldown(tx: Prisma.TransactionClient, userId: string) {
+        const cooldownHours = this.getWithdrawalCooldownHours();
+        if (cooldownHours <= 0) {
+            return;
+        }
+
+        const cooldownSince = new Date(Date.now() - cooldownHours * 60 * 60 * 1000);
+        const recentDeposit = await tx.paymentIntent.findFirst({
+            where: {
+                userId,
+                status: PaymentIntentStatus.succeeded,
+                succeededAt: { gte: cooldownSince },
+            },
+            orderBy: { succeededAt: 'desc' },
+            select: { succeededAt: true },
+        });
+
+        const recentDispute = await tx.dispute.findFirst({
+            where: {
+                createdAt: { gte: cooldownSince },
+                OR: [
+                    { openedBy: userId },
+                    { adDeal: { publisherId: userId } },
+                    { adDeal: { advertiserId: userId } },
+                ],
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { createdAt: true },
+        });
+
+        const latestEvent = [recentDeposit?.succeededAt ?? null, recentDispute?.createdAt ?? null]
+            .filter((value): value is Date => value instanceof Date)
+            .sort((a, b) => b.getTime() - a.getTime())[0];
+
+        if (latestEvent) {
+            const releaseAt = new Date(latestEvent.getTime() + cooldownHours * 60 * 60 * 1000);
+            throw new ConflictException(`Withdrawal cooldown is active until ${releaseAt.toISOString()}`);
+        }
+    }
+
+    async adminDevTopup(params: {
+        adminUserId: string;
+        userId: string;
+        amountUsd: Prisma.Decimal;
+        note?: string;
+        requestId: string;
+    }) {
+        const isProd = this.configService.get<string>('NODE_ENV', 'development') === 'production';
+        const killSwitchEnabled = this.configService.get<boolean>('KILL_SWITCH_DEV_TOPUP', false);
+        if (isProd && !killSwitchEnabled) {
+            throw new ConflictException('dev-topup disabled in production');
+        }
+
+        const amount = this.normalizeDecimal(params.amountUsd);
+        if (amount.lte(0)) {
+            throw new BadRequestException('amountUsd must be positive');
+        }
+
+        return this.prisma.$transaction(async (tx) => {
+            const existing = await tx.financialAuditEvent.findUnique({
+                where: { idempotencyKey: `dev_topup:${params.requestId}` },
+            });
+            if (existing) {
+                const wallet = await tx.wallet.findUnique({ where: { userId: params.userId } });
+                return { ok: true, idempotent: true, walletId: wallet?.id ?? null };
+            }
+
+            const wallet = await tx.wallet.upsert({
+                where: { userId: params.userId },
+                update: {},
+                create: { userId: params.userId, balance: new Prisma.Decimal(0), currency: 'USD' },
+            });
+
+            const ledgerEntry = await this.recordWalletMovement({
+                tx,
+                walletId: wallet.id,
+                amount,
+                type: LedgerType.credit,
+                reason: LedgerReason.deposit,
+                settlementStatus: 'non_settlement',
+                idempotencyKey: `dev_topup:${params.requestId}`,
+                actor: TransitionActor.admin,
+                correlationId: `dev_topup:${params.requestId}`,
+            });
+
+            await tx.userAuditLog.create({
+                data: {
+                    userId: params.adminUserId,
+                    action: 'dev_topup',
+                    metadata: { targetUserId: params.userId, amountUsd: amount.toFixed(2), note: params.note ?? null, requestId: params.requestId, ledgerEntryId: ledgerEntry.id },
+                },
+            });
+
+            return { ok: true, idempotent: false, walletId: wallet.id, ledgerEntryId: ledgerEntry.id };
+        });
+    }
+
     async createWithdrawalIntent(params: {
         userId: string;
         amount: Prisma.Decimal;
@@ -934,6 +1070,8 @@ export class PaymentsService {
             if (!wallet) {
                 throw new BadRequestException('Wallet not found');
             }
+
+            await this.enforceWithdrawalCooldown(tx, userId);
 
             if (wallet.balance.lt(normalizedAmount)) {
                 throw new BadRequestException('Insufficient balance');

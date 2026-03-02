@@ -42,6 +42,8 @@ export const envSchema = z.object({
     ENABLE_CLICK: booleanString.default('false'),
     ENABLE_CLICK_PAYMENTS: booleanString.default('false'),
     ENABLE_WITHDRAWALS: booleanString.default('false'),
+    KILL_SWITCH_DEV_TOPUP: booleanString.default('false'),
+    WITHDRAWAL_COOLDOWN_HOURS: z.coerce.number().int().nonnegative().default(24),
     AUTH_RATE_LIMIT_LIMIT: z.coerce.number().int().positive().default(5),
     AUTH_RATE_LIMIT_TTL_MS: z.coerce.number().int().positive().default(60000),
     BCRYPT_SALT_ROUNDS: z.coerce.number().int().positive().default(10),
@@ -63,6 +65,7 @@ export const envSchema = z.object({
     CLICK_API_BASE_URL: z.string().optional(),
     CLICK_SERVICE_ID: z.string().optional(),
     CLICK_MERCHANT_ID: z.string().optional(),
+    CLICK_USER_ID: z.string().optional(),
     CLICK_SECRET_KEY: z.string().optional(),
     CLICK_SIGN_TIME_WINDOW_MINUTES: z.coerce.number().int().positive().default(10),
     CLICK_CREATE_INVOICE_PATH: z.string().optional(),
@@ -71,4 +74,3 @@ export const envSchema = z.object({
 });
 
 export type EnvVars = z.infer<typeof envSchema>;    
-

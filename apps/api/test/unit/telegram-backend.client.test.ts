@@ -1,5 +1,6 @@
 import { parseBackendErrorResponse, toErrorMessage, BackendApiError, TelegramBackendClient } from '@/modules/telegram/telegram-backend.client';
 import { ConfigService } from '@nestjs/config';
+import { mapBackendErrorToTelegramMessage } from '@/modules/telegram/telegram-error.util';
 
 describe('TelegramBackendClient error parsing', () => {
     it('coerces array messages into a string', () => {

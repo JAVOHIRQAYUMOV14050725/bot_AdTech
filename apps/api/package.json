@@ -14,7 +14,8 @@
     "prisma:validate": "prisma validate",
     "db:connections": "ts-node scripts/db-connections.ts",
     "test": "jest --config test/jest.config.ts",
-    "test:race": "jest --config test/jest.config.ts test/integration/escrow.race.e2e-spec.ts"
+    "test:race": "jest --config test/jest.config.ts test/integration/escrow.race.e2e-spec.ts",
+    "click:smoke": "ts-node scripts/click-smoke.ts"
   },
   "keywords": [],
   "author": "",

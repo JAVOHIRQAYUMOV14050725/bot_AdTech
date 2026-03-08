@@ -14,6 +14,7 @@ import { AcceptDealUseCase } from '@/modules/application/addeal/accept-deal.usec
 import { AdvertiserConfirmUseCase } from '@/modules/application/addeal/advertiser-confirm.usecase';
 import { SubmitProofUseCase } from '@/modules/application/addeal/submit-proof.usecase';
 import { SettleAdDealUseCase } from '@/modules/application/addeal/settle-addeal.usecase';
+import { RefundAdDealUseCase } from '@/modules/application/addeal/refund-addeal.usecase';
 import { DealState, LedgerReason, LedgerType, TransitionActor } from '@/modules/domain/contracts';
 import { createUserWithWallet, resetDatabase, seedKillSwitches } from '../utils/test-helpers';
 
@@ -27,6 +28,7 @@ describe('Payments invariants', () => {
     let advertiserConfirm: AdvertiserConfirmUseCase;
     let submitProof: SubmitProofUseCase;
     let settleAdDeal: SettleAdDealUseCase;
+    let refundAdDeal: RefundAdDealUseCase;
     let dbAvailable = true;
 
     beforeAll(async () => {
@@ -42,6 +44,7 @@ describe('Payments invariants', () => {
                 AdvertiserConfirmUseCase,
                 SubmitProofUseCase,
                 SettleAdDealUseCase,
+                RefundAdDealUseCase,
                 {
                     provide: ClickPaymentService,
                     useValue: {
@@ -77,6 +80,7 @@ describe('Payments invariants', () => {
         advertiserConfirm = moduleRef.get(AdvertiserConfirmUseCase);
         submitProof = moduleRef.get(SubmitProofUseCase);
         settleAdDeal = moduleRef.get(SettleAdDealUseCase);
+        refundAdDeal = moduleRef.get(RefundAdDealUseCase);
 
         try {
             await prisma.$connect();
@@ -255,5 +259,87 @@ describe('Payments invariants', () => {
             .add(escrowAfter.balance)
             .toFixed(2);
         expect(totalAfter).toBe(totalBefore);
+    });
+
+    it('supports internal dev topup and full refund lifecycle without click callbacks', async () => {
+        if (!dbAvailable) {
+            return;
+        }
+
+        const admin = await createUserWithWallet({
+            prisma,
+            role: UserRole.super_admin,
+            balance: new Prisma.Decimal(0),
+        });
+        const advertiser = await createUserWithWallet({
+            prisma,
+            role: UserRole.advertiser,
+            balance: new Prisma.Decimal(0),
+        });
+        const publisher = await createUserWithWallet({
+            prisma,
+            role: UserRole.publisher,
+            balance: new Prisma.Decimal(0),
+        });
+
+        await paymentsService.adminDevTopup({
+            adminUserId: admin.user.id,
+            userId: advertiser.user.id,
+            amountUsd: new Prisma.Decimal(75),
+            note: 'test credit',
+            requestId: 'integration-dev-topup-1',
+        });
+
+        const walletAfterTopup = await prisma.wallet.findUniqueOrThrow({
+            where: { id: advertiser.wallet.id },
+        });
+        expect(walletAfterTopup.balance.toFixed(2)).toBe('75.00');
+
+        const deal = await createAdDeal.execute({
+            advertiserId: advertiser.user.id,
+            publisherId: publisher.user.id,
+            amount: '50.00',
+            commissionPercentage: '0',
+            idempotencyKey: `refund:${advertiser.user.id}:${publisher.user.id}:create`,
+            correlationId: 'flow:addeal:refund:create',
+        });
+
+        await fundAdDeal.execute({
+            adDealId: deal.id,
+            provider: 'wallet_balance',
+            providerReference: `refund:${deal.id}:fund`,
+            amount: '50.00',
+            verified: true,
+            actor: TransitionActor.advertiser,
+        });
+
+        await lockEscrow.execute({
+            adDealId: deal.id,
+            actor: TransitionActor.advertiser,
+        });
+
+        await acceptDeal.execute({ adDealId: deal.id, actor: TransitionActor.publisher });
+
+        const escrowPoolBeforeRefund = await prisma.wallet.findUniqueOrThrow({
+            where: { systemKey: 'ESCROW_POOL' },
+        });
+        expect(escrowPoolBeforeRefund.balance.toFixed(2)).toBe('50.00');
+
+        await refundAdDeal.execute({
+            adDealId: deal.id,
+            actor: TransitionActor.admin,
+        });
+
+        const [advertiserAfter, publisherAfter, escrowAfter, refundedDeal] = await Promise.all([
+            prisma.wallet.findUniqueOrThrow({ where: { id: advertiser.wallet.id } }),
+            prisma.wallet.findUniqueOrThrow({ where: { id: publisher.wallet.id } }),
+            prisma.wallet.findUniqueOrThrow({ where: { systemKey: 'ESCROW_POOL' } }),
+            prisma.adDeal.findUniqueOrThrow({ where: { id: deal.id } }),
+        ]);
+
+        expect(advertiserAfter.balance.toFixed(2)).toBe('75.00');
+        expect(publisherAfter.balance.toFixed(2)).toBe('0.00');
+        expect(escrowAfter.balance.toFixed(2)).toBe('0.00');
+        expect(refundedDeal.status).toBe(DealState.refunded);
     });
 });

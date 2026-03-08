@@ -64,6 +64,37 @@ export class PaymentsService {
         return new Prisma.Decimal(value);
     }
 
+    private resolvePublicBaseUrl() {
+        const configured = this.configService.get<string>('PUBLIC_BASE_URL', '')?.trim() ?? '';
+        const fallback = 'http://localhost:4002';
+        return (configured || fallback).replace(/\/+$/, '');
+    }
+
+    private buildClickReturnUrl(returnUrl?: string) {
+        if (returnUrl) {
+            return returnUrl;
+        }
+        return `${this.resolvePublicBaseUrl()}/api/payments/click/return`;
+    }
+
+    private toClickAmount(amount: Prisma.Decimal): { amount: string; currency: string } {
+        const mode = this.configService.get<'usd_decimal' | 'uzs_tiyin'>('CLICK_AMOUNT_MODE', 'usd_decimal');
+        if (mode === 'uzs_tiyin') {
+            const rate = this.configService.get<number>('USD_TO_UZS_RATE', 0);
+            if (!rate || rate <= 0) {
+                throw new ServiceUnavailableException({
+                    message: 'USD_TO_UZS_RATE invalid',
+                    code: 'CLICK_CONFIG_INVALID',
+                    userMessage: 'Payment configuration error. Please contact support.',
+                });
+            }
+            const uzs = amount.mul(rate).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
+            return { amount: uzs.toFixed(0), currency: 'UZS' };
+        }
+        return { amount: amount.toFixed(2), currency: 'USD' };
+    }
+
+
     private extractHttpExceptionDetails(error: unknown): {
         status: number | null;
         code: string | null;
@@ -494,9 +525,7 @@ export class PaymentsService {
             throw new BadRequestException('Deposit amount must be positive');
         }
 
-        const publicBaseUrl = (this.configService.get<string>('PUBLIC_BASE_URL', 'http://localhost:4002') || 'http://localhost:4002')
-            .replace(/\/+$/, '');
-        const resolvedReturnUrl = returnUrl ?? `${publicBaseUrl}/api/payments/click/return`;
+        const resolvedReturnUrl = this.buildClickReturnUrl(returnUrl);
 
         const enableClick =
             this.configService.get<boolean>('ENABLE_CLICK', false)
@@ -547,8 +576,10 @@ export class PaymentsService {
 
         let invoice: { invoice_id: string; payment_url: string };
         try {
+            const clickAmount = this.toClickAmount(normalizedAmount);
             invoice = await this.clickPaymentService.createInvoice({
-                amount: normalizedAmount.toFixed(2),
+                amount: clickAmount.amount,
+                currency: clickAmount.currency,
                 merchantTransId: intent.id,
                 description: `Wallet deposit ${intent.id}`,
                 returnUrl: resolvedReturnUrl,
@@ -606,7 +637,7 @@ export class PaymentsService {
             const propagatedUserMessage =
                 typeof (detailsPayload as { userMessage?: unknown }).userMessage === 'string'
                     ? ((detailsPayload as { userMessage?: string }).userMessage as string)
-                    : `Payment temporarily unavailable. Error ID: ${correlationId} — please retry later.`;
+                    : `Payment failed. Error ID: ${correlationId}. Please contact support with this ID.`;
             throw new ServiceUnavailableException({
                 message: 'Click invoice failed',
                 code: 'CLICK_INVOICE_FAILED',

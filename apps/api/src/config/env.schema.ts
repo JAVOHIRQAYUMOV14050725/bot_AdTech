@@ -4,6 +4,19 @@ const booleanString = z
     .enum(['true', 'false'])
     .transform((value: 'true' | 'false') => value === 'true');
 
+const PLACEHOLDER_PATTERN = /^(?:\.{3}|change_me.*|your_.*|replace_.*|todo)$/i;
+
+const isPlaceholderValue = (value: string | undefined): boolean => {
+    if (!value) {
+        return true;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return true;
+    }
+    return PLACEHOLDER_PATTERN.test(trimmed);
+};
+
 export const envSchema = z.object({
     NODE_ENV: z.string().optional(),
     PORT: z.coerce.number().int().positive().default(4002),
@@ -70,16 +83,55 @@ export const envSchema = z.object({
     CLICK_SIGN_TIME_WINDOW_MINUTES: z.coerce.number().int().positive().default(10),
     CLICK_CREATE_INVOICE_PATH: z.string().optional(),
     CLICK_GET_INVOICE_STATUS_PATH: z.string().optional(),
+    CLICK_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+    CLICK_AMOUNT_MODE: z.enum(['usd_decimal', 'uzs_tiyin']).default('usd_decimal'),
+    USD_TO_UZS_RATE: z.coerce.number().positive().optional(),
     PUBLIC_BASE_URL: z.string().optional(),
 
 }).superRefine((env, ctx) => {
-    if (env.NODE_ENV === 'production' && env.ENABLE_CLICK_PAYMENTS && !env.PUBLIC_BASE_URL) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['PUBLIC_BASE_URL'],
-            message: 'PUBLIC_BASE_URL is required when ENABLE_CLICK_PAYMENTS=true in production.',
-        });
+    if (env.ENABLE_CLICK_PAYMENTS) {
+        const requiredClickKeys: Array<keyof typeof env> = [
+            'CLICK_SERVICE_ID',
+            'CLICK_MERCHANT_ID',
+            'CLICK_USER_ID',
+            'CLICK_SECRET_KEY',
+        ];
+
+        for (const key of requiredClickKeys) {
+            const value = env[key] as string | undefined;
+            if (isPlaceholderValue(value)) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: [key],
+                    message: `${String(key)} is required when ENABLE_CLICK_PAYMENTS=true and must not be a placeholder.`,
+                });
+            }
+        }
+
+        if (env.CLICK_AMOUNT_MODE === 'uzs_tiyin' && !env.USD_TO_UZS_RATE) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['USD_TO_UZS_RATE'],
+                message: 'USD_TO_UZS_RATE is required when CLICK_AMOUNT_MODE=uzs_tiyin.',
+            });
+        }
+    }
+
+    if (env.NODE_ENV === 'production' && env.ENABLE_CLICK_PAYMENTS) {
+        if (!env.PUBLIC_BASE_URL) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['PUBLIC_BASE_URL'],
+                message: 'PUBLIC_BASE_URL is required when ENABLE_CLICK_PAYMENTS=true in production.',
+            });
+        } else if (/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(env.PUBLIC_BASE_URL)) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['PUBLIC_BASE_URL'],
+                message: 'PUBLIC_BASE_URL must be publicly reachable in production (localhost is not allowed).',
+            });
+        }
     }
 });
 
-export type EnvVars = z.infer<typeof envSchema>;    
+export type EnvVars = z.infer<typeof envSchema>;
